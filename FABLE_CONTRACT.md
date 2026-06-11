@@ -607,6 +607,31 @@ unenforced — plumb ships no rule for a fork until Max picks the winner.
      vacuously). Verification exemplars: golden (v2 — RV-026 mismatch warn
      fires, FE-005/006 do not, pre-existing 6 TO warns persist, nothing else
      new) and a minimal v1-shaped fixture repo (v1 rules still fire).
+   - **v8 continuation (2026-06-11, second pass): remaining v1-assuming rules
+     audited for v2.**
+     - **MER-RV-020** rewritten variant-aware (.sh → .mjs on the shared
+       fingerprints): v1 dirs keep the header rule; v2 artifact dirs must
+       contain ONLY `openapi.json` + `schema.d.ts` (the facade lives in
+       `src/` — golden's shape), and `schema.d.ts` must carry its
+       openapi-typescript header. A stray hand-written file in a v2 artifact
+       dir is the same sin the v1 header rule catches.
+     - **MER-RV-025** rewritten variant-aware: placement (under `packages/`)
+       is enforced from the fingerprints, not path-name luck — a v2 artifact
+       dir named anything, anywhere, is held to the same rule.
+     - **MER-RV-021** audited, unchanged: golden's v2 facade deliberately
+       keeps `configureRivet` as the bootstrap surface, so the once-per-app
+       rule works under both variants as written.
+     - **MER-RV-024** audited, unchanged, LIVE-VERIFIED under v2: golden's
+       two-command generation task (Rivet.Tool → openapi-typescript) matches
+       the existing `rivet … --output` heuristic, `task --dry` resolves the
+       output dir, regeneration ran end-to-end with the tree restored
+       byte-for-byte.
+     - **MER-FE-015** explicitly NOT ported to v2 (FE-005 precedent): the
+       port-mirrors-generated-client heuristic compares against v1 client
+       module exports; the v2 facade is hand-authored, so "mirroring" it is
+       not mechanically distinguishable from legitimately wrapping it.
+     - **MER-FE-010** audited, unchanged: port-shape rules are
+       variant-agnostic (no artifact assumptions).
 
 ## 12. Status and next steps (updated 2026-06-10)
 
@@ -828,6 +853,18 @@ unenforced — plumb ships no rule for a fork until Max picks the winner.
   live-proven on casebridge (353 findings → 0 actionable, exit 0; a planted
   new violation still fails). Deliberately NOT built: auto-discovery,
   suppression comments, per-rule config — the mini-PHPStan line.
+
+- **v8 continuation SHIPPED (2026-06-11), per the §11.9 second-pass bullet.**
+  plumb is now a git repo (initial commit = full v1–v8 state; this work on
+  branch `v8`). RV-020 + RV-025 variant-aware rewrites with v2 fixture cases
+  (RV-020 bad: smuggled `helpers.ts` + headerless schema in an artifact dir;
+  RV-025 bad: artifact dir inside `apps/ui/`); RV-021/RV-024/FE-010 audited
+  unchanged (RV-024 live-verified under PLUMB_CI=1 against golden); FE-015
+  recorded not-ported. Self-test 64/64; harness 73/73. Calibration: golden
+  shows exactly RV-026 + 6 TO + 3 BT-003 (the `.use-case.ts` files in
+  `apps/api-ts` — true under the §9.1 no-suffix ruling, golden's TS-backend
+  migration backlog); casebridge 224/112/17 and speechscribe 6/59/23
+  byte-stable.
 
 ### Next steps, in order
 

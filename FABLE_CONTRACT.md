@@ -277,7 +277,9 @@ these:
    "dir-based with `.port.ts` escape hatch" version of this amendment). The
    `.port.ts` suffix is binned entirely, along with the whole Nest-style
    tagging family it implies (`.service.ts`, `.provider.ts`, `.use-case.ts`,
-   `.interface.ts`): "I'm all or nothing — no suffixes at all." Ports live in
+   `.interface.ts`, and — added 2026-06-11, scaffolder-plan decision D1 —
+   `.handler.ts`; golden's pattern is suffix-free `<module>-routes.ts`):
+   "I'm all or nothing — no suffixes at all." Ports live in
    `application/ports/` (FE: `ports/`) named after the capability; use cases,
    adapters, and everything else are named after the thing itself, and the
    directory says what kind of thing it is. Sole exception:
@@ -840,6 +842,16 @@ unenforced — plumb ships no rule for a fork until Max picks the winner.
   Baselines byte-stable: casebridge 224e/112w/17i (FE-003 still 7×, declared
   `Version="*"` is unknown → no RV-026), speechscribe 6e/59w/23i (0.34.3 +
   v1 artifacts = consistent → no RV-026).
+
+- **Scaffolder-plan D1 encoded (2026-06-11).** Max settled the five
+  rivet-ts scaffolder-plan decisions (`~/Sites/medway/rivet-ts/SCAFFOLDER_PLAN.md`);
+  D1 = `.handler.ts` joins the §9.1 banned tag family. §9.1 amended, MER-BT-003
+  extended, bad/good fixture pair added (`get-quote.handler.ts` /
+  `quotes-routes.ts` — golden's suffix-free routes idiom), FABLE_CHECKS +
+  backend-pa-vsa synced. Calibration sweep: zero hits in casebridge /
+  speechscribe / glyphantics / golden; only rivet-ts `samples/myapp` (scaffold
+  output — the plan's own target). Baselines untouched. Gates: self-test 64/64,
+  harness 73/73.
 
 - **Decisions batch actioned (2026-06-11).** §9.1 vetoed→replaced (no-suffix
   ruling; BT-003 extended to the tag family — 39 new findings across 6 repos,

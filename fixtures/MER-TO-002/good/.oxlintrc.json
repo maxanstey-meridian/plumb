@@ -1,0 +1,9 @@
+{
+  "categories": { "correctness": "warn" },
+  "rules": {
+    "no-unused-vars": ["warn", { "argsIgnorePattern": "^_" }],
+    "curly": ["error", "all"],
+    "no-console": "error"
+  },
+  "ignorePatterns": ["dist/**"]
+}

@@ -1,0 +1,6 @@
+{
+  "name": "fixture",
+  "devDependencies": {
+    "rivet-ts": "^0.11.0"
+  }
+}

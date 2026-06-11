@@ -1,0 +1,18 @@
+# MER-FE-002 — "if it needs ref, computed, watch, or lifecycle hooks, it is not an adapter"
+id: MER-FE-002
+language: typescript
+severity: error
+message: adapters must not import framework code — if it needs reactivity it is a composable, not an adapter
+note: frontend-pa-vsa.md#adapters
+files:
+  - "**/adapters/**/*.ts"
+ignores:
+  - "**/__tests__/**"
+  - "**/*.spec.ts"
+rule:
+  any:
+    - pattern: import $$$IMP from "$SRC"
+    - pattern: import "$SRC"
+constraints:
+  SRC:
+    regex: ^(vue|vue-router|pinia|nuxt|#imports|#app)$|^(@vueuse|@nuxt|nuxt|#app)/

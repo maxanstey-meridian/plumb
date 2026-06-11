@@ -1,0 +1,1 @@
+configureRivet({ baseUrl: "/other" });

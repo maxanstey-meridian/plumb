@@ -1,0 +1,7 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+  <ItemGroup>
+    <PackageReference Include="Rivet.Attributes" Version="0.35.0" />
+    <!-- unparseable spec is unknown — never a finding (§7) -->
+    <PackageReference Include="Rivet.Attributes" Version="*" />
+  </ItemGroup>
+</Project>

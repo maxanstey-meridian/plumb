@@ -1,0 +1,17 @@
+# MER-FE-012 — "Do not export useX for a provided port. useX is for implementation composables."
+id: MER-FE-012
+language: typescript
+severity: error
+message: ports must not export useX names — export the [injectX, provideX] tuple; useX belongs to implementation composables
+note: frontend-pa-vsa.md#naming
+files:
+  - "**/ports/**/*.ts"
+ignores:
+  - "**/__tests__/**"
+rule:
+  any:
+    - pattern: export const $NAME = $$$VAL
+    - pattern: "export function $NAME($$$P) { $$$B }"
+constraints:
+  NAME:
+    regex: ^use[A-Z]

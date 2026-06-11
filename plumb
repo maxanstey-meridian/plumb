@@ -1,0 +1,192 @@
+#!/usr/bin/env node
+// plumb — mechanical Meridian-doctrine checker.
+// Golden spec: ~/.meridian/plumb/FABLE_CONTRACT.md — amend it before changing behavior here.
+// The runner only: detects conventions → runs producers → merges findings → exits.
+import { spawnSync } from "node:child_process";
+import fs from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+
+const HOME = path.dirname(fileURLToPath(import.meta.url));
+// Rivet variant detection (contract §5, v8) lives in _lib so the tripwire check
+// shares the same fingerprints — the runner only computes and exports it.
+const { detectRivetVariant } = await import(path.join(HOME, "checks", "_lib", "rivet-variant.mjs"));
+const SGCONFIG = path.join(HOME, "sgconfig.yml");
+const CHECKS = path.join(HOME, "checks");
+const FIXTURES = path.join(HOME, "fixtures");
+const SKIP_DIRS = new Set(["node_modules", ".git", ".nuxt", ".output", "dist", "obj", "bin"]);
+const SEV = { error: 3, warn: 2, info: 1 };
+
+const args = process.argv.slice(2);
+let root = null, json = false, failOn = "error", selfTest = false, ruleFilter = null, packFilter = null, ci = false;
+let baselineFile = null, writeBaselineFile = null;
+for (let i = 0; i < args.length; i++) {
+  const a = args[i];
+  if (a === "--json") json = true;
+  else if (a === "--self-test") selfTest = true;
+  else if (a === "--ci") ci = true;
+  else if (a === "--fail-on") failOn = args[++i];
+  else if (a === "--rule") ruleFilter = args[++i];
+  else if (a === "--pack") packFilter = new Set(args[++i].split(","));
+  else if (a === "--baseline") baselineFile = args[++i];
+  else if (a === "--write-baseline") writeBaselineFile = args[++i];
+  else if (!a.startsWith("--")) root = a;
+}
+if (!selfTest && !root) {
+  console.error("usage: plumb <repo-root> [--json] [--fail-on error|warn|info] [--rule MER-XX-NNN] [--pack FE,BE,...] [--ci] [--baseline file | --write-baseline file] | plumb --self-test");
+  process.exit(2);
+}
+
+function* walk(dir, depth = 14) {
+  if (depth < 0) return;
+  let es;
+  try { es = fs.readdirSync(dir, { withFileTypes: true }); } catch { return; }
+  for (const e of es) {
+    if (e.isDirectory()) {
+      if (!SKIP_DIRS.has(e.name)) yield* walk(path.join(dir, e.name), depth - 1);
+    } else yield path.join(dir, e.name);
+  }
+}
+
+function detectPacks(r) {
+  const packs = new Set(["TO", "CP"]);
+  let csproj = false, modules = false, rivet = false, nuxt = false, tests = false, bts = false;
+  const btsDomain = new Set(), btsApp = new Set();
+  for (const f of walk(r)) {
+    const b = path.basename(f);
+    if (/^nuxt\.config\.(ts|js|mjs)$/.test(b)) nuxt = true;
+    if (b.endsWith(".csproj")) csproj = true;
+    if (b.endsWith("Contract.cs")) rivet = true;
+    if (f.includes(`generated${path.sep}rivet`) || /contracts[\/\\]generated/.test(f)) rivet = true;
+    if (f.includes(`${path.sep}Modules${path.sep}`)) modules = true;
+    if (/\.(spec|test)\.(ts|mjs|js)$/.test(b) || /Tests?\.csproj$/.test(b) ||
+        f.includes(`${path.sep}tests${path.sep}`) || f.includes("__tests__") ||
+        f.includes(`${path.sep}TestSupport${path.sep}`)) tests = true;
+    if (b.endsWith(".port.ts") || f.includes(`application${path.sep}ports${path.sep}`)) bts = true;
+    // layer-shaped TS tree (lowercase domain/ + application|app/ under src/ or
+    // modules/) is also a BT marker — glyphantics-style layered backends have no
+    // ports dir but still carry the layer doctrine (contract §5, v7a)
+    if (/[\/\\](src|modules[\/\\][^\/\\]+)[\/\\]domain[\/\\]/.test(f)) btsDomain.add(f.replace(/[\/\\]domain[\/\\].*$/, ""));
+    if (/[\/\\](src|modules[\/\\][^\/\\]+)[\/\\](application|app)[\/\\]/.test(f)) btsApp.add(f.replace(/[\/\\](application|app)[\/\\].*$/, ""));
+    if (b === "package.json") {
+      try { if (fs.readFileSync(f, "utf8").includes('"typed-inject"')) bts = true; } catch {}
+    }
+  }
+  if (nuxt) packs.add("FE");
+  if (csproj && modules) packs.add("BE");
+  if (rivet) packs.add("RV");
+  if (tests) packs.add("TE");
+  if (!bts) for (const d of btsDomain) if (btsApp.has(d)) { bts = true; break; }
+  if (bts) packs.add("BT");
+  return packs;
+}
+
+function runAstGrep(r) {
+  const out = spawnSync("ast-grep", ["scan", "--config", SGCONFIG, "--json", "."], {
+    cwd: r, encoding: "utf8", maxBuffer: 64 * 1024 * 1024,
+  });
+  if (out.error) { console.error("plumb: ast-grep unavailable — YAML rules skipped"); return []; }
+  let arr = [];
+  try { arr = JSON.parse(out.stdout || "[]"); } catch { return []; }
+  return arr.map((m) => ({
+    id: m.ruleId,
+    sev: m.severity === "warning" ? "warn" : (m.severity || "error"),
+    loc: `${(m.file || "").replace(/^\.\//, "")}:${(m.range?.start?.line ?? 0) + 1}`,
+    msg: m.message || "",
+    ref: m.note || "",
+  }));
+}
+
+function runChecks(r, rivetVariant) {
+  const findings = [];
+  let scripts = [];
+  try {
+    scripts = fs.readdirSync(CHECKS, { withFileTypes: true })
+      .filter((e) => e.isFile() && !e.name.startsWith(".") && !e.name.startsWith("_"))
+      .map((e) => e.name);
+  } catch {}
+  for (const s of scripts.sort()) {
+    const out = spawnSync(path.join(CHECKS, s), [path.resolve(r)], {
+      encoding: "utf8", maxBuffer: 16 * 1024 * 1024,
+      env: { ...process.env, ...(ci || selfTest ? { PLUMB_CI: "1" } : {}), PLUMB_RIVET_VARIANT: rivetVariant },
+    });
+    if (out.error || (out.status && out.status > 1)) {
+      console.error(`plumb: check ${s} failed: ${out.error?.message || out.stderr}`);
+      continue;
+    }
+    for (const line of (out.stdout || "").split("\n")) {
+      if (!line.trim()) continue;
+      const [id, sev, loc, msg, ref = ""] = line.split("\t");
+      if (id && sev && loc) findings.push({ id, sev, loc, msg: msg || "", ref });
+    }
+  }
+  return findings;
+}
+
+function scan(r, { allPacks = false } = {}) {
+  const rivetVariant = detectRivetVariant(r).variant; // contract §5 v8
+  const packs = allPacks ? null : detectPacks(r);
+  if (packs && rivetVariant !== "none") packs.add("RV");
+  let found = [...runAstGrep(r), ...runChecks(r, rivetVariant)];
+  if (packs) found = found.filter((f) => packs.has(f.id.split("-")[1]));
+  if (ruleFilter) found = found.filter((f) => f.id === ruleFilter);
+  if (packFilter) found = found.filter((f) => packFilter.has(f.id.split("-")[1]));
+  found.sort((a, b) => SEV[b.sev] - SEV[a.sev] || a.id.localeCompare(b.id) || a.loc.localeCompare(b.loc));
+  return found;
+}
+
+if (selfTest) {
+  let dirs = [];
+  try { dirs = fs.readdirSync(FIXTURES).filter((d) => d.startsWith("MER-")); } catch {}
+  let fail = 0;
+  for (const id of dirs.sort()) {
+    const hitBad = scan(path.join(FIXTURES, id, "bad"), { allPacks: true }).some((f) => f.id === id);
+    const hitGood = scan(path.join(FIXTURES, id, "good"), { allPacks: true }).some((f) => f.id === id);
+    if (hitBad && !hitGood) console.log(`ok   ${id}`);
+    else { fail++; console.log(`FAIL ${id}  bad:${hitBad ? "hit" : "MISS"}  good:${hitGood ? "FALSE-POSITIVE" : "clean"}`); }
+  }
+  console.log(fail ? `self-test: ${fail}/${dirs.length} failing` : `self-test: all ${dirs.length} fixtures pass`);
+  process.exit(fail ? 1 : 0);
+}
+
+const abs = path.resolve(root);
+if (!fs.existsSync(abs)) { console.error(`plumb: no such directory ${abs}`); process.exit(2); }
+let findings = scan(abs);
+
+// --baseline ratchet (contract §5, 2026-06-11): count-per-(rule,path) allowance,
+// findings over allowance are NEW; suppressed count is reported, never hidden.
+const bKey = (f) => `${f.id}\t${f.loc.replace(/:\d+$/, "")}`;
+if (writeBaselineFile) {
+  const entries = {};
+  for (const f of findings) entries[bKey(f)] = (entries[bKey(f)] || 0) + 1;
+  fs.writeFileSync(writeBaselineFile, JSON.stringify({ version: 1, entries }, null, 2) + "\n");
+  console.log(`plumb: baseline written — ${findings.length} findings across ${Object.keys(entries).length} (rule,path) keys`);
+  process.exit(0);
+}
+let baselined = 0, baselineTotal = 0;
+if (baselineFile) {
+  let bl;
+  try { bl = JSON.parse(fs.readFileSync(baselineFile, "utf8")); }
+  catch (e) { console.error(`plumb: cannot read baseline ${baselineFile}: ${e.message}`); process.exit(2); }
+  const allowance = { ...(bl.entries || {}) };
+  baselineTotal = Object.values(allowance).reduce((a, b) => a + b, 0);
+  findings = findings.filter((f) => {
+    if (allowance[bKey(f)] > 0) { allowance[bKey(f)]--; baselined++; return false; }
+    return true;
+  });
+}
+
+if (json) {
+  console.log(JSON.stringify(findings.map((f) => ({ rule: f.id, severity: f.sev, location: f.loc, message: f.msg, docRef: f.ref })), null, 2));
+} else {
+  for (const f of findings) console.log(`${f.id}\t${f.sev}\t${f.loc}\t${f.msg}`);
+  const c = { error: 0, warn: 0, info: 0 };
+  for (const f of findings) c[f.sev] = (c[f.sev] || 0) + 1;
+  let summary = `\nplumb: ${c.error} error, ${c.warn} warn, ${c.info} info`;
+  if (baselineFile) {
+    summary += ` (+${baselined} baselined, baseline holds ${baselineTotal})`;
+    if (baselined < baselineTotal) summary += ` — shrunk; re-run --write-baseline to ratchet down`;
+  }
+  console.log(summary);
+}
+process.exit(findings.some((f) => SEV[f.sev] >= SEV[failOn]) ? 1 : 0);

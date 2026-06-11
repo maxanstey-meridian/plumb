@@ -1,0 +1,1 @@
+{ "categories": { "correctness": "warn" }, "rules": { "no-unused-vars": "warn" } }

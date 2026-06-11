@@ -1,0 +1,6 @@
+version: "3"
+
+tasks:
+  generate:
+    cmds:
+      - ./fake-rivet --project api --output generated/rivet

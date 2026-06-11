@@ -1,0 +1,9 @@
+{
+  "name": "plumb-deps",
+  "private": true,
+  "description": "wrapped third-party tools for plumb checks (FABLE_CONTRACT.md §2.3)",
+  "dependencies": {
+    "dependency-cruiser": "^16",
+    "typescript": "^5.9.3"
+  }
+}

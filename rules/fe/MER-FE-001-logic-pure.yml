@@ -1,0 +1,18 @@
+# MER-FE-001 — "logic/ is pure TypeScript. Hard rule: no imports from vue/nuxt/#imports/framework packages."
+id: MER-FE-001
+language: typescript
+severity: error
+message: logic/ must not import framework code — keep it pure TypeScript or move it to a composable
+note: frontend-pa-vsa.md#logic
+files:
+  - "**/logic/**/*.ts"
+ignores:
+  - "**/__tests__/**"
+  - "**/*.spec.ts"
+rule:
+  any:
+    - pattern: import $$$IMP from "$SRC"
+    - pattern: import "$SRC"
+constraints:
+  SRC:
+    regex: ^(vue|vue-router|pinia|nuxt|#imports|#app)$|^(@vueuse|@nuxt|nuxt|#app)/

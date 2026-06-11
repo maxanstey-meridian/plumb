@@ -345,6 +345,16 @@ these:
 Forks still undecided (see `meridian/FABLE_REVIEW.md` decision table) stay
 unenforced — plumb ships no rule for a fork until Max picks the winner.
 
+9. **Edge-only observability** (2026-06-11, agreed with Max alongside the
+   proper-scaffold package). Logging/metrics/tracing live at the EDGES —
+   transport middleware (hono/logger on TS server entries, ASP.NET request
+   logging) and infrastructure adapters. Domain and application stay silent:
+   no console/logger imports, no log statements. The composition entries
+   decide what observability exists per environment (the in-browser transport
+   ships none; the server entry ships request logging). Prose-only for now —
+   no mechanical rule until a real incident earns one (a domain-console rule
+   would be the natural first slice). Synced to backend-pa-vsa.md.
+
 ## 10. Relationship to the skill
 
 - `meridian/FABLE_CHECKS.md` — the rule inventory: every rule's intent, severity,

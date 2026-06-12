@@ -355,6 +355,21 @@ unenforced — plumb ships no rule for a fork until Max picks the winner.
    no mechanical rule until a real incident earns one (a domain-console rule
    would be the natural first slice). Synced to backend-pa-vsa.md.
 
+10. **Module-local HTTP edge — top-level `src/interface/` dies in TS backends**
+    (2026-06-12, Max's ruling — rivet HANDOVER decision D1). HTTP registration
+    and edge validation are module-local, mirroring golden .NET
+    (`Modules/Notes/NotesEndpoints.cs` + `NotesModule.cs`):
+    `src/modules/<m>/<m>-routes.ts` owns registration,
+    `src/modules/<m>/<m>-validation.ts` owns the Zod edge schemas, and
+    `src/modules/<m>/<m>.module.ts` (the §9.1 suffix exemption) owns the
+    module's internal wiring WHERE the module has wiring to own — composition
+    roots only choose the adapters the environments disagree on. A module of
+    standalone handler functions (scaffold-mock output) emits no `.module.ts`:
+    seams must be earned. The api package's `./validation` export stays a
+    stable barrel (`src/validation.ts`) so UForm consumers never track the
+    move. Prose-only — no mechanical rule until drift is observed. Synced to
+    backend-pa-vsa.md §File naming the same change.
+
 ## 10. Relationship to the skill
 
 - `meridian/FABLE_CHECKS.md` — the rule inventory: every rule's intent, severity,
@@ -924,6 +939,14 @@ dissolution and refactoring generally ("another day"), Meridian.Analyzers
 feed (stays local), CI wiring, `meridian init` (needs more thought — the
 rivet-ts scaffolder was already half-trying to be this), long-tail rules
 (demand-driven), any fixer tier (never).
+
+### Decisions log (2026-06-12, Max)
+
+§9.10 added: module-local HTTP edge (rivet HANDOVER decision D1) —
+`modules/<m>/<m>-routes.ts` + `<m>-validation.ts` + `<m>.module.ts` (where
+wiring exists); top-level `src/interface/` is dead in TS backends. Prose-only;
+backend-pa-vsa.md §File naming synced the same change. The rivet-ts scaffolder
+emitters and lifecycle gates moved to the new shape in the same batch.
 
 ### Open questions
 

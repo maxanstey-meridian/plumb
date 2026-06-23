@@ -71,7 +71,7 @@ function tightens(repoVal, goldVal) {
 }
 
 if (!editorconfigs.length) {
-  out(".editorconfig:0", "no .editorconfig in a .NET repo — it is the style/analyzer authority (golden: ~/.meridian/plumb/configs/editorconfig.dotnet)");
+  out(".editorconfig:0", "no .editorconfig in a .NET repo — it is the style/analyzer authority (golden: ~/Sites/plumb/configs/editorconfig.dotnet)");
 } else {
   // the .editorconfig nearest the csproj tree must satisfy the golden; check each
   // found file and report the best (fewest gaps) to avoid duplicate noise

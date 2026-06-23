@@ -13,7 +13,7 @@
     <PackageId>Meridian.Analyzers</PackageId>
     <Version>0.1.0</Version>
     <Authors>Meridian</Authors>
-    <Description>Build-time mirror of plumb's Meridian module-boundary rules (MER-BE-001/002/005): Domain purity, Application never touches Infrastructure, never cross module boundaries — always Common. Source of truth: ~/.meridian/plumb (FABLE_CONTRACT.md §11.4).</Description>
+    <Description>Build-time mirror of plumb's Meridian module-boundary rules (MER-BE-001/002/005): Domain purity, Application never touches Infrastructure, never cross module boundaries — always Common. Source of truth: ~/Sites/plumb (FABLE_CONTRACT.md §11.4).</Description>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
   </PropertyGroup>
 

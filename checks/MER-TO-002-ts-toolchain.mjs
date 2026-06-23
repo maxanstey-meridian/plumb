@@ -71,7 +71,7 @@ for (const [kind, file, goldFile] of [["oxlint", ".oxlintrc.json", "oxlintrc.jso
   const golden = JSON.parse(fs.readFileSync(path.join(GOLD, goldFile), "utf8"));
   const configs = kind === "oxlint" ? found.ox : found.fmt;
   if (!configs.length) {
-    out(`${file}:0`, `no ${file} found — TS repos carry the ${kind} base config (golden: ~/.meridian/plumb/configs/${goldFile})`);
+    out(`${file}:0`, `no ${file} found — TS repos carry the ${kind} base config (golden: ~/Sites/plumb/configs/${goldFile})`);
     continue;
   }
   for (const c of configs) {

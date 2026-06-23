@@ -91,7 +91,7 @@ Anything a producer writes to stderr is diagnostics, never findings.
 ## 4. Repository layout
 
 ```
-~/.meridian/plumb/
+~/Sites/plumb/
 ├── FABLE_CONTRACT.md     ← this file
 ├── plumb                 ← the runner (executable)
 ├── sgconfig.yml          ← points ast-grep at rules/
@@ -702,7 +702,7 @@ unenforced — plumb ships no rule for a fork until Max picks the winner.
   Rivet framework repo itself flags the tool's own sources (EndpointWalker.cs) —
   the framework that implements the convention is out of plumb's domain.
 - The §9 amendment is now synced into the skill prose, and SKILL.md +
-  SKILL_SMALL.md carry the §10 integration line ("run `~/.meridian/plumb/plumb .
+  SKILL_SMALL.md carry the §10 integration line ("run `~/Sites/plumb/plumb .
   --json`, fix all error-level findings") — both done 2026-06-10.
 - Calibration baseline recorded (after full v2, 2026-06-10):
   - speechscribe-azure: **5 errors / 4 warns** — 1× FE-001 (`recording-status.ts`),

@@ -13,7 +13,7 @@ import path from "node:path";
 let ts;
 try { ({ default: ts } = await import("typescript")); }
 catch {
-  process.stderr.write("MER-BT-004: typescript not installed under plumb — skipping (pnpm install in ~/.meridian/plumb)\n");
+  process.stderr.write("MER-BT-004: typescript not installed under plumb — skipping (pnpm install in ~/Sites/plumb)\n");
   process.exit(0);
 }
 

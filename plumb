@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // plumb — mechanical Meridian-doctrine checker.
-// Golden spec: ~/.meridian/plumb/FABLE_CONTRACT.md — amend it before changing behavior here.
+// Golden spec: ~/Sites/plumb/FABLE_CONTRACT.md — amend it before changing behavior here.
 // The runner only: detects conventions → runs producers → merges findings → exits.
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";

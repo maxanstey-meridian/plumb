@@ -216,7 +216,7 @@ export const runInit = (rest) => {
         "  plumb:",
         "    desc: Check the repo against Meridian doctrine",
         "    cmds:",
-        "      - ~/.meridian/plumb/plumb .",
+        "      - ~/Sites/plumb/plumb .",
         "",
       ].join("\n"),
     );

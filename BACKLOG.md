@@ -5,7 +5,7 @@
 > (no oxfmtrc, no eslint Vue layer, analyzers off, CSharpier unwired), confer +8
 > (empty `.oxfmtrc.json` → copy the golden base; no eslint Vue layer),
 > perch-next +1, perch +2, glyphantics +5 (still on prettier), coingroup +4.
-> Fixes are all "copy the golden from ~/.meridian/plumb/configs/ and extend" or
+> Fixes are all "copy the golden from ~/Sites/plumb/configs/ and extend" or
 > one-line wiring (`dotnet tool install csharpier`; `EnforceCodeStyleInBuild`
 > in Directory.Build.props).
 

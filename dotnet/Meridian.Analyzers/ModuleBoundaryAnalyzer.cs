@@ -1,5 +1,5 @@
 // Build-time mirror of plumb's namespace-boundary rules (FABLE_CONTRACT.md §11.4).
-// plumb (~/.meridian/plumb) is the source of truth; this analyzer re-states the
+// plumb (~/Sites/plumb) is the source of truth; this analyzer re-states the
 // same judgments so the compiler rejects them before plumb ever runs:
 //   MERBE001 <-> MER-BE-001  Domain depends on nothing outside itself
 //   MERBE002 <-> MER-BE-002  Application must not depend on Infrastructure

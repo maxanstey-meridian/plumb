@@ -28,6 +28,12 @@ Non-goals:
 - not a formatter or fixer (v1 reports; it does not rewrite)
 - not a build gate by default (callers choose what severity fails)
 
+The no-fixer ruling is about repos plumb **checks**: it never rewrites a repo it
+is asked to inspect. It does NOT forbid plumb from **creating** a fresh repo —
+that is what `plumb init` (the project composer) does: it scaffolds a new repo
+that passes plumb by construction. Create ≠ fix. plumb still never mutates an
+existing repo it checks; init only writes into a new directory it owns.
+
 ## 2. Architecture: the output contract IS the framework
 
 plumb is a thin runner over independent **producers**. Anything that emits finding
@@ -395,9 +401,10 @@ unenforced — plumb ships no rule for a fork until Max picks the winner.
    failure). `checks/_lib/fe-graph.mjs` builds the per-FE-root import graph:
    dependency-cruiser for TS/JS, a regex extractor with the FE-032 alias
    conventions for .vue (dependency-cruiser cannot parse SFCs), edges deduped per
-   from→to pair. Three new checks: MER-FE-004 (layer ordering, error),
-   MER-FE-021 (port-bypass, warn — only fires when a matching `injectX` capability
-   exists), MER-FE-031-single-consumer (emits FE-031 + FE-022, warn — zero-consumer
+    from→to pair. Three new checks: MER-FE-004 (layer ordering, error),
+    MER-FE-021 (port-bypass, warn — flags component-to-composable imports; if a
+    matching `injectX` exists, use it, otherwise model the missing port capability),
+    MER-FE-031-single-consumer (emits FE-031 + FE-022, warn — zero-consumer
    shared files exempt because Nuxt auto-imports make absence-of-import
    unprovable; the useProvideInject helper exempt as doctrine infrastructure).
    Remaining for v2: C# namespace-graph scanner (BE-001..006 full coverage).
@@ -902,6 +909,33 @@ unenforced — plumb ships no rule for a fork until Max picks the winner.
   `apps/api-ts` — true under the §9.1 no-suffix ruling, golden's TS-backend
   migration backlog); casebridge 224/112/17 and speechscribe 6/59/23
   byte-stable.
+
+- **MER-RV-026 redefined (2026-06-16), v1 detector (supersedes the §11.9 v8 tripwire).**
+  Max's ruling: the only thing this rule should detect is "you're on Rivet v1 — migrate to
+  the v2 (openapi-typescript) generation." The v8 design conflated *patch version* with
+  *generation* — it fired an `info` whenever a declared version exceeded the `dotnetMax`
+  patch ceiling (0.35.x), so every routine v2 minor bump (0.36, 0.37, …) cried "stale"
+  though the RV/FE rules key off generation, not patch line, and nothing was actually stale.
+  Removed: the patch-ceiling `info` and the artifact-fingerprint mismatch `warn` (and the
+  `rivet-variant` import). Kept: a single `warn` when a declared Rivet is **below the v2
+  floor** (`Rivet.Attributes` < 0.35.0 / `rivet-ts` < 0.11.0). The whole v2 generation
+  (≥ floor) is supported; minor bumps never flag; unparseable specs never flag. The old
+  "bump `SUPPORTED_RIVET` on every release" policy is retired — there is nothing to chase
+  within a generation; the floor only changes when Rivet ships a new *generation*. Fixtures
+  rewritten (bad: 0.34.3 + rivet-ts 0.10.0; good: 0.35.0/0.37.0/`*`). Self-test 65/65.
+  Calibration: ot-rota + speechscribe (both Rivet.Attributes 0.37.0) now clean; golden's
+  rivet-v2 branch (0.34.3) correctly flags "migrate". FABLE_CHECKS updated both skill homes.
+
+- **MER-BE-053 shipped (2026-06-16), use-case-return-shape.** A use case's
+  `Execute`/`ExecuteAsync` returning a transport-shaped `*Response`/`*Dto` (application
+  coupled to the published HTTP contract) is a `warn`: return a domain type or `*Result`
+  and map at the edge, or drop the use case if it only maps. Scope mirrors BE-022
+  (`*/Modules/*UseCase.cs`); the return-type suffix is the tell (BE-052 precedent — no
+  type graph needed). DOC-REF `backend-pa-vsa.md#commands-and-results`. Self-test 65/65.
+  Calibration: casebridge 1× (`GetCurrentUserUseCase` → `AuthUserDto`, verified real),
+  speechscribe clean (27 UCs return `*Result`) — 1 TP / 0 FP. Deliberately out of v1: the
+  wrapped variant (a `*Result` whose properties are `*Dto`s) needs field-type inspection
+  and is lower-precision. FABLE_CHECKS updated both skill homes.
 
 ### Next steps, in order
 

@@ -1,10 +1,8 @@
 #!/usr/bin/env node
-// MER-FE-021 — components importing implementation composables (use*) WHEN a port
-// for the same capability exists in the page subtree's ports/ or app/shared/ports.
+// MER-FE-021 — components importing implementation composables (use*).
 // "Components should normally import injectX from ports/, not concrete
-// implementation composables." The qualifier is required — component-local
-// composables with no port are legitimate, so we only flag when the composable
-// name ends with an existing injectX capability (useRivetAuth vs injectAuth).
+// implementation composables." If a matching injectX capability exists, use it;
+// if none exists, model the capability in ports/ and provide it from the root.
 // Encoded exception: the useProvideInject helper itself.
 // DOC: frontend-pa-vsa.md#components
 import fs from "node:fs";
@@ -51,10 +49,11 @@ for (const feRoot of findFeRoots(root)) {
       d = path.dirname(d);
     }
     const hit = [...caps].find((c) => cap === c || cap.endsWith(c));
-    if (hit) {
-      console.log(
-        `MER-FE-021\twarn\t${path.relative(root, from)}:${line}\tcomponent imports implementation composable ${path.basename(to)} but a port exists (inject${hit}) — inject the port instead\tfrontend-pa-vsa.md#components`
-      );
-    }
+    const message = hit
+      ? `component imports implementation composable ${path.basename(to)} but a port exists (inject${hit}) — inject the port instead`
+      : `component imports implementation composable ${path.basename(to)} with no port capability — model the capability in ports/ and provide it from the page root`;
+    console.log(
+      `MER-FE-021\twarn\t${path.relative(root, from)}:${line}\t${message}\tfrontend-pa-vsa.md#components`
+    );
   }
 }

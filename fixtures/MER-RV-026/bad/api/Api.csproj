@@ -1,6 +1,6 @@
 <Project Sdk="Microsoft.NET.Sdk.Web">
   <ItemGroup>
-    <!-- v1-era package against v2 artifacts: the mismatch warn (golden's state) -->
+    <!-- v1-era Rivet (< 0.35.0): should migrate to the v2 / openapi-typescript generation -->
     <PackageReference Include="Rivet.Attributes" Version="0.34.3" />
   </ItemGroup>
 </Project>

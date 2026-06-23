@@ -18,6 +18,16 @@ const SKIP_DIRS = new Set(["node_modules", ".git", ".nuxt", ".output", "dist", "
 const SEV = { error: 3, warn: 2, info: 1 };
 
 const args = process.argv.slice(2);
+
+// `plumb init …` is the project composer (writes a fresh doctrine-perfect repo);
+// every other invocation is the read-only checker below. The no-fixer ruling
+// holds: plumb never fixes a repo it checks — init only CREATES (create ≠ fix).
+if (args[0] === "init") {
+  const { runInit } = await import(path.join(HOME, "init.mjs"));
+  runInit(args.slice(1));
+  process.exit(0);
+}
+
 let root = null, json = false, failOn = "error", selfTest = false, ruleFilter = null, packFilter = null, ci = false;
 let baselineFile = null, writeBaselineFile = null;
 for (let i = 0; i < args.length; i++) {

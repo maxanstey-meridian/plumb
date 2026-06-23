@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { useRivetAuth } from "../composables/useRivetAuth";
-const auth = useRivetAuth();
+import { injectAuth } from "../ports/auth";
+const auth = injectAuth();
 </script>
 <template><button @click="auth.login()">login</button></template>

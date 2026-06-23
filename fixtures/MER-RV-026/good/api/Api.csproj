@@ -1,6 +1,9 @@
 <Project Sdk="Microsoft.NET.Sdk.Web">
   <ItemGroup>
+    <!-- exactly the v2 floor — supported -->
     <PackageReference Include="Rivet.Attributes" Version="0.35.0" />
+    <!-- a later v2 minor bump must stay silent (not "stale") — the whole point of v8.1 -->
+    <PackageReference Include="Rivet.Attributes" Version="0.37.0" />
     <!-- unparseable spec is unknown — never a finding (§7) -->
     <PackageReference Include="Rivet.Attributes" Version="*" />
   </ItemGroup>

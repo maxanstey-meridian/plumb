@@ -3,9 +3,9 @@
 // variant-aware, replaces the v1-only .sh).
 //   v1 dirs: every non-.d.ts .ts file carries the generated header (compiled
 //            artifacts build/dist/*.d.ts excluded — calibration 2026-06-10).
-//   v2 dirs: the artifact dir contains ONLY openapi.json + schema.d.ts (the
-//            hand-written facade lives in src/, golden's exemplar shape) and
-//            schema.d.ts carries the openapi-typescript header. Any other file
+//   v2 dirs: the artifact dir contains ONLY openapi.json, api.contract.json +
+//            schema.d.ts (the hand-written facade lives in src/, golden's exemplar
+//            shape) and schema.d.ts carries the openapi-typescript header. Any other file
 //            inside a v2 artifact dir is a hand-written file in generated
 //            output — the same sin the v1 header rule catches.
 // DOC: coding-philosophy.md#generated-code
@@ -49,12 +49,12 @@ for (const g of v1Dirs) {
   }
 }
 
-const V2_EXPECTED = new Set(["openapi.json", "schema.d.ts"]);
+const V2_EXPECTED = new Set(["openapi.json", "schema.d.ts", "api.contract.json"]);
 for (const g of v2Dirs) {
   for (const f of walk(g)) {
     const b = path.basename(f);
     if (!V2_EXPECTED.has(b)) {
-      out(rel(f), "hand-written file inside the v2 artifact dir — only openapi.json + schema.d.ts belong here; the facade lives in src/");
+      out(rel(f), "hand-written file inside the v2 artifact dir — only openapi.json, api.contract.json + schema.d.ts belong here; the facade lives in src/");
     } else if (b === "schema.d.ts" && !hasGenHeader(f)) {
       out(rel(f), "schema.d.ts is missing its openapi-typescript header — generated artifacts are read-only, regenerate via the repo's task");
     }

@@ -6,6 +6,7 @@
 // DOC: backend-pa-vsa.md#typescript--nest-port-convention
 import fs from "node:fs";
 import path from "node:path";
+import { walkFiles } from "./_lib/fs-scan.mjs";
 
 let ts;
 try { ({ default: ts } = await import("typescript")); }
@@ -17,20 +18,9 @@ catch {
 const root = process.argv[2];
 if (!root || !fs.existsSync(root)) process.exit(2);
 
-const SKIP = new Set(["node_modules", ".git", ".nuxt", ".output", "dist", "build", "generated", "obj", "bin"]);
-function* walk(d) {
-  let es;
-  try { es = fs.readdirSync(d, { withFileTypes: true }); } catch { return; }
-  for (const e of es) {
-    const p = path.join(d, e.name);
-    if (e.isDirectory()) { if (!SKIP.has(e.name)) yield* walk(p); }
-    else if (e.name.endsWith(".ts") && !e.name.endsWith(".d.ts")) yield p;
-  }
-}
-
 const PORT_SPEC = /\/ports\/|\.port(\.js|\.ts)?$/;
 
-for (const f of walk(root)) {
+for (const f of walkFiles(root, root, { filter: (name) => name.endsWith(".ts") })) {
   if (/\.(spec|test)\.ts$/.test(f) || /__tests__/.test(f)) continue;
   const src = fs.readFileSync(f, "utf8");
   if (!src.includes("extends") || !PORT_SPEC.test(src)) continue;

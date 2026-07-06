@@ -60,6 +60,20 @@ test("clean repo → zero findings, exit 0", () => {
   assert.match(out.stdout, /plumb: 0 error, 0 warn, 0 info/);
 });
 
+test("gitignored build/vendor-style paths do not affect scan", () => {
+  const d = repo([], {
+    ".gitignore": "vendor/\n",
+    "App.csproj": "<Project/>\n",
+    "vendor/api/Modules/Auth/Application/U.cs": "namespace Acme.Modules.Auth.Application; using Acme.Modules.Billing.Application.Ports;\n",
+    "vendor/api/Modules/Billing/Application/Ports/IBilling.cs": "namespace Acme.Modules.Billing.Application.Ports; public interface IBilling {}\n",
+    "vendor/api/Common/Shared.cs": "namespace Acme.Common; public sealed class Shared {}\n",
+  });
+  spawnSync("git", ["init", "-q"], { cwd: d });
+  const out = plumb(d, "--rule", "MER-BE-005");
+  assert.equal(out.status, 0);
+  assert.ok(!out.ids.includes("MER-BE-005"), `gitignored vendor finding leaked: ${out.ids}`);
+});
+
 test("error finding → exit 1; warn-only → 0 by default, 1 with --fail-on warn", () => {
   const errRepo = repo(["MER-BE-005"], { "App.csproj": "<Project/>\n" });
   assert.equal(plumb(errRepo).status, 1);

@@ -11,24 +11,13 @@
 // DOC: rivet.md#generated-output
 import fs from "node:fs";
 import path from "node:path";
+import { walkFiles } from "./_lib/fs-scan.mjs";
 
 // The v1/v2 generation boundary: v2 starts here. Anything below is v1-era → migrate.
 const V2_MIN = { dotnet: [0, 35, 0], ts: [0, 11, 0] };
 
 const root = path.resolve(process.argv[2] || "");
 if (!root || !fs.existsSync(root)) process.exit(2);
-
-const SKIP = new Set(["node_modules", ".git", ".nuxt", ".output", "dist", "build", "obj", "bin"]);
-function* walk(d, depth = 14) {
-  if (depth < 0) return;
-  let es;
-  try { es = fs.readdirSync(d, { withFileTypes: true }); } catch { return; }
-  for (const e of es) {
-    const p = path.join(d, e.name);
-    if (e.isDirectory()) { if (!SKIP.has(e.name)) yield* walk(p, depth - 1); }
-    else yield p;
-  }
-}
 
 const parseVer = (s) => {
   const m = /^v?(\d+)\.(\d+)(?:\.(\d+))?$/.exec((s || "").trim().replace(/^[\^~]/, ""));
@@ -44,7 +33,7 @@ const cmp = (a, b) => {
 const isV1 = (ver, floor) => ver && cmp(ver, floor) < 0;
 const ref = "rivet.md#generated-output";
 
-for (const f of walk(root)) {
+for (const f of walkFiles(root, root, { filter: () => true, depth: 14 })) {
   const b = path.basename(f);
   if (b.endsWith(".csproj")) {
     const lines = fs.readFileSync(f, "utf8").split("\n");

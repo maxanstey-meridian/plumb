@@ -15,18 +15,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-
-const SKIP = new Set(["node_modules", ".git", ".nuxt", ".output", "dist", "build", "obj", "bin"]);
-
-function* walkDirs(d, depth = 14) {
-  if (depth < 0) return;
-  let es;
-  try { es = fs.readdirSync(d, { withFileTypes: true }); } catch { return; }
-  yield [d, es];
-  for (const e of es) {
-    if (e.isDirectory() && !SKIP.has(e.name)) yield* walkDirs(path.join(d, e.name), depth - 1);
-  }
-}
+import { walkDirs } from "./fs-scan.mjs";
 
 // Walk up from an artifact dir to the nearest package.json with a "name" —
 // that name is the contracts package's import specifier (e.g. @golden/contracts).
@@ -49,7 +38,9 @@ function packageNameAbove(dir, stopAt) {
 export function detectRivetVariant(root) {
   root = path.resolve(root);
   const v1Dirs = [], v2Dirs = [], contractsPackages = new Set();
-  for (const [d, es] of walkDirs(root)) {
+  for (const d of walkDirs(root, root, { filter: () => true })) {
+    let es;
+    try { es = fs.readdirSync(d, { withFileTypes: true }); } catch { continue; }
     const names = new Set(es.map((e) => e.name));
     const base = path.basename(d);
     const isGen = base === "generated" || /generated[\/\\]rivet$/.test(d);

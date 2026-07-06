@@ -5,6 +5,7 @@ import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { createVisibility, shouldIncludeFile, walkFiles } from "./checks/_lib/fs-scan.mjs";
 
 const HOME = path.dirname(fileURLToPath(import.meta.url));
 // Rivet variant detection (contract §5, v8) lives in _lib so the tripwire check
@@ -13,7 +14,6 @@ const { detectRivetVariant } = await import(path.join(HOME, "checks", "_lib", "r
 const SGCONFIG = path.join(HOME, "sgconfig.yml");
 const CHECKS = path.join(HOME, "checks");
 const FIXTURES = path.join(HOME, "fixtures");
-const SKIP_DIRS = new Set(["node_modules", ".git", ".nuxt", ".output", "dist", "obj", "bin"]);
 const SEV = { error: 3, warn: 2, info: 1 };
 
 const args = process.argv.slice(2);
@@ -46,22 +46,11 @@ if (!selfTest && !root) {
   process.exit(2);
 }
 
-function* walk(dir, depth = 14) {
-  if (depth < 0) return;
-  let es;
-  try { es = fs.readdirSync(dir, { withFileTypes: true }); } catch { return; }
-  for (const e of es) {
-    if (e.isDirectory()) {
-      if (!SKIP_DIRS.has(e.name)) yield* walk(path.join(dir, e.name), depth - 1);
-    } else yield path.join(dir, e.name);
-  }
-}
-
 function detectPacks(r) {
   const packs = new Set(["TO", "CP"]);
   let csproj = false, modules = false, rivet = false, nuxt = false, tests = false, bts = false;
   const btsDomain = new Set(), btsApp = new Set();
-  for (const f of walk(r)) {
+  for (const f of walkFiles(r, r, { filter: () => true, depth: 14 })) {
     const b = path.basename(f);
     if (/^nuxt\.config\.(ts|js|mjs)$/.test(b)) nuxt = true;
     if (b.endsWith(".csproj")) csproj = true;
@@ -136,12 +125,26 @@ function scan(r, { allPacks = false } = {}) {
   const rivetVariant = detectRivetVariant(r).variant; // contract §5 v8
   const packs = allPacks ? null : detectPacks(r);
   if (packs && rivetVariant !== "none") packs.add("RV");
-  let found = [...runAstGrep(r), ...runChecks(r, rivetVariant)];
+  const visibility = createVisibility(r);
+  let found = [...runAstGrep(r), ...runChecks(r, rivetVariant)]
+    .filter((f) => visibleFinding(r, visibility, f));
   if (packs) found = found.filter((f) => packs.has(f.id.split("-")[1]));
   if (ruleFilter) found = found.filter((f) => f.id === ruleFilter);
   if (packFilter) found = found.filter((f) => packFilter.has(f.id.split("-")[1]));
   found.sort((a, b) => SEV[b.sev] - SEV[a.sev] || a.id.localeCompare(b.id) || a.loc.localeCompare(b.loc));
   return found;
+}
+
+function visibleFinding(root, visibility, finding) {
+  const rel = finding.loc.replace(/:\d+$/, "");
+  if (!rel || rel === ".") return true;
+  const abs = path.resolve(root, rel);
+  try {
+    if (!fs.statSync(abs).isFile()) return true;
+  } catch {
+    return true;
+  }
+  return shouldIncludeFile(root, visibility, abs);
 }
 
 if (selfTest) {

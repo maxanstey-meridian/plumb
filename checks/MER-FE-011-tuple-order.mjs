@@ -3,17 +3,10 @@
 // DOC: frontend-pa-vsa.md#provide--inject-pattern
 import fs from "node:fs";
 import path from "node:path";
+import { walkFiles } from "./_lib/fs-scan.mjs";
 const root = process.argv[2];
-const SKIP = new Set(["node_modules", ".git", ".nuxt", ".output", "dist", "obj", "bin", "generated"]);
-function* walk(d) {
-  let es; try { es = fs.readdirSync(d, { withFileTypes: true }); } catch { return; }
-  for (const e of es) {
-    if (e.isDirectory()) { if (!SKIP.has(e.name)) yield* walk(path.join(d, e.name)); }
-    else if (e.name.endsWith(".ts")) yield path.join(d, e.name);
-  }
-}
 const re = /export const \[\s*(\w+)\s*,\s*(\w+)\s*\]\s*=\s*useProvideInject/g;
-for (const f of walk(root)) {
+for (const f of walkFiles(root, root, { filter: (name) => name.endsWith(".ts") })) {
   const src = fs.readFileSync(f, "utf8");
   let m;
   while ((m = re.exec(src))) {

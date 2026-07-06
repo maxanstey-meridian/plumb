@@ -5,28 +5,22 @@
 // DOC: backend-pa-vsa.md#across-modules
 import fs from "node:fs";
 import path from "node:path";
+import { walkDirs, walkFiles } from "./_lib/fs-scan.mjs";
 
 const root = process.argv[2];
 if (!root || !fs.existsSync(root)) process.exit(2);
-
-const SKIP = new Set(["node_modules", ".git", "obj", "bin"]);
-
-function* walk(d) {
-  let es;
-  try { es = fs.readdirSync(d, { withFileTypes: true }); } catch { return; }
-  for (const e of es) {
-    const p = path.join(d, e.name);
-    if (e.isDirectory()) { if (!SKIP.has(e.name)) yield* walk(p); }
-    else yield p;
-  }
-}
 
 function* backendRoots(d) {
   let es;
   try { es = fs.readdirSync(d, { withFileTypes: true }); } catch { return; }
   const names = new Set(es.filter((e) => e.isDirectory()).map((e) => e.name));
-  if (names.has("Modules") && names.has("Common")) { yield d; return; }
-  for (const e of es) if (e.isDirectory() && !SKIP.has(e.name)) yield* backendRoots(path.join(d, e.name));
+  if (names.has("Modules") && names.has("Common")) yield d;
+  for (const be of walkDirs(d, d, { filter: () => true })) {
+    let es;
+    try { es = fs.readdirSync(be, { withFileTypes: true }); } catch { continue; }
+    const names = new Set(es.filter((e) => e.isDirectory()).map((e) => e.name));
+    if (names.has("Modules") && names.has("Common")) yield be;
+  }
 }
 
 function ownerModule(be, file) {
@@ -74,7 +68,7 @@ function shouldFlag(hit, owner, common) {
 
 for (const be of backendRoots(root)) {
   const seen = new Set();
-  for (const f of walk(be)) {
+  for (const f of walkFiles(be, be, { filter: () => true })) {
     if (!f.endsWith(".cs")) continue;
     const owner = ownerModule(be, f);
     const common = isCommonFile(be, f);

@@ -22,15 +22,24 @@ catch {
 const root = process.argv[2];
 if (!root || !fs.existsSync(root)) process.exit(2);
 
-const SKIP = new Set(["node_modules", ".git", ".nuxt", ".output", "dist", "build", "generated", "obj", "bin"]);
-function* walk(d) {
-  let es;
-  try { es = fs.readdirSync(d, { withFileTypes: true }); } catch { return; }
-  for (const e of es) {
-    const p = path.join(d, e.name);
-    if (e.isDirectory()) { if (!SKIP.has(e.name)) yield* walk(p); }
-    else if (e.name.endsWith(".ts")) yield p;
-  }
+let walkFiles;
+try {
+  ({ walkFiles } = await import("./_lib/fs-scan.mjs"));
+} catch {
+  const SKIP = new Set(["node_modules", ".git", ".nuxt", ".output", "dist", "build", "obj", "bin"]);
+  walkFiles = function* (rootDir, startDir = rootDir, { filter = () => true, extraSkipDirs = [] } = {}) {
+    function* rec(dir) {
+      let es;
+      try { es = fs.readdirSync(dir, { withFileTypes: true }); } catch { return; }
+      for (const e of es) {
+        const p = path.join(dir, e.name);
+        if (e.isDirectory()) {
+          if (!SKIP.has(e.name) && !extraSkipDirs.includes(e.name)) yield* rec(p);
+        } else if (filter(e.name, p)) yield p;
+      }
+    }
+    yield* rec(startDir);
+  };
 }
 
 const isPortFile = (f) =>
@@ -41,7 +50,7 @@ function emit(file, line, msg) {
   console.log(`MER-BT-001\terror\t${path.relative(root, file)}:${line}\t${msg}\tbackend-pa-vsa.md#typescript--nest-port-convention`);
 }
 
-for (const f of walk(root)) {
+for (const f of walkFiles(root, root, { filter: (name) => name.endsWith(".ts") })) {
   if (!isPortFile(f)) continue;
   const sf = ts.createSourceFile(f, fs.readFileSync(f, "utf8"), ts.ScriptTarget.Latest, true);
   const lineOf = (n) => sf.getLineAndCharacterOfPosition(n.getStart(sf)).line + 1;

@@ -9,20 +9,10 @@
 // DOC: backend-pa-vsa.md#commands-and-results
 import fs from "node:fs";
 import path from "node:path";
+import { walkFiles } from "./_lib/fs-scan.mjs";
 
 const root = process.argv[2];
 if (!root || !fs.existsSync(root)) process.exit(2);
-
-const SKIP = new Set(["node_modules", ".git", "obj", "bin"]);
-function* walk(d) {
-  let es;
-  try { es = fs.readdirSync(d, { withFileTypes: true }); } catch { return; }
-  for (const e of es) {
-    const p = path.join(d, e.name);
-    if (e.isDirectory()) { if (!SKIP.has(e.name)) yield* walk(p); }
-    else if (e.name.endsWith(".cs")) yield p;
-  }
-}
 
 // Blank string/char/comment contents, preserving length and newlines.
 function blank(src) {
@@ -32,7 +22,7 @@ function blank(src) {
 
 const NESTED_NAME = /^(Command|Result|Query|Response)$|(Command|Result)$/;
 
-for (const f of walk(root)) {
+for (const f of walkFiles(root, root, { filter: (name) => name.endsWith(".cs") })) {
   if (!f.includes(`${path.sep}Modules${path.sep}`) && !f.includes(`${path.sep}Application${path.sep}`)) continue;
   const src = blank(fs.readFileSync(f, "utf8"));
   let depth = 0;

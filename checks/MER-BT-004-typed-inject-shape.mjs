@@ -9,6 +9,7 @@
 // DOC: backend-pa-vsa.md#typescript--nest
 import fs from "node:fs";
 import path from "node:path";
+import { walkFiles } from "./_lib/fs-scan.mjs";
 
 let ts;
 try { ({ default: ts } = await import("typescript")); }
@@ -20,24 +21,13 @@ catch {
 const root = process.argv[2];
 if (!root || !fs.existsSync(root)) process.exit(2);
 
-const SKIP = new Set(["node_modules", ".git", ".nuxt", ".output", "dist", "build", "generated", "obj", "bin"]);
-function* walk(d, re) {
-  let es;
-  try { es = fs.readdirSync(d, { withFileTypes: true }); } catch { return; }
-  for (const e of es) {
-    const p = path.join(d, e.name);
-    if (e.isDirectory()) { if (!SKIP.has(e.name)) yield* walk(p, re); }
-    else if (re.test(e.name)) yield p;
-  }
-}
-
 let typedInject = false;
-for (const pkg of walk(root, /^package\.json$/)) {
+for (const pkg of walkFiles(root, root, { filter: (name) => name === "package.json" })) {
   try { if (fs.readFileSync(pkg, "utf8").includes('"typed-inject"')) { typedInject = true; break; } } catch {}
 }
 if (!typedInject) process.exit(0);
 
-for (const f of walk(root, /\.ts$/)) {
+for (const f of walkFiles(root, root, { filter: (name) => name.endsWith(".ts") })) {
   if (f.endsWith(".d.ts") || /\.(spec|test)\.ts$/.test(f) || /__tests__/.test(f)) continue;
   const src = fs.readFileSync(f, "utf8");
   if (!src.includes("static inject")) continue;

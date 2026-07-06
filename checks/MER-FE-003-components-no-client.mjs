@@ -10,6 +10,7 @@
 // DOC: frontend-pa-vsa.md#components
 import fs from "node:fs";
 import path from "node:path";
+import { walkFiles } from "./_lib/fs-scan.mjs";
 import { detectRivetVariant } from "./_lib/rivet-variant.mjs";
 
 const root = process.argv[2];
@@ -20,21 +21,10 @@ const V1_SPEC = /(generated\/rivet\/client|contracts\/client)/;
 const isClientSpec = (spec) =>
   V1_SPEC.test(spec) || contractsPackages.some((p) => spec === p || spec.startsWith(p + "/"));
 
-const SKIP = new Set(["node_modules", ".git", ".nuxt", ".output", "dist", "build", "generated", "obj", "bin"]);
-function* walk(d) {
-  let es;
-  try { es = fs.readdirSync(d, { withFileTypes: true }); } catch { return; }
-  for (const e of es) {
-    const p = path.join(d, e.name);
-    if (e.isDirectory()) { if (!SKIP.has(e.name) && e.name !== "__tests__") yield* walk(p); }
-    else yield p;
-  }
-}
-
 // import/export ... from "spec" on one line; `import type { ... }` is exempt
 const IMPORT = /^\s*(import|export)\s+(type\s+)?[^'"]*?from\s*["']([^"']+)["']/;
 
-for (const f of walk(path.resolve(root))) {
+for (const f of walkFiles(path.resolve(root), path.resolve(root), { filter: (name) => /\.(ts|vue)$/.test(name), extraSkipDirs: ["__tests__"] })) {
   if (!/\.(ts|vue)$/.test(f) || /\.(spec|test)\./.test(f)) continue;
   if (!f.split(path.sep).includes("components")) continue;
   const lines = fs.readFileSync(f, "utf8").split("\n");

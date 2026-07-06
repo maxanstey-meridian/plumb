@@ -9,25 +9,14 @@
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { walkFiles } from "./_lib/fs-scan.mjs";
 
 const root = process.argv[2];
 if (!root || !fs.existsSync(root)) process.exit(2);
 const GOLD = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "configs", "editorconfig.dotnet");
 
-const SKIP = new Set(["node_modules", ".git", "obj", "bin", ".nuxt", "dist", ".output"]);
-function* walk(d, depth = 8) {
-  if (depth < 0) return;
-  let es;
-  try { es = fs.readdirSync(d, { withFileTypes: true }); } catch { return; }
-  for (const e of es) {
-    const p = path.join(d, e.name);
-    if (e.isDirectory()) { if (!SKIP.has(e.name)) yield* walk(p, depth - 1); }
-    else yield p;
-  }
-}
-
 const csprojs = [], editorconfigs = [], propsAndProjects = [];
-for (const f of walk(root)) {
+for (const f of walkFiles(root, root, { filter: () => true, depth: 8 })) {
   const b = path.basename(f);
   if (b.endsWith(".csproj") || b === "Directory.Build.props") propsAndProjects.push(f);
   if (b.endsWith(".csproj")) csprojs.push(f);

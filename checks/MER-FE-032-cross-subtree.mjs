@@ -4,30 +4,13 @@
 // DOC: frontend-pa-vsa.md#promotion
 import fs from "node:fs";
 import path from "node:path";
+import { walkDirs, walkFiles } from "./_lib/fs-scan.mjs";
 const root = process.argv[2];
-const SKIP = new Set(["node_modules", ".git", ".nuxt", ".output", "dist", "generated"]);
-function* walkDirs(d) {
-  let es; try { es = fs.readdirSync(d, { withFileTypes: true }); } catch { return; }
-  for (const e of es) {
-    if (!e.isDirectory() || SKIP.has(e.name)) continue;
-    const p = path.join(d, e.name);
-    if (e.name === "pages" && path.basename(d) === "app") yield p;
-    else yield* walkDirs(p);
-  }
-}
-function* walkFiles(d) {
-  let es; try { es = fs.readdirSync(d, { withFileTypes: true }); } catch { return; }
-  for (const e of es) {
-    const p = path.join(d, e.name);
-    if (e.isDirectory()) { if (!SKIP.has(e.name)) yield* walkFiles(p); }
-    else if (/\.(ts|vue)$/.test(e.name)) yield p;
-  }
-}
 const importRe = /(?:from\s+|import\s*\(\s*)["']([^"']+)["']/g;
-for (const pagesDir of walkDirs(root)) {
+for (const pagesDir of walkDirs(root, root, { filter: (name, p) => name === "pages" && path.basename(path.dirname(p)) === "app" })) {
   const appDir = path.dirname(pagesDir);
   const appRoot = path.dirname(appDir);
-  for (const f of walkFiles(pagesDir)) {
+  for (const f of walkFiles(root, pagesDir, { filter: (name) => /\.(ts|vue)$/.test(name) })) {
     const relToPages = path.relative(pagesDir, f);
     const ownSubtree = relToPages.includes(path.sep)
       ? relToPages.split(path.sep)[0]

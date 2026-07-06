@@ -10,27 +10,16 @@
 // DOC: tools.md#linting-and-formatting
 import fs from "node:fs";
 import path from "node:path";
+import { walkFiles } from "./_lib/fs-scan.mjs";
 import { fileURLToPath } from "node:url";
 
 const root = process.argv[2];
 if (!root || !fs.existsSync(root)) process.exit(2);
 const GOLD = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "configs");
 
-const SKIP = new Set(["node_modules", ".git", ".nuxt", ".output", "dist", "build", "generated", "obj", "bin", ".turbo"]);
-function* walk(d, depth = 8) {
-  if (depth < 0) return;
-  let es;
-  try { es = fs.readdirSync(d, { withFileTypes: true }); } catch { return; }
-  for (const e of es) {
-    const p = path.join(d, e.name);
-    if (e.isDirectory()) { if (!SKIP.has(e.name)) yield* walk(p, depth - 1); }
-    else yield p;
-  }
-}
-
 let hasPkg = false, hasTs = false;
 const found = { ox: [], fmt: [], competing: [] };
-for (const f of walk(root)) {
+for (const f of walkFiles(root, root, { filter: () => true, depth: 8 })) {
   const b = path.basename(f);
   if (b === "package.json") hasPkg = true;
   if (/\.(ts|vue)$/.test(b) && !b.endsWith(".d.ts")) hasTs = true;

@@ -12,6 +12,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { walkFiles } from "./_lib/fs-scan.mjs";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const { detectRivetVariant } = await import(path.join(HERE, "_lib", "rivet-variant.mjs"));
@@ -30,18 +31,8 @@ const hasGenHeader = (f) => {
 
 const { v1Dirs, v2Dirs } = detectRivetVariant(root);
 
-function* walk(d) {
-  let es;
-  try { es = fs.readdirSync(d, { withFileTypes: true }); } catch { return; }
-  for (const e of es) {
-    const p = path.join(d, e.name);
-    if (e.isDirectory()) { if (e.name !== "node_modules") yield* walk(p); }
-    else yield p;
-  }
-}
-
 for (const g of v1Dirs) {
-  for (const f of walk(g)) {
+  for (const f of walkFiles(g, g, { filter: () => true })) {
     if (!f.endsWith(".ts") || f.endsWith(".d.ts")) continue;
     if (/[\/\\](build|dist)[\/\\]/.test(f)) continue;
     if (!hasGenHeader(f))
@@ -51,7 +42,7 @@ for (const g of v1Dirs) {
 
 const V2_EXPECTED = new Set(["openapi.json", "schema.d.ts", "api.contract.json"]);
 for (const g of v2Dirs) {
-  for (const f of walk(g)) {
+  for (const f of walkFiles(g, g, { filter: () => true })) {
     const b = path.basename(f);
     if (!V2_EXPECTED.has(b)) {
       out(rel(f), "hand-written file inside the v2 artifact dir — only openapi.json, api.contract.json + schema.d.ts belong here; the facade lives in src/");

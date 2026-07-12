@@ -1,2 +1,2 @@
 export interface Auth { login(): Promise<string> }
-export const [injectAuth, provideAuth] = [0, 1] as const;
+export const [injectAuth, provideAuth] = useProvideInject<Auth>("Auth");

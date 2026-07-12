@@ -53,8 +53,51 @@ test("nonexistent directory → exit 2", () => {
   assert.equal(out.status, 2);
 });
 
+test("option requiring a value rejects a missing value with exit 2", () => {
+  const r = repo();
+  for (const flag of ["--fail-on", "--rule", "--pack", "--baseline", "--write-baseline"]) {
+    const out = plumb(r, flag);
+    assert.equal(out.status, 2, flag);
+    assert.match(out.stderr, new RegExp(`${flag} requires a value`), flag);
+  }
+});
+
+test("unknown flag is rejected with exit 2", () => {
+  const r = repo();
+  for (const flag of ["--wat", "-x"]) {
+    const out = plumb(r, flag);
+    assert.equal(out.status, 2, flag);
+    assert.match(out.stderr, new RegExp(`unknown option ${flag}`), flag);
+  }
+});
+
+test("invalid --fail-on value is rejected with exit 2", () => {
+  const out = plumb(repo(), "--fail-on", "warning");
+  assert.equal(out.status, 2);
+  assert.match(out.stderr, /invalid --fail-on value/);
+});
+
+test("invalid --rule value is rejected with exit 2", () => {
+  const out = plumb(repo(), "--rule", "TO-004");
+  assert.equal(out.status, 2);
+  assert.match(out.stderr, /invalid --rule value/);
+});
+
+test("invalid --pack value is rejected with exit 2", () => {
+  const out = plumb(repo(), "--pack", "FE,nope");
+  assert.equal(out.status, 2);
+  assert.match(out.stderr, /invalid --pack value/);
+});
+
+test("conflicting baseline flags are rejected with exit 2", () => {
+  const r = repo();
+  const out = plumb(r, "--baseline", path.join(r, "old.json"), "--write-baseline", path.join(r, "new.json"));
+  assert.equal(out.status, 2);
+  assert.match(out.stderr, /--baseline and --write-baseline cannot be used together/);
+});
+
 test("clean repo → zero findings, exit 0", () => {
-  const out = plumb(repo([], { "nuxt.config.ts": "export default {}\n" }));
+  const out = plumb(repo([], { "nuxt.config.ts": "export default { ssr: false }\n" }));
   assert.equal(out.status, 0);
   assert.deepEqual(out.ids, []);
   assert.match(out.stdout, /plumb: 0 error, 0 warn, 0 info/);
@@ -72,6 +115,123 @@ test("gitignored build/vendor-style paths do not affect scan", () => {
   const out = plumb(d, "--rule", "MER-BE-005");
   assert.equal(out.status, 0);
   assert.ok(!out.ids.includes("MER-BE-005"), `gitignored vendor finding leaked: ${out.ids}`);
+});
+
+test("MER-BE-006 propagates contract consumers to enum, nested record, and collection element types", () => {
+  const good = spawnSync(path.join(CHECKS, "MER-BE-006-common-single-consumer.mjs"),
+    [path.join(FIX, "MER-BE-006", "good")], { encoding: "utf8" });
+  assert.equal(good.status, 0);
+  for (const type of ["SubmissionState", "SubmissionDetails", "SubmissionItem"]) {
+    assert.doesNotMatch(good.stdout, new RegExp(`Common type ${type} `));
+  }
+
+  const bad = spawnSync(path.join(CHECKS, "MER-BE-006-common-single-consumer.mjs"),
+    [path.join(FIX, "MER-BE-006", "bad")], { encoding: "utf8" });
+  assert.match(bad.stdout, /Common type SlugRules is referenced only by module Forms/);
+});
+
+test("MER-TO-004 warns when a Vitest config export cannot be resolved", () => {
+  const r = repo([], {
+    "nuxt.config.ts": "export default {}\n",
+    "package.json": JSON.stringify({
+      scripts: { typecheck: "vue-tsc --noEmit", test: "vitest run" },
+      devDependencies: { vitest: "latest", "happy-dom": "latest" },
+    }),
+    "tests/page.test.ts": "export {}\n",
+    "vitest.config.ts": 'import config from "./missing-config";\nexport default config;\n',
+  });
+  const out = spawnSync(path.join(CHECKS, "MER-TO-004-nuxt-typecheck-tests.mjs"), [r], { encoding: "utf8" });
+  assert.equal(out.status, 0);
+  assert.match(out.stdout, /^MER-TO-004\twarn\tpackage\.json:1\t/m);
+});
+
+test("MER-TO-003 ignores unreachable eslint config objects", () => {
+  const out = spawnSync(path.join(CHECKS, "MER-TO-003-generated-lint-exclusions.mjs"),
+    [path.join(FIX, "MER-TO-003", "bad")], { encoding: "utf8" });
+  assert.equal(out.status, 0);
+  assert.match(out.stdout, /MER-TO-003\twarn\tpackages\/contracts\/eslint\.config\.mjs:1\t/);
+});
+
+test("MER-TO-003 follows local fragments reachable from the default eslint export", () => {
+  const out = spawnSync(path.join(CHECKS, "MER-TO-003-generated-lint-exclusions.mjs"),
+    [path.join(FIX, "MER-TO-003", "good")], { encoding: "utf8" });
+  assert.equal(out.status, 0);
+  assert.equal(out.stdout, "");
+});
+
+test("MER-TO-003 supports the official globalIgnores helper reachable from the default export", () => {
+  const out = spawnSync(path.join(CHECKS, "MER-TO-003-generated-lint-exclusions.mjs"),
+    [path.join(FIX, "MER-TO-003", "good")], { encoding: "utf8" });
+  assert.equal(out.status, 0);
+  assert.doesNotMatch(out.stdout, /packages\/helper\/eslint\.config\.mjs/);
+});
+
+test("MER-TO-004 resolves a local imported Vitest config", () => {
+  const fixture = path.join(FIX, "MER-TO-004", "good", "apps", "imported");
+  const out = spawnSync(path.join(CHECKS, "MER-TO-004-nuxt-typecheck-tests.mjs"), [fixture], { encoding: "utf8" });
+  assert.equal(out.status, 0);
+  assert.equal(out.stdout, "");
+});
+
+test("MER-TO-004 uses the Vitest config when a separate build-only Vite config exists", () => {
+  const fixture = path.join(FIX, "MER-TO-004", "good");
+  const out = spawnSync(path.join(CHECKS, "MER-TO-004-nuxt-typecheck-tests.mjs"), [fixture], { encoding: "utf8" });
+  assert.equal(out.status, 0);
+  assert.equal(out.stdout, "");
+});
+
+test("MER-TO-004 warns for a dynamic Vitest config", () => {
+  const r = repo([], {
+    "nuxt.config.ts": "export default {}\n",
+    "package.json": JSON.stringify({
+      scripts: { typecheck: "vue-tsc --noEmit", test: "vitest run" },
+      devDependencies: { vitest: "latest", "happy-dom": "latest" },
+    }),
+    "tests/page.test.ts": "export {}\n",
+    "vitest.config.ts": 'export default defineConfig(() => ({ test: { environment: "happy-dom" } }));\n',
+  });
+  const out = spawnSync(path.join(CHECKS, "MER-TO-004-nuxt-typecheck-tests.mjs"), [r], { encoding: "utf8" });
+  assert.equal(out.status, 0);
+  assert.match(out.stdout, /^MER-TO-004\twarn\tpackage\.json:1\t/m);
+});
+
+test("MER-TO-004 does not let a static sibling mask a dynamic Vitest config", () => {
+  const r = repo([], {
+    "nuxt.config.ts": "export default {}\n",
+    "package.json": JSON.stringify({
+      scripts: { typecheck: "vue-tsc --noEmit", test: "vitest run" },
+      devDependencies: { vitest: "latest", "happy-dom": "latest" },
+    }),
+    "tests/page.test.ts": "export {}\n",
+    "vite.config.ts": 'export default defineConfig({ test: { environment: "happy-dom" } });\n',
+    "vitest.config.ts": 'export default defineConfig(() => ({ test: { environment: "happy-dom" } }));\n',
+  });
+  const out = spawnSync(path.join(CHECKS, "MER-TO-004-nuxt-typecheck-tests.mjs"), [r], { encoding: "utf8" });
+  assert.equal(out.status, 0);
+  assert.match(out.stdout, /^MER-TO-004\twarn\tpackage\.json:1\t/m);
+});
+
+test("MER-TO-011 applies props by project ancestry and checks settings independently", () => {
+  const r = repo([], {
+    "covered/Directory.Build.props": "<Project><PropertyGroup><Nullable>enable</Nullable></PropertyGroup></Project>\n",
+    "covered/App.csproj": "<Project><PropertyGroup><ImplicitUsings>enable</ImplicitUsings></PropertyGroup></Project>\n",
+    "uncovered/App.csproj": "<Project/>\n",
+  });
+  const out = spawnSync(path.join(CHECKS, "MER-TO-011-nullable.sh"), [r], { encoding: "utf8" });
+  assert.equal(out.status, 0);
+  assert.doesNotMatch(out.stdout, /\tcovered\/App\.csproj/);
+  assert.match(out.stdout, /MER-TO-011\terror\tuncovered\/App\.csproj:0\t/);
+  assert.match(out.stdout, /MER-TO-011\twarn\tuncovered\/App\.csproj:0\t/);
+});
+
+test("MER-TO-011 ignores XML comments and conditional property values", () => {
+  const out = spawnSync(path.join(CHECKS, "MER-TO-011-nullable.sh"),
+    [path.join(FIX, "MER-TO-011", "bad")], { encoding: "utf8" });
+  assert.equal(out.status, 0);
+  for (const project of ["commented/App.csproj", "conditional/App.csproj", "disabled/App.csproj"]) {
+    assert.match(out.stdout, new RegExp(`MER-TO-011\\terror\\t${project.replace(".", "\\.")}:0\\t`));
+    assert.match(out.stdout, new RegExp(`MER-TO-011\\twarn\\t${project.replace(".", "\\.")}:0\\t`));
+  }
 });
 
 test("error finding → exit 1; warn-only → 0 by default, 1 with --fail-on warn", () => {
@@ -102,6 +262,78 @@ test("FE pack gates on nuxt.config: same violation, marker decides", () => {
 
 test("TE pack detected from tests dir (the v4 detectPacks gap)", () => {
   assert.ok(plumb(repo(["MER-TE-005"])).ids.includes("MER-TE-005"));
+});
+
+test("TE-001 executes for an applicable modular .NET repo without a tests directory", () => {
+  const out = plumb(repo(["MER-TE-001"]));
+  assert.ok(out.ids.includes("MER-TE-001"), `TE-001 missing for modular .NET repo: ${out.ids}`);
+});
+
+test("MER-TE-001 does not accept Meridian.Analyzers from an unrelated project", () => {
+  const r = repo([], {
+    "app/App.csproj": '<Project Sdk="Microsoft.NET.Sdk" />\n',
+    "app/Modules/Auth/Login.cs": "namespace App.Modules.Auth; public sealed class Login;\n",
+    "tools/Tools.csproj": '<Project><ItemGroup><PackageReference Include="Meridian.Analyzers" /></ItemGroup></Project>\n',
+  });
+  const out = spawnSync(path.join(CHECKS, "MER-TE-001-architecture-enforcement.mjs"), [r], { encoding: "utf8" });
+  assert.equal(out.status, 0);
+  assert.match(out.stdout, /^MER-TE-001\twarn\tapp\/App\.csproj:1\t/m);
+});
+
+test("MER-TE-001 does not accept an unexecuted architecture rule declaration", () => {
+  const r = repo([], {
+    "App.csproj": '<Project Sdk="Microsoft.NET.Sdk" />\n',
+    "Modules/Auth/Login.cs": "namespace App.Modules.Auth; public sealed class Login;\n",
+    "Tests/ArchitectureTests.cs": "var rule = ArchRuleDefinition.Types().Should().BeSealed();\n",
+  });
+  const out = spawnSync(path.join(CHECKS, "MER-TE-001-architecture-enforcement.mjs"), [r], { encoding: "utf8" });
+  assert.equal(out.status, 0);
+  assert.match(out.stdout, /^MER-TE-001\twarn\tApp\.csproj:1\t/m);
+});
+
+test("MER-TE-001 accepts Meridian.Analyzers from an ancestor Directory.Build.props", () => {
+  const r = repo([], {
+    "Directory.Build.props": '<Project><ItemGroup><PackageReference Include="Meridian.Analyzers" /></ItemGroup></Project>\n',
+    "src/App/App.csproj": '<Project Sdk="Microsoft.NET.Sdk" />\n',
+    "src/App/Modules/Auth/Login.cs": "namespace App.Modules.Auth; public sealed class Login;\n",
+  });
+  const out = spawnSync(path.join(CHECKS, "MER-TE-001-architecture-enforcement.mjs"), [r], { encoding: "utf8" });
+  assert.equal(out.status, 0);
+  assert.equal(out.stdout, "");
+});
+
+test("MER-TE-001 accepts an architecture API only when a test executes it", () => {
+  const r = repo([], {
+    "App.csproj": '<Project Sdk="Microsoft.NET.Sdk" />\n',
+    "Modules/Auth/Login.cs": "namespace App.Modules.Auth; public sealed class Login;\n",
+    "Tests/ArchitectureTests.cs": "var rule = ArchRuleDefinition.Types().Should().BeSealed();\nrule.Check(architecture);\n",
+  });
+  const out = spawnSync(path.join(CHECKS, "MER-TE-001-architecture-enforcement.mjs"), [r], { encoding: "utf8" });
+  assert.equal(out.status, 0);
+  assert.equal(out.stdout, "");
+});
+
+test("MER-TE-007 independently rejects EF InMemory in test source", () => {
+  const r = repo([], {
+    "Tests/App.Tests.csproj": '<Project Sdk="Microsoft.NET.Sdk" />\n',
+    "Tests/InMemoryTests.cs": "new DbContextOptionsBuilder<AppDbContext>().UseInMemoryDatabase(\"test\");\n",
+  });
+  const out = spawnSync(path.join(CHECKS, "MER-TE-007-no-ef-inmemory.sh"), [r], { encoding: "utf8" });
+  assert.equal(out.status, 0);
+  assert.match(out.stdout, /^MER-TE-007\terror\tTests\/InMemoryTests\.cs:1\tEF InMemory provider/m);
+  assert.doesNotMatch(out.stdout, /SQLite test database/);
+});
+
+test("MER-TE-007 independently rejects SQLite for a referenced Postgres project", () => {
+  const r = repo([], {
+    "src/App/App.csproj": '<Project><ItemGroup><PackageReference Include="Npgsql.EntityFrameworkCore.PostgreSQL" /></ItemGroup></Project>\n',
+    "Tests/App.Tests.csproj": '<Project><ItemGroup><ProjectReference Include="../src/App/App.csproj" /></ItemGroup></Project>\n',
+    "Tests/SqliteTests.cs": "new DbContextOptionsBuilder<AppDbContext>().UseSqlite(\"DataSource=:memory:\");\n",
+  });
+  const out = spawnSync(path.join(CHECKS, "MER-TE-007-no-ef-inmemory.sh"), [r], { encoding: "utf8" });
+  assert.equal(out.status, 0);
+  assert.match(out.stdout, /^MER-TE-007\terror\tTests\/SqliteTests\.cs:1\tSQLite test database/m);
+  assert.doesNotMatch(out.stdout, /EF InMemory provider/);
 });
 
 test("BT pack detected from lowercase application/ports", () => {

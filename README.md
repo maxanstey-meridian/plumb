@@ -74,7 +74,7 @@ RULE-ID<TAB>SEVERITY<TAB>PATH:LINE<TAB>MESSAGE<TAB>DOC-REF
 Example:
 
 ```text
-MER-BE-005	error	api/Modules/Auth/Application/U.cs:1	module Auth must not use Forms.Application — never cross; always Common	backend-pa-vsa.md#across-modules
+MER-BE-005	error	api/Modules/Auth/Application/U.cs:1	module Auth must not use Forms.Application internals — publish a contract or define a required port	backend-pa-vsa.md#across-modules
 ```
 
 Producers exit `0` when they find drift. Non-zero exits are for internal failures only.

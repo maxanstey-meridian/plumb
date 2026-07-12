@@ -15,6 +15,7 @@ const SGCONFIG = path.join(HOME, "sgconfig.yml");
 const CHECKS = path.join(HOME, "checks");
 const FIXTURES = path.join(HOME, "fixtures");
 const SEV = { error: 3, warn: 2, info: 1 };
+const PACKS = new Set(["BE", "BT", "CP", "FE", "RV", "TE", "TO"]);
 
 const args = process.argv.slice(2);
 
@@ -29,20 +30,49 @@ if (args[0] === "init") {
 
 let root = null, json = false, failOn = "error", selfTest = false, ruleFilter = null, packFilter = null, ci = false;
 let baselineFile = null, writeBaselineFile = null;
+const usage = "usage: plumb <repo-root> [--json] [--fail-on error|warn|info] [--rule MER-XX-NNN] [--pack FE,BE,...] [--ci] [--baseline file | --write-baseline file] | plumb --self-test";
+const requireValue = (flag, index) => {
+  const value = args[index + 1];
+  if (!value || value.startsWith("--")) {
+    console.error(`plumb: ${flag} requires a value\n${usage}`);
+    process.exit(2);
+  }
+  return value;
+};
 for (let i = 0; i < args.length; i++) {
   const a = args[i];
   if (a === "--json") json = true;
   else if (a === "--self-test") selfTest = true;
   else if (a === "--ci") ci = true;
-  else if (a === "--fail-on") failOn = args[++i];
-  else if (a === "--rule") ruleFilter = args[++i];
-  else if (a === "--pack") packFilter = new Set(args[++i].split(","));
-  else if (a === "--baseline") baselineFile = args[++i];
-  else if (a === "--write-baseline") writeBaselineFile = args[++i];
-  else if (!a.startsWith("--")) root = a;
+  else if (a === "--fail-on") failOn = requireValue(a, i++);
+  else if (a === "--rule") ruleFilter = requireValue(a, i++);
+  else if (a === "--pack") packFilter = new Set(requireValue(a, i++).split(","));
+  else if (a === "--baseline") baselineFile = requireValue(a, i++);
+  else if (a === "--write-baseline") writeBaselineFile = requireValue(a, i++);
+  else if (a.startsWith("-")) {
+    console.error(`plumb: unknown option ${a}\n${usage}`);
+    process.exit(2);
+  }
+  else root = a;
+}
+if (!Object.hasOwn(SEV, failOn)) {
+  console.error(`plumb: invalid --fail-on value ${failOn}\n${usage}`);
+  process.exit(2);
+}
+if (ruleFilter && !/^MER-[A-Z]{2}-\d{3}$/.test(ruleFilter)) {
+  console.error(`plumb: invalid --rule value ${ruleFilter}\n${usage}`);
+  process.exit(2);
+}
+if (packFilter && ([...packFilter].some((pack) => !PACKS.has(pack)) || packFilter.size === 0)) {
+  console.error(`plumb: invalid --pack value ${[...packFilter].join(",")}\n${usage}`);
+  process.exit(2);
+}
+if (baselineFile && writeBaselineFile) {
+  console.error(`plumb: --baseline and --write-baseline cannot be used together\n${usage}`);
+  process.exit(2);
 }
 if (!selfTest && !root) {
-  console.error("usage: plumb <repo-root> [--json] [--fail-on error|warn|info] [--rule MER-XX-NNN] [--pack FE,BE,...] [--ci] [--baseline file | --write-baseline file] | plumb --self-test");
+  console.error(usage);
   process.exit(2);
 }
 
@@ -53,8 +83,13 @@ function detectPacks(r) {
   for (const f of walkFiles(r, r, { filter: () => true, depth: 14 })) {
     const b = path.basename(f);
     if (/^nuxt\.config\.(ts|js|mjs)$/.test(b)) nuxt = true;
-    if (b.endsWith(".csproj")) csproj = true;
-    if (b.endsWith("Contract.cs")) rivet = true;
+    if (b.endsWith(".csproj")) {
+      csproj = true;
+      try { if (fs.readFileSync(f, "utf8").includes("Rivet.Attributes")) rivet = true; } catch {}
+    }
+    if (b.endsWith(".cs")) {
+      try { if (/\[Rivet(?:Contract|Endpoint|Client)\b/.test(fs.readFileSync(f, "utf8"))) rivet = true; } catch {}
+    }
     if (f.includes(`generated${path.sep}rivet`) || /contracts[\/\\]generated/.test(f)) rivet = true;
     if (f.includes(`${path.sep}Modules${path.sep}`)) modules = true;
     if (/\.(spec|test)\.(ts|mjs|js)$/.test(b) || /Tests?\.csproj$/.test(b) ||
@@ -73,7 +108,7 @@ function detectPacks(r) {
   if (nuxt) packs.add("FE");
   if (csproj && modules) packs.add("BE");
   if (rivet) packs.add("RV");
-  if (tests) packs.add("TE");
+  if (tests || (csproj && modules)) packs.add("TE");
   if (!bts) for (const d of btsDomain) if (btsApp.has(d)) { bts = true; break; }
   if (bts) packs.add("BT");
   return packs;

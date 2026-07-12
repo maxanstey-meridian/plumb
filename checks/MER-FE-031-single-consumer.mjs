@@ -1,6 +1,7 @@
 #!/usr/bin/env node
-// MER-FE-031 — items in app/shared/ must have consumers in ≥2 composition-root
-// subtrees; single-consumer shared code was promoted prematurely.
+// PRODUCES: MER-FE-022, MER-FE-031
+// MER-FE-031 — one-subtree consumption is an ownership-review heuristic, not
+// proof that shared placement is wrong.
 // MER-FE-022 — same signal for app/shared/composables/: a composable consumed by
 // exactly one root belongs at that composition root, not in shared/.
 // One analysis pass, two sibling IDs (FABLE_CONTRACT.md §4).
@@ -34,7 +35,7 @@ for (const feRoot of findFeRoots(root)) {
       );
     } else {
       console.log(
-        `MER-FE-031\twarn\t${rel}:0\tonly one subtree (${only}) consumes this shared item — promoted prematurely; move it local to ${only}\tfrontend-pa-vsa.md#promotion`
+        `MER-FE-031\tinfo\t${rel}:0\tonly one subtree (${only}) consumes this shared item — review ownership; consumer count alone does not prove misplacement\tfrontend-pa-vsa.md#promotion`
       );
     }
   }

@@ -1,0 +1,4 @@
+{
+  "scripts": { "typecheck": "tsc --noEmit", "test": "node --test" },
+  "devDependencies": { "typescript": "latest" }
+}

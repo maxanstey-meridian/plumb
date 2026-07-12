@@ -1,0 +1,4 @@
+{
+  "scripts": { "typecheck": "vue-tsc --noEmit", "test": "vitest run" },
+  "devDependencies": { "vue-tsc": "latest", "vitest": "latest", "happy-dom": "latest" }
+}

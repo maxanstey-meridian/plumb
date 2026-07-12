@@ -7,10 +7,9 @@
 //       const { data } = await client.GET("/x")
 //   (b) direct .data access on the awaited call expression:
 //       (await client.GET("/x")).data
-// Compliant (golden apps/ui, the migrated exemplar): capture the result and
-// narrow on result?.data truthiness — data and error are mutually exclusive, so
-// a data-truthiness check IS the error check; .catch(() => null) covers
-// transport failure. Deliberately not flagged (below the §7 precision bar):
+// Compliant: capture the result and test error !== undefined or an explicit
+// response status. Never narrow on payload truthiness: false/zero/empty/null may
+// be valid. Deliberately not flagged (below the §7 precision bar):
 // general "must handle error" flow analysis, and .then()-chaining (style, not
 // doctrine — .catch is a legitimate transport guard).
 // v2-pinned: runs only under variant v2 or both. MER-FE-006 is the v1 analogue.

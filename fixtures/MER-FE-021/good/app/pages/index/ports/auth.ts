@@ -1,2 +1,3 @@
 export interface Auth { login(): Promise<string> }
-export const [injectAuth, provideAuth] = [0, 1] as const;
+// injectSuperAuth is documentation, not an exported port tuple.
+export const [injectAuth, provideAuth] = useProvideInject<Auth>("Auth");

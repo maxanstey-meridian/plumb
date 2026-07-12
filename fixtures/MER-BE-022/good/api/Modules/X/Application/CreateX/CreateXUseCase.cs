@@ -1,4 +1,8 @@
 public sealed class CreateXUseCase
 {
-    public async Task<Result> ExecuteAsync(Command command, CancellationToken cancellationToken) => new();
+    private const string Example = "}";
+    // } public Task<Result> ExecuteAsync(Command command) => new();
+    /* { } */
+    public async Task<Result> ExecuteAsync(Command command, CancellationToken cancellationToken) =>
+        await dependency.ExecuteAsync(command, cancellationToken);
 }

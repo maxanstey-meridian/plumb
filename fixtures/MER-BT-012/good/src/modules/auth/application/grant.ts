@@ -1,2 +1,5 @@
 import { BillingCheck } from "../../common/application/ports/billing-check";
-export const grant = (check: BillingCheck) => check.allowed("x");
+import type { InvoiceSummary } from "../../billing/contracts/invoice-summary";
+import type { InvoiceSummary as AliasSummary } from "@/modules/billing/contracts/invoice-summary";
+export const grant = (check: BillingCheck, invoice: InvoiceSummary) =>
+  check.allowed(invoice.id);

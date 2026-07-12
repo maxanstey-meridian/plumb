@@ -1,0 +1,7 @@
+{
+  "name": "@example/contracts",
+  "exports": {
+    ".": "./src/index.ts",
+    "./types": "./src/types/index.ts"
+  }
+}

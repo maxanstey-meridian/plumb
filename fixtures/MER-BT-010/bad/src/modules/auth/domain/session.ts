@@ -1,3 +1,10 @@
 import { Injectable } from "@nestjs/common";
+import pino from "pino";
+import { Hono } from "hono";
+import { drizzle } from "drizzle-orm";
+import { Sequelize } from "sequelize";
+import { EntityManager } from "@mikro-orm/core";
 import { startSession } from "../application/start-session";
+import { startSession as startViaAlias } from "@/modules/auth/application/start-session";
+import { serialise } from "../serialisation";
 export const sessionRule = (s: string) => s.length > 0;

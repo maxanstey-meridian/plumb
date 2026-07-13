@@ -6,12 +6,14 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { loadRuleOwners } from "../lib/rule-catalog.mjs";
+import { inProcessRules } from "../lib/in-process-rules/index.mjs";
+import { spawnProducer } from "./helpers/run-producer.mjs";
 
 const HOME = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const CHECKS = path.join(HOME, "checks");
 const FIXTURES = path.join(HOME, "fixtures");
 const REFERENCES = path.join(os.homedir(), ".config/opencode/skills/meridian/references");
-const RULE_ID = /MER-[A-Z]{2}-\d{3}/g;
 const catalogCandidates = process.env.MERIDIAN_CHECK_CATALOG
   ? [process.env.MERIDIAN_CHECK_CATALOG]
   : [
@@ -22,43 +24,7 @@ const catalogPath = catalogCandidates.find((candidate) => fs.existsSync(candidat
 
 function loadAlignment() {
   assert.ok(catalogPath, `Meridian rule catalogue not found; checked: ${catalogCandidates.join(", ")}`);
-
-  const owners = new Map();
-  const addOwner = (id, owner) => {
-    const existing = owners.get(id);
-    assert.ok(!existing, `duplicate owner for ${id}: ${existing?.source}, ${owner.source}`);
-    owners.set(id, owner);
-  };
-
-  for (const entry of fs.readdirSync(CHECKS, { withFileTypes: true })) {
-    if (!entry.isFile() || entry.name.startsWith(".") || entry.name.startsWith("_")) continue;
-    const primaryId = entry.name.match(/^(MER-[A-Z]{2}-\d{3})(?:-|\.)/)?.[1];
-    assert.ok(primaryId, `producer filename has no rule ID: ${entry.name}`);
-    const file = path.join(CHECKS, entry.name);
-    const source = fs.readFileSync(file, "utf8");
-    const produces = source.match(/^\s*(?:\/\/|#)\s*PRODUCES:\s*(.+)$/m)?.[1];
-    const listedIds = produces?.match(RULE_ID) ?? [primaryId];
-    assert.equal(new Set(listedIds).size, listedIds.length, `producer ${entry.name} repeats an ID in PRODUCES metadata`);
-    const declaredIds = new Set(listedIds);
-    assert.ok(declaredIds.has(primaryId), `producer ${entry.name} PRODUCES metadata omits its filename ID ${primaryId}`);
-    const owner = { kind: "script", source: entry.name, file, declaredIds };
-    for (const id of declaredIds) addOwner(id, owner);
-  }
-
-  const rulesRoot = path.join(HOME, "rules");
-  for (const pack of fs.readdirSync(rulesRoot)) {
-    const dir = path.join(rulesRoot, pack);
-    if (!fs.statSync(dir).isDirectory()) continue;
-    for (const name of fs.readdirSync(dir)) {
-      const file = path.join(dir, name);
-      const source = fs.readFileSync(file, "utf8");
-      const fields = [...source.matchAll(/^id:\s*(MER-[A-Z]{2}-\d{3})\s*(?:#.*)?$/gm)];
-      assert.equal(fields.length, 1, `expected exactly one id field in rules/${pack}/${name}`);
-      const id = fields[0][1];
-      assert.match(name, new RegExp(`^${id}(?:-|\\.)`), `YAML id ${id} does not match rules/${pack}/${name}`);
-      addOwner(id, { kind: "yaml", source: `rules/${pack}/${name}`, file, declaredIds: new Set([id]) });
-    }
-  }
+  const { byRule: owners } = loadRuleOwners(CHECKS, path.join(HOME, "rules"), inProcessRules);
 
   const catalog = fs.readFileSync(catalogPath, "utf8");
   const entries = new Map();
@@ -98,9 +64,9 @@ function githubHeadingSlugs(markdown) {
   return slugs;
 }
 
-function runOwner(owner, fixture) {
+function runOwner(owner, fixture, id) {
   if (owner.kind === "script") {
-    const out = spawnSync(owner.file, [fixture], {
+    const out = spawnProducer(owner.file, fixture, {
       encoding: "utf8",
       maxBuffer: 32 * 1024 * 1024,
       env: { ...process.env, PLUMB_CI: "1" },
@@ -111,6 +77,19 @@ function runOwner(owner, fixture) {
       assert.ok(id && severity && location && message && docRef, `${owner.source} emitted a malformed finding: ${JSON.stringify(line)}`);
       return { id, severity, docRef };
     });
+  }
+
+  if (owner.kind === "in-process") {
+    const out = spawnSync(path.join(HOME, "plumb"), [fixture, "--rule", id, "--json", "--ci"], {
+      encoding: "utf8",
+      maxBuffer: 32 * 1024 * 1024,
+    });
+    assert.ok([0, 1].includes(out.status), `${owner.source} exited ${out.status}: ${out.stderr}`);
+    return JSON.parse(out.stdout || "[]").map((finding) => ({
+      id: finding.rule,
+      severity: finding.severity,
+      docRef: finding.docRef,
+    }));
   }
 
   const out = spawnSync("ast-grep", ["scan", "--rule", owner.file, "--json", "."], {
@@ -127,7 +106,7 @@ function runOwner(owner, fixture) {
 }
 
 function verifyFinding(owner, finding, entries, slugCache) {
-  assert.ok(owner.declaredIds.has(finding.id), `${owner.source} emitted undeclared ID ${finding.id}`);
+  assert.ok(owner.ids.includes(finding.id), `${owner.source} emitted undeclared ID ${finding.id}`);
   const entry = entries.get(finding.id);
   assert.ok(entry, `${owner.source} emitted uncatalogued ID ${finding.id}`);
   assert.ok(catalogueSeverities(finding.id, entry).has(finding.severity),
@@ -161,14 +140,14 @@ test("each owner emits its declared ID with catalogue-aligned severity and a res
   const slugCache = new Map();
   const findingFailures = [];
   for (const [id, owner] of owners) {
-    const bad = runOwner(owner, path.join(FIXTURES, id, "bad"));
+    const bad = runOwner(owner, path.join(FIXTURES, id, "bad"), id);
     assert.ok(bad.some((finding) => finding.id === id), `${owner.source} did not emit ${id} on fixtures/${id}/bad`);
     for (const finding of bad) {
       try { verifyFinding(owner, finding, entries, slugCache); }
       catch (error) { findingFailures.push(error.message); }
     }
 
-    const good = runOwner(owner, path.join(FIXTURES, id, "good"));
+    const good = runOwner(owner, path.join(FIXTURES, id, "good"), id);
     assert.ok(!good.some((finding) => finding.id === id), `${owner.source} emitted ${id} on fixtures/${id}/good`);
     for (const finding of good) {
       try { verifyFinding(owner, finding, entries, slugCache); }

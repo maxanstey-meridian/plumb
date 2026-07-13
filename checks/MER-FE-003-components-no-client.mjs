@@ -10,13 +10,13 @@
 // DOC: frontend-pa-vsa.md#components
 import fs from "node:fs";
 import path from "node:path";
-import { walkFiles } from "./_lib/fs-scan.mjs";
+import { createManifestRepositoryView, walkFiles } from "./_lib/fs-scan.mjs";
 import { detectRivetVariant } from "./_lib/rivet-variant.mjs";
 
 const root = process.argv[2];
 if (!root || !fs.existsSync(root)) process.exit(2);
 
-const { contractsPackages } = detectRivetVariant(root);
+const { contractsPackages } = detectRivetVariant(createManifestRepositoryView(root));
 const V1_SPEC = /(generated\/rivet\/client|contracts\/client)/;
 const isClientSpec = (spec) =>
   V1_SPEC.test(spec) || contractsPackages.some((p) => spec === p || spec.startsWith(p + "/"));

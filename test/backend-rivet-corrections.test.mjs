@@ -6,33 +6,18 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 const HOME = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-const CHECKS = path.join(HOME, "checks");
 const FIXTURES = path.join(HOME, "fixtures");
+const PLUMB = path.join(HOME, "plumb");
 
 function run(rule, fixture) {
-    const script = {
-        "MER-BE-001": "MER-BE-001-layer-usings.sh",
-        "MER-BE-005": "MER-BE-005-cross-module.mjs",
-        "MER-BE-006": "MER-BE-006-common-single-consumer.mjs",
-        "MER-BE-009": "MER-BE-009-no-service-locator.sh",
-        "MER-BE-022": "MER-BE-022-usecase-ct.sh",
-        "MER-BE-040": "MER-BE-040-repository-dto.mjs",
-        "MER-RV-003": "MER-RV-003-contract-invoke.sh",
-        "MER-RV-001": "MER-RV-001-no-rivetclient.mjs",
-        "MER-RV-002": "MER-RV-002-routes-from-contract.mjs",
-        "MER-RV-006": "MER-RV-006-contract-purity.mjs",
-        "MER-RV-007": "MER-RV-007-result-extension-owner.mjs",
-        "MER-RV-008": "MER-RV-008-program-endpoints.sh",
-        "MER-RV-009": "MER-RV-009-endpoint-builder-target.sh",
-        "MER-RV-010": "MER-RV-010-contract-location.mjs",
-        "MER-TE-001": "MER-TE-001-architecture-enforcement.mjs",
-        "MER-TE-007": "MER-TE-007-no-ef-inmemory.sh",
-    }[rule];
-    const result = spawnSync(path.join(CHECKS, script), [path.join(FIXTURES, rule, fixture)], {
-        encoding: "utf8",
+    const selected = rule === "MER-BE-005" ? ["MER-BE-003", "MER-BE-004", "MER-BE-005"] : [rule];
+    const findings = selected.flatMap((id) => {
+        const result = spawnSync(PLUMB, [path.join(FIXTURES, rule, fixture), "--rule", id, "--ci", "--json"], { encoding: "utf8" });
+        assert.ok([0, 1].includes(result.status), result.stderr);
+        return JSON.parse(result.stdout);
     });
-    assert.equal(result.status, 0, result.stderr);
-    return result.stdout;
+    return findings.map((finding) =>
+        `${finding.rule}\t${finding.severity}\t${finding.location}\t${finding.message}\t${finding.docRef}`).join("\n");
 }
 
 test("MER-BE-001 applies forbidden global usings to a backend containing Domain", () => {

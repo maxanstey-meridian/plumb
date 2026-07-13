@@ -4,15 +4,23 @@
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
+import { performance } from "node:perf_hooks";
 import { fileURLToPath } from "node:url";
-import { createVisibility, shouldIncludeFile, walkFiles } from "./checks/_lib/fs-scan.mjs";
+import { createVisibility, shouldIncludeFile } from "./checks/_lib/fs-scan.mjs";
+import { planCapabilities } from "./lib/engine/contracts.mjs";
+import { createRepositorySnapshot } from "./lib/engine/repository-snapshot.mjs";
+import { runInProcessRules } from "./lib/engine/run-rules.mjs";
+import { inProcessRules } from "./lib/in-process-rules/index.mjs";
+import { createRepositoryInventory, writeInventoryManifest } from "./lib/repository-inventory.mjs";
+import { detectRivetContext } from "./lib/rivet-context.mjs";
+import { loadRuleOwners } from "./lib/rule-catalog.mjs";
+
+const invocationStarted = performance.now();
 
 const HOME = path.dirname(fileURLToPath(import.meta.url));
-// Rivet variant detection (contract §5, v8) lives in _lib so the tripwire check
-// shares the same fingerprints — the runner only computes and exports it.
-const { detectRivetVariant } = await import(path.join(HOME, "checks", "_lib", "rivet-variant.mjs"));
 const SGCONFIG = path.join(HOME, "sgconfig.yml");
 const CHECKS = path.join(HOME, "checks");
+const RULES = path.join(HOME, "rules");
 const FIXTURES = path.join(HOME, "fixtures");
 const SEV = { error: 3, warn: 2, info: 1 };
 const PACKS = new Set(["BE", "BT", "CP", "FE", "RV", "TE", "TO"]);
@@ -28,9 +36,9 @@ if (args[0] === "init") {
   process.exit(0);
 }
 
-let root = null, json = false, failOn = "error", selfTest = false, ruleFilter = null, packFilter = null, ci = false;
+let root = null, json = false, failOn = "error", selfTest = false, ruleFilter = null, packFilter = null, ci = false, profile = false;
 let baselineFile = null, writeBaselineFile = null;
-const usage = "usage: plumb <repo-root> [--json] [--fail-on error|warn|info] [--rule MER-XX-NNN] [--pack FE,BE,...] [--ci] [--baseline file | --write-baseline file] | plumb --self-test";
+const usage = "usage: plumb <repo-root> [--json] [--profile] [--fail-on error|warn|info] [--rule MER-XX-NNN] [--pack FE,BE,...] [--ci] [--baseline file | --write-baseline file] | plumb --self-test";
 const requireValue = (flag, index) => {
   const value = args[index + 1];
   if (!value || value.startsWith("--")) {
@@ -42,6 +50,7 @@ const requireValue = (flag, index) => {
 for (let i = 0; i < args.length; i++) {
   const a = args[i];
   if (a === "--json") json = true;
+  else if (a === "--profile") profile = true;
   else if (a === "--self-test") selfTest = true;
   else if (a === "--ci") ci = true;
   else if (a === "--fail-on") failOn = requireValue(a, i++);
@@ -76,33 +85,68 @@ if (!selfTest && !root) {
   process.exit(2);
 }
 
-function detectPacks(r) {
+const timings = { setup: 0, inventory: [], astGrep: [], rules: [], producers: [], external: [], rendering: 0, counters: null };
+const elapsed = (started) => performance.now() - started;
+const ownerLabel = (owner) => `${owner.ids.join(",")} (${owner.source})`;
+function emitProfile() {
+  if (!profile) return;
+  console.error(`plumb profile: setup ${timings.setup.toFixed(2)}ms`);
+  for (const entry of timings.inventory) {
+    console.error(`plumb profile: inventory ${entry.mode} ${entry.files} files ${entry.duration.toFixed(2)}ms`);
+  }
+  for (const entry of timings.astGrep) {
+    console.error(`plumb profile: ast-grep [${entry.ids.join(",")}] ${entry.duration.toFixed(2)}ms`);
+  }
+  for (const entry of timings.rules) {
+    console.error(`plumb profile: in-process ${ownerLabel(entry.owner)} ${entry.duration.toFixed(2)}ms`);
+  }
+  for (const entry of timings.producers) {
+    console.error(`plumb profile: producer ${ownerLabel(entry.owner)} ${entry.duration.toFixed(2)}ms`);
+  }
+  for (const entry of timings.external) {
+    const suffix = entry.skipped ? " skipped (--ci not enabled)" : ` ${entry.duration.toFixed(2)}ms`;
+    console.error(`plumb profile: external-ci ${ownerLabel(entry.owner)}${suffix}`);
+  }
+  const externalTotal = timings.external.reduce((total, entry) => total + (entry.duration ?? 0), 0);
+  if (timings.counters) {
+    const counters = timings.counters;
+    console.error(`plumb profile: counters text-read=${counters.textReads} line-map=${counters.lineMaps} json-parse=${counters.jsonParses} config-parse=${counters.configParses}`);
+    console.error(`plumb profile: analysis-counters typescript-runtime-load=${counters.typescriptRuntimeLoads} typescript-parse=${counters.typescriptParses} vue-extraction=${counters.vueExtractions} vue-script-parse=${counters.vueScriptParses} tsconfig-discovery=${counters.tsconfigDiscoveries} tsconfig-parse=${counters.tsconfigParses} module-resolution=${counters.moduleResolutions} frontend-root-discovery=${counters.frontendRootDiscoveries} frontend-graph-build=${counters.frontendGraphBuilds} dependency-cruiser-load=${counters.dependencyCruiserLoads} dependency-cruiser-run=${counters.dependencyCruiserRuns} csharp-read=${counters.csharpTextReads} csharp-mask=${counters.csharpMasks} csharp-classification=${counters.csharpClassifications} dotnet-project-parse=${counters.dotnetProjectParses} dotnet-project-graph-build=${counters.dotnetProjectGraphBuilds} directory-build-props-parse=${counters.directoryBuildPropsParses}`);
+    console.error(`plumb profile: capabilities ${Object.entries(counters.capabilityInitializations).map(([name, count]) => `${name}=${count}`).join(" ")}`);
+  }
+  console.error(`plumb profile: rendering ${timings.rendering.toFixed(2)}ms`);
+  console.error(`plumb profile: external-ci total ${externalTotal.toFixed(2)}ms`);
+  console.error(`plumb profile: total ${elapsed(invocationStarted).toFixed(2)}ms`);
+}
+
+function detectPacks(snapshot) {
   const packs = new Set(["TO", "CP"]);
   let csproj = false, modules = false, rivet = false, nuxt = false, tests = false, bts = false;
   const btsDomain = new Set(), btsApp = new Set();
-  for (const f of walkFiles(r, r, { filter: () => true, depth: 14 })) {
-    const b = path.basename(f);
+  for (const file of snapshot.files) {
+    if (file.path.split("/").length - 1 > 14) continue;
+    const f = file.path, b = file.name;
     if (/^nuxt\.config\.(ts|js|mjs)$/.test(b)) nuxt = true;
     if (b.endsWith(".csproj")) {
       csproj = true;
-      try { if (fs.readFileSync(f, "utf8").includes("Rivet.Attributes")) rivet = true; } catch {}
+      try { if (snapshot.text(file).includes("Rivet.Attributes")) rivet = true; } catch {}
     }
     if (b.endsWith(".cs")) {
-      try { if (/\[Rivet(?:Contract|Endpoint|Client)\b/.test(fs.readFileSync(f, "utf8"))) rivet = true; } catch {}
+      try { if (/\[Rivet(?:Contract|Endpoint|Client)\b/.test(snapshot.text(file))) rivet = true; } catch {}
     }
-    if (f.includes(`generated${path.sep}rivet`) || /contracts[\/\\]generated/.test(f)) rivet = true;
-    if (f.includes(`${path.sep}Modules${path.sep}`)) modules = true;
+    if (f.includes("generated/rivet") || /contracts\/generated/.test(f)) rivet = true;
+    if (f.includes("/Modules/") || f.startsWith("Modules/")) modules = true;
     if (/\.(spec|test)\.(ts|mjs|js)$/.test(b) || /Tests?\.csproj$/.test(b) ||
-        f.includes(`${path.sep}tests${path.sep}`) || f.includes("__tests__") ||
-        f.includes(`${path.sep}TestSupport${path.sep}`)) tests = true;
-    if (b.endsWith(".port.ts") || f.includes(`application${path.sep}ports${path.sep}`)) bts = true;
+        f.includes("/tests/") || f.startsWith("tests/") || f.includes("__tests__") ||
+        f.includes("/TestSupport/") || f.startsWith("TestSupport/")) tests = true;
+    if (b.endsWith(".port.ts") || f.includes("application/ports/")) bts = true;
     // layer-shaped TS tree (lowercase domain/ + application|app/ under src/ or
     // modules/) is also a BT marker — glyphantics-style layered backends have no
     // ports dir but still carry the layer doctrine (contract §5, v7a)
-    if (/[\/\\](src|modules[\/\\][^\/\\]+)[\/\\]domain[\/\\]/.test(f)) btsDomain.add(f.replace(/[\/\\]domain[\/\\].*$/, ""));
-    if (/[\/\\](src|modules[\/\\][^\/\\]+)[\/\\](application|app)[\/\\]/.test(f)) btsApp.add(f.replace(/[\/\\](application|app)[\/\\].*$/, ""));
+    if (/(^|\/)(src|modules\/[^/]+)\/domain\//.test(f)) btsDomain.add(f.replace(/\/domain\/.*$/, ""));
+    if (/(^|\/)(src|modules\/[^/]+)\/(application|app)\//.test(f)) btsApp.add(f.replace(/\/(application|app)\/.*$/, ""));
     if (b === "package.json") {
-      try { if (fs.readFileSync(f, "utf8").includes('"typed-inject"')) bts = true; } catch {}
+      try { if (snapshot.text(file).includes('"typed-inject"')) bts = true; } catch {}
     }
   }
   if (nuxt) packs.add("FE");
@@ -114,10 +158,14 @@ function detectPacks(r) {
   return packs;
 }
 
-function runAstGrep(r) {
-  const out = spawnSync("ast-grep", ["scan", "--config", SGCONFIG, "--json", "."], {
-    cwd: r, encoding: "utf8", maxBuffer: 64 * 1024 * 1024,
-  });
+function runAstGrep(r, selected, allYaml) {
+  if (!selected.length) return [];
+  const args = selected.length === allYaml.length
+    ? ["scan", "--config", SGCONFIG, "--json", "."]
+    : ["scan", "--rule", selected[0].file, "--json", "."];
+  const started = performance.now();
+  const out = spawnSync("ast-grep", args, { cwd: r, encoding: "utf8", maxBuffer: 64 * 1024 * 1024 });
+  timings.astGrep.push({ ids: selected.flatMap((owner) => owner.ids), duration: elapsed(started) });
   if (out.error) { console.error("plumb: ast-grep unavailable — YAML rules skipped"); return []; }
   let arr = [];
   try { arr = JSON.parse(out.stdout || "[]"); } catch { return []; }
@@ -130,23 +178,21 @@ function runAstGrep(r) {
   }));
 }
 
-function runChecks(r, rivetVariant) {
+function runChecks(r, selected, rivetVariant) {
   const findings = [];
-  let scripts = [];
-  try {
-    scripts = fs.readdirSync(CHECKS, { withFileTypes: true })
-      .filter((e) => e.isFile() && !e.name.startsWith(".") && !e.name.startsWith("_"))
-      .map((e) => e.name);
-  } catch {}
-  for (const s of scripts.sort()) {
-    const out = spawnSync(path.join(CHECKS, s), [path.resolve(r)], {
+  for (const owner of selected) {
+    const started = performance.now();
+    const out = spawnSync(owner.file, [path.resolve(r)], {
       encoding: "utf8", maxBuffer: 16 * 1024 * 1024,
       env: { ...process.env, ...(ci || selfTest ? { PLUMB_CI: "1" } : {}), PLUMB_RIVET_VARIANT: rivetVariant },
     });
+    const duration = elapsed(started);
+    (owner.ciOnly ? timings.external : timings.producers).push({ owner, duration });
     if (out.error || (out.status && out.status > 1)) {
-      console.error(`plumb: check ${s} failed: ${out.error?.message || out.stderr}`);
+      console.error(`plumb: check ${owner.source} failed: ${out.error?.message || out.stderr}`);
       continue;
     }
+    if (out.stderr) process.stderr.write(out.stderr);
     for (const line of (out.stdout || "").split("\n")) {
       if (!line.trim()) continue;
       const [id, sev, loc, msg, ref = ""] = line.split("\t");
@@ -156,18 +202,81 @@ function runChecks(r, rivetVariant) {
   return findings;
 }
 
-function scan(r, { allPacks = false } = {}) {
-  const rivetVariant = detectRivetVariant(r).variant; // contract §5 v8
-  const packs = allPacks ? null : detectPacks(r);
-  if (packs && rivetVariant !== "none") packs.add("RV");
+const catalogStarted = performance.now();
+let catalogue;
+try { catalogue = loadRuleOwners(CHECKS, RULES, inProcessRules); }
+catch (error) { console.error(`plumb: cannot load rule catalogue: ${error.message}`); process.exit(2); }
+timings.setup += elapsed(catalogStarted);
+const allYaml = catalogue.owners.filter((owner) => owner.kind === "yaml");
+
+function selectedOwners(packs, rivetVariant = null, selectedRule = ruleFilter) {
+  let selected = catalogue.owners;
+  if (selectedRule) selected = selected.filter((owner) => owner.ids.includes(selectedRule));
+  if (packFilter) selected = selected.filter((owner) => owner.ids.some((id) => packFilter.has(id.split("-")[1])));
+  if (packs) selected = selected.filter((owner) => owner.ids.some((id) => packs.has(id.split("-")[1])));
+  const ciEligible = ci || selfTest;
+  for (const owner of selected) {
+    if (owner.ciOnly && !ciEligible && !timings.external.some((entry) => entry.owner === owner)) {
+      timings.external.push({ owner, duration: 0, skipped: true });
+    }
+  }
+  selected = selected.filter((owner) => !owner.ciOnly || ciEligible);
+  if (rivetVariant) selected = selected.filter((owner) => !owner.variants || owner.variants.includes(rivetVariant));
+  return selected;
+}
+
+async function scan(r, { allPacks = false, selectedRule = ruleFilter } = {}) {
+  const inventoryStarted = performance.now();
+  const inventory = createRepositoryInventory(r);
+  r = inventory.root;
+  const snapshot = createRepositorySnapshot(inventory);
+  const manifest = writeInventoryManifest(inventory);
+  timings.inventory.push({ mode: inventory.mode, files: inventory.files.length, duration: elapsed(inventoryStarted) });
+  const previousManifest = process.env.PLUMB_FILE_MANIFEST;
+  const previousRoot = process.env.PLUMB_REPO_ROOT;
+  process.env.PLUMB_FILE_MANIFEST = manifest.file;
+  process.env.PLUMB_REPO_ROOT = inventory.root;
+  try {
+  const setupStarted = performance.now();
+  const rivet = detectRivetContext(snapshot);
+  const packs = allPacks || selectedRule ? null : detectPacks(snapshot);
+  if (packs && rivet.variant !== "none") packs.add("RV");
   const visibility = createVisibility(r);
-  let found = [...runAstGrep(r), ...runChecks(r, rivetVariant)]
+  const selected = selectedOwners(packs, rivet.variant, selectedRule);
+  const selectedYaml = selected.filter((owner) => owner.kind === "yaml");
+  const selectedScripts = selected.filter((owner) => owner.kind === "script");
+  const selectedInProcess = selected.filter((owner) => owner.kind === "in-process");
+  const capabilities = planCapabilities(selectedInProcess.map((owner) => owner.rule));
+  timings.setup += elapsed(setupStarted);
+  const inProcess = await runInProcessRules(snapshot, selectedInProcess.map((owner) => owner.rule), capabilities, {
+    rivet,
+    packs: packs ?? new Set(PACKS),
+    staticInputs: {
+      oxlintrc: () => fs.readFileSync(path.join(HOME, "configs", "oxlintrc.json"), "utf8"),
+      oxfmtrc: () => fs.readFileSync(path.join(HOME, "configs", "oxfmtrc.json"), "utf8"),
+      editorconfig: () => fs.readFileSync(path.join(HOME, "configs", "editorconfig.dotnet"), "utf8"),
+    },
+  });
+  for (const entry of inProcess.timings) {
+    const owner = selectedInProcess.find((candidate) => candidate.rule === entry.rule);
+    timings.rules.push({ owner, duration: entry.duration });
+  }
+  for (const diagnostic of inProcess.diagnostics) process.stderr.write(`${diagnostic}\n`);
+  timings.counters = snapshot.counters;
+  let found = [...runAstGrep(r, selectedYaml, allYaml), ...inProcess.findings, ...runChecks(r, selectedScripts, rivet.variant)]
     .filter((f) => visibleFinding(r, visibility, f));
   if (packs) found = found.filter((f) => packs.has(f.id.split("-")[1]));
   if (ruleFilter) found = found.filter((f) => f.id === ruleFilter);
   if (packFilter) found = found.filter((f) => packFilter.has(f.id.split("-")[1]));
   found.sort((a, b) => SEV[b.sev] - SEV[a.sev] || a.id.localeCompare(b.id) || a.loc.localeCompare(b.loc));
   return found;
+  } finally {
+    if (previousManifest === undefined) delete process.env.PLUMB_FILE_MANIFEST;
+    else process.env.PLUMB_FILE_MANIFEST = previousManifest;
+    if (previousRoot === undefined) delete process.env.PLUMB_REPO_ROOT;
+    else process.env.PLUMB_REPO_ROOT = previousRoot;
+    manifest.cleanup();
+  }
 }
 
 function visibleFinding(root, visibility, finding) {
@@ -187,18 +296,25 @@ if (selfTest) {
   try { dirs = fs.readdirSync(FIXTURES).filter((d) => d.startsWith("MER-")); } catch {}
   let fail = 0;
   for (const id of dirs.sort()) {
-    const hitBad = scan(path.join(FIXTURES, id, "bad"), { allPacks: true }).some((f) => f.id === id);
-    const hitGood = scan(path.join(FIXTURES, id, "good"), { allPacks: true }).some((f) => f.id === id);
+    const hitBad = (await scan(path.join(FIXTURES, id, "bad"), { allPacks: true, selectedRule: id })).some((f) => f.id === id);
+    const hitGood = (await scan(path.join(FIXTURES, id, "good"), { allPacks: true, selectedRule: id })).some((f) => f.id === id);
+    const renderStarted = performance.now();
     if (hitBad && !hitGood) console.log(`ok   ${id}`);
     else { fail++; console.log(`FAIL ${id}  bad:${hitBad ? "hit" : "MISS"}  good:${hitGood ? "FALSE-POSITIVE" : "clean"}`); }
+    timings.rendering += elapsed(renderStarted);
   }
+  const renderStarted = performance.now();
   console.log(fail ? `self-test: ${fail}/${dirs.length} failing` : `self-test: all ${dirs.length} fixtures pass`);
+  timings.rendering += elapsed(renderStarted);
+  emitProfile();
   process.exit(fail ? 1 : 0);
 }
 
 const abs = path.resolve(root);
 if (!fs.existsSync(abs)) { console.error(`plumb: no such directory ${abs}`); process.exit(2); }
-let findings = scan(abs);
+let findings;
+try { findings = await scan(abs); }
+catch (error) { console.error(`plumb: inventory failed: ${error.message}`); process.exit(2); }
 
 // --baseline ratchet (contract §5, 2026-06-11): count-per-(rule,path) allowance,
 // findings over allowance are NEW; suppressed count is reported, never hidden.
@@ -207,7 +323,10 @@ if (writeBaselineFile) {
   const entries = {};
   for (const f of findings) entries[bKey(f)] = (entries[bKey(f)] || 0) + 1;
   fs.writeFileSync(writeBaselineFile, JSON.stringify({ version: 1, entries }, null, 2) + "\n");
+  const renderStarted = performance.now();
   console.log(`plumb: baseline written — ${findings.length} findings across ${Object.keys(entries).length} (rule,path) keys`);
+  timings.rendering += elapsed(renderStarted);
+  emitProfile();
   process.exit(0);
 }
 let baselined = 0, baselineTotal = 0;
@@ -223,6 +342,7 @@ if (baselineFile) {
   });
 }
 
+const renderStarted = performance.now();
 if (json) {
   console.log(JSON.stringify(findings.map((f) => ({ rule: f.id, severity: f.sev, location: f.loc, message: f.msg, docRef: f.ref })), null, 2));
 } else {
@@ -236,4 +356,6 @@ if (json) {
   }
   console.log(summary);
 }
+timings.rendering += elapsed(renderStarted);
+emitProfile();
 process.exit(findings.some((f) => SEV[f.sev] >= SEV[failOn]) ? 1 : 0);

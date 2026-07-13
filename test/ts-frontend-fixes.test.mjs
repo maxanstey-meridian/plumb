@@ -1,42 +1,24 @@
 #!/usr/bin/env node
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import fs from "node:fs";
-import os from "node:os";
-import path from "node:path";
 import { spawnSync } from "node:child_process";
+import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { resolveTsImport } from "../checks/_lib/ts-resolution.mjs";
 
 const HOME = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
 function runProducer(id, fixture) {
-  const name = fs.readdirSync(path.join(HOME, "checks")).find((entry) => entry.startsWith(id));
-  assert.ok(name, `producer ${id} not found`);
-  return spawnSync(path.join(HOME, "checks", name), [path.join(HOME, "fixtures", id, fixture)], { encoding: "utf8" });
+  const out = spawnSync(path.join(HOME, "plumb"), [path.join(HOME, "fixtures", id, fixture), "--rule", id, "--json", "--ci"], {
+    encoding: "utf8",
+    maxBuffer: 32 * 1024 * 1024,
+  });
+  const findings = JSON.parse(out.stdout || "[]");
+  return {
+    ...out,
+    status: [0, 1].includes(out.status) ? 0 : out.status,
+    stdout: findings.map((finding) => `${finding.rule}\t${finding.severity}\t${finding.location}\t${finding.message}\t${finding.docRef}`).join("\n") + (findings.length ? "\n" : ""),
+  };
 }
-
-test("TS resolution excludes installed packages but retains workspace symlink targets", (t) => {
-  const fixture = fs.mkdtempSync(path.join(os.tmpdir(), "plumb-ts-resolution-"));
-  t.after(() => fs.rmSync(fixture, { recursive: true, force: true }));
-
-  const root = path.join(fixture, "repo");
-  const workspace = path.join(fixture, "workspace-package");
-  const source = path.join(root, "src", "main.ts");
-  fs.mkdirSync(path.dirname(source), { recursive: true });
-  fs.mkdirSync(path.join(root, "node_modules", "external-package"), { recursive: true });
-  fs.mkdirSync(workspace, { recursive: true });
-  fs.writeFileSync(path.join(root, "tsconfig.json"), JSON.stringify({ compilerOptions: { moduleResolution: "node" } }));
-  fs.writeFileSync(source, "export {}\n");
-  fs.writeFileSync(path.join(root, "node_modules", "external-package", "package.json"), JSON.stringify({ types: "index.ts" }));
-  fs.writeFileSync(path.join(root, "node_modules", "external-package", "index.ts"), "export const external = true;\n");
-  fs.writeFileSync(path.join(workspace, "package.json"), JSON.stringify({ name: "workspace-package", types: "index.ts" }));
-  fs.writeFileSync(path.join(workspace, "index.ts"), "export const workspaceValue = true;\n");
-  fs.symlinkSync(workspace, path.join(root, "node_modules", "workspace-package"), "dir");
-
-  assert.equal(resolveTsImport(root, source, "external-package"), null);
-  assert.equal(resolveTsImport(root, source, "workspace-package"), fs.realpathSync(path.join(workspace, "index.ts")));
-});
 
 test("FE-020 finds real provideX calls in TS and Vue without matching comments or strings", () => {
   const bad = runProducer("MER-FE-020", "bad");
@@ -118,14 +100,15 @@ test("BT-016 applies Date shadowing lexically", () => {
   assert.doesNotMatch(bad.stdout, /shadowed-date\.ts:3.*via Date\.now/);
 });
 
-test("BT-017 permits root config trees but not module-local config", () => {
+test("BT-017 permits root config trees, workspace package config, and build-tool config, but not module-local config", () => {
   const good = runProducer("MER-BT-017", "good");
   assert.equal(good.status, 0, good.stderr);
-  assert.equal(good.stdout, "");
+  assert.equal(good.stdout, "", `expected no warnings, got: ${good.stdout}`);
 
   const bad = runProducer("MER-BT-017", "bad");
   assert.equal(bad.status, 0, bad.stderr);
   assert.match(bad.stdout, /modules\/orders\/config\/database\.ts:1/);
+  assert.match(bad.stdout, /app\/orders\.config\.ts:1/);
 });
 
 test("BT-017 applies process and globalThis.process shadowing lexically", () => {

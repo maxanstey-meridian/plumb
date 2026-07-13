@@ -1,0 +1,1 @@
+export const proxyTarget = process.env.VITE_PROXY_TARGET;

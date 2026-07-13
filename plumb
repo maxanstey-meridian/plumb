@@ -6,6 +6,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { performance } from "node:perf_hooks";
 import { fileURLToPath } from "node:url";
+import { parseArgs } from "node:util";
 import { createVisibility, shouldIncludeFile } from "./checks/_lib/fs-scan.mjs";
 import { planCapabilities } from "./lib/engine/contracts.mjs";
 import { createRepositorySnapshot } from "./lib/engine/repository-snapshot.mjs";
@@ -36,34 +37,48 @@ if (args[0] === "init") {
   process.exit(0);
 }
 
-let root = null, json = false, failOn = "error", selfTest = false, ruleFilter = null, packFilter = null, ci = false, profile = false;
-let baselineFile = null, writeBaselineFile = null;
-const usage = "usage: plumb <repo-root> [--json] [--profile] [--fail-on error|warn|info] [--rule MER-XX-NNN] [--pack FE,BE,...] [--ci] [--baseline file | --write-baseline file] | plumb --self-test";
-const requireValue = (flag, index) => {
-  const value = args[index + 1];
-  if (!value || value.startsWith("--")) {
-    console.error(`plumb: ${flag} requires a value\n${usage}`);
-    process.exit(2);
-  }
-  return value;
-};
-for (let i = 0; i < args.length; i++) {
-  const a = args[i];
-  if (a === "--json") json = true;
-  else if (a === "--profile") profile = true;
-  else if (a === "--self-test") selfTest = true;
-  else if (a === "--ci") ci = true;
-  else if (a === "--fail-on") failOn = requireValue(a, i++);
-  else if (a === "--rule") ruleFilter = requireValue(a, i++);
-  else if (a === "--pack") packFilter = new Set(requireValue(a, i++).split(","));
-  else if (a === "--baseline") baselineFile = requireValue(a, i++);
-  else if (a === "--write-baseline") writeBaselineFile = requireValue(a, i++);
-  else if (a.startsWith("-")) {
-    console.error(`plumb: unknown option ${a}\n${usage}`);
-    process.exit(2);
-  }
-  else root = a;
+const usage = "usage: plumb <repo-root> [--json] [--profile] [--fail-on error|warn|info] [--rule MER-XX-NNN] [--pack FE,BE,...] [--exclude pattern] [--ci] [--baseline file | --write-baseline file] | plumb --self-test";
+let parsed;
+try {
+  parsed = parseArgs({
+    args,
+    allowPositionals: true,
+    strict: true,
+    options: {
+      json: { type: "boolean" },
+      profile: { type: "boolean" },
+      "self-test": { type: "boolean" },
+      ci: { type: "boolean" },
+      "fail-on": { type: "string" },
+      rule: { type: "string" },
+      pack: { type: "string" },
+      exclude: { type: "string", multiple: true },
+      baseline: { type: "string" },
+      "write-baseline": { type: "string" },
+    },
+  });
+} catch (error) {
+  const missing = /Option '([^']+) <value>' argument missing/.exec(error.message);
+  const unknown = /Unknown option '([^']+)'/.exec(error.message);
+  const detail = missing ? `${missing[1]} requires a value` : unknown ? `unknown option ${unknown[1]}` : error.message;
+  console.error(`plumb: ${detail}\n${usage}`);
+  process.exit(2);
 }
+if (parsed.positionals.length > 1) {
+  console.error(`plumb: expected one repo root\n${usage}`);
+  process.exit(2);
+}
+const root = parsed.positionals[0] ?? null;
+const json = parsed.values.json ?? false;
+const profile = parsed.values.profile ?? false;
+const selfTest = parsed.values["self-test"] ?? false;
+const ci = parsed.values.ci ?? false;
+const failOn = parsed.values["fail-on"] ?? "error";
+const ruleFilter = parsed.values.rule ?? null;
+const packFilter = parsed.values.pack ? new Set(parsed.values.pack.split(",")) : null;
+const excludePatterns = parsed.values.exclude ?? [];
+const baselineFile = parsed.values.baseline ?? null;
+const writeBaselineFile = parsed.values["write-baseline"] ?? null;
 if (!Object.hasOwn(SEV, failOn)) {
   console.error(`plumb: invalid --fail-on value ${failOn}\n${usage}`);
   process.exit(2);
@@ -227,7 +242,7 @@ function selectedOwners(packs, rivetVariant = null, selectedRule = ruleFilter) {
 
 async function scan(r, { allPacks = false, selectedRule = ruleFilter } = {}) {
   const inventoryStarted = performance.now();
-  const inventory = createRepositoryInventory(r);
+  const inventory = createRepositoryInventory(r, { excludes: excludePatterns });
   r = inventory.root;
   const snapshot = createRepositorySnapshot(inventory);
   const manifest = writeInventoryManifest(inventory);
@@ -250,7 +265,6 @@ async function scan(r, { allPacks = false, selectedRule = ruleFilter } = {}) {
   timings.setup += elapsed(setupStarted);
   const inProcess = await runInProcessRules(snapshot, selectedInProcess.map((owner) => owner.rule), capabilities, {
     rivet,
-    packs: packs ?? new Set(PACKS),
     staticInputs: {
       oxlintrc: () => fs.readFileSync(path.join(HOME, "configs", "oxlintrc.json"), "utf8"),
       oxfmtrc: () => fs.readFileSync(path.join(HOME, "configs", "oxfmtrc.json"), "utf8"),

@@ -14,7 +14,7 @@ pnpm install
 
 `ast-grep` is used for YAML rules and must be available on `PATH` for those rules to run. If it is missing, `plumb` skips YAML rules and prints a diagnostic.
 
-TypeScript-backed rules and frontend graph rules use the local `typescript` and `dependency-cruiser` packages installed by `pnpm install`. If either dependency is unavailable, only the affected rules are skipped and `plumb` prints one diagnostic; other rule families still run.
+TypeScript-backed rules and frontend graph rules use the local `typescript`, `@vue/compiler-sfc`, and `dependency-cruiser` packages installed by `pnpm install`. If one is unavailable, only the affected rules are skipped and `plumb` prints one diagnostic; other rule families still run.
 
 ## Run
 
@@ -31,11 +31,14 @@ Useful options:
 ./plumb /path/to/repo --fail-on warn
 ./plumb /path/to/repo --pack FE,BE
 ./plumb /path/to/repo --rule MER-BE-005
+./plumb /path/to/repo --exclude fixtures/ --exclude coverage/
 ./plumb /path/to/repo --ci
 ./plumb /path/to/repo --profile
 ```
 
 `--profile` writes setup, repository inventory, selected in-process rule, remaining producer, external CI, rendering, and total timings to stderr. It also reports shared text/configuration work, TypeScript parsing, C# reads/masking/classification, Vue extraction, tsconfig and module resolution, frontend graphs, `.csproj` parsing and graphs, inherited props parsing, external adapter runs, and capability initialization. Finding stdout and JSON output remain unchanged.
+
+Add a `.plumbignore` at the checked repository root for persistent exclusions. It uses gitignore syntax, including negation. Repeatable `--exclude <pattern>` options add invocation-specific patterns after `.plumbignore`.
 
 Baseline an existing repo and then fail only on new findings:
 
@@ -73,7 +76,7 @@ The TypeScript backend is the default. Use `--force` to pass forced creation thr
 ## Layout
 
 - `plumb` is the runner.
-- `lib/engine/` owns capability planning, the invocation-local repository snapshot, lazy text/configuration/TypeScript/Vue/C# services, frontend roots and graphs, the syntax-light .NET project graph, dispatch, and central findings.
+- `lib/engine/` owns heavyweight analysis capability planning, the invocation-local repository snapshot, lazy text/configuration/TypeScript/Vue/C# services, frontend roots and graphs, the syntax-light .NET project graph, dispatch, and central findings.
 - `lib/in-process-rules/` contains path, text, configuration, TypeScript, Vue, C#, frontend graph, and .NET project rules that share the engine snapshot.
 - `checks/` contains remaining executable cross-file checks. One file per concern; `_lib/` holds shared helpers and is not run directly.
 - `rules/` contains ast-grep YAML rules.
@@ -101,7 +104,7 @@ Executable producers exit `0` when they find drift. Non-zero exits are for inter
 ## Add A Check
 
 1. Add a descriptor-backed rule under `lib/in-process-rules/` when built-in path, text, configuration, TypeScript, Vue, C#, resolution, frontend graph, or syntax-light .NET project capabilities are sufficient. Use an executable producer under `checks/` only when process isolation or a separate external tool boundary is required.
-2. Declare every owned rule ID and required capability. In-process rules consume only the provided repository/file contexts; executable producers consume the runner-provided manifest.
+2. Declare every owned rule ID and any heavyweight analysis capability it requires. Basic file, text, line, JSON, and configuration access needs no declaration. In-process rules consume only the provided repository/file contexts; executable producers consume the runner-provided manifest.
 3. Report in-process findings through the owner-scoped context. Executable producers emit only five-field finding lines on stdout; diagnostics go to stderr.
 4. Add `fixtures/MER-XX-NNN/bad` and `fixtures/MER-XX-NNN/good`.
 5. Make sure the relevant pack is detected by `plumb` or add a runner harness case.
@@ -113,14 +116,13 @@ For ast-grep-shaped single-file checks, add a YAML rule under `rules/<pack>/` in
 
 Use `defineFileRule` when each file can be decided independently and `defineRepositoryRule` for cross-file policy. The engine passes file rules `(file, context)` and repository rules `(context)`.
 
-Repository context exposes `root`, `files`, `packs`, `rivet`, `file(path)`, static configuration inputs, owner-scoped `report()`, and the planned analysis services. File contexts expose `path`, `name`, `directory`, `text()`, `lineMap()`, `json()`, and `config(parser)`.
+Repository context exposes `root`, `files`, `rivet`, `file(path)`, static configuration inputs, owner-scoped `report()`, and the planned analysis services. File contexts expose `path`, `name`, `directory`, `text()`, `lineMap()`, `json()`, and `config(parser)`.
 
-Declare the narrowest sufficient requirement from `Capability`: `PATH`, `TEXT`, `LINE_MAP`, `JSON`, `BASIC_CONFIG`, `TYPESCRIPT`, `FRONTEND_ROOTS`, `FRONTEND_GRAPH`, `CSHARP`, or `DOTNET_PROJECTS`. Dependencies close transitively, expensive services initialize lazily, and shared results are memoized for one invocation. Accessing an unplanned capability fails immediately.
+Declare the narrowest sufficient requirement from `Capability`: `TYPESCRIPT`, `FRONTEND_ROOTS`, `FRONTEND_GRAPH`, `CSHARP`, or `DOTNET_PROJECTS`. Dependencies close transitively, expensive services initialize lazily, and shared results are memoized for one invocation. Accessing an unplanned analysis capability fails immediately.
 
 ```js
 defineFileRule({
   descriptor: createRuleDescriptor({ id: "MER-XX-001", source: "in-process/xx.mjs" }),
-  requirements: [Capability.LINE_MAP],
   files: (path) => path.endsWith(".ts"),
   analyze(file, context) {
     for (const [index, line] of file.lineMap().lines.entries()) {

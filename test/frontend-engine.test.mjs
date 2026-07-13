@@ -23,9 +23,6 @@ const contextFor = (snapshot, capability, options = {}) =>
 
 test("frontend graph capability closes over only its shared service dependencies", () => {
   assert.deepEqual(planCapabilities([{ requirements: [Capability.FRONTEND_GRAPH] }]), [
-    Capability.PATH,
-    Capability.TEXT,
-    Capability.LINE_MAP,
     Capability.TYPESCRIPT,
     Capability.FRONTEND_ROOTS,
     Capability.FRONTEND_GRAPH,
@@ -113,12 +110,17 @@ test("graphs retain only visible interned nodes, first edges, deterministic orde
   });
   try {
     const repository = contextFor(f.snapshot, Capability.FRONTEND_GRAPH, { dependencyCruiserLoader: async () => ({
-      async cruise() { return { output: { modules: [{ source: "app/b.ts", dependencies: [
-        { module: "./a", resolved: "app/a.ts", dependencyTypes: ["local"] },
-        { module: "./a", resolved: "app/a.ts", dependencyTypes: ["type-only"] },
-        { module: "./hidden", resolved: "app/hidden.ts", dependencyTypes: ["local"] },
-        { module: "./generated", resolved: ".nuxt/generated.ts", dependencyTypes: ["local"] },
-      ] }] } }; },
+      async cruise() { return { output: { modules: [
+        { source: "app/b.ts", dependencies: [
+          { module: "./a", resolved: "app/a.ts", dependencyTypes: ["local"] },
+          { module: "./a", resolved: "app/a.ts", dependencyTypes: ["type-only"] },
+          { module: "./hidden", resolved: "app/hidden.ts", dependencyTypes: ["local"] },
+          { module: "./generated", resolved: ".nuxt/generated.ts", dependencyTypes: ["local"] },
+        ] },
+        { source: "app/z.vue", dependencies: [
+          { module: "./a", resolved: "app/a.ts", dependencyTypes: ["local", "type-only"] },
+        ] },
+      ] } }; },
     }) });
     const graph = await repository.context.frontendGraph.graph(repository.context.frontendRoots.all()[0]);
     assert.deepEqual(graph.edges.map((edge) => `${edge.from.path}->${edge.to.path}:${edge.line}:${edge.typeOnly}`), [
@@ -138,7 +140,10 @@ test("mixed type and value imports to one target produce a value graph edge", as
   });
   try {
     const repository = contextFor(f.snapshot, Capability.FRONTEND_GRAPH, { dependencyCruiserLoader: async () => ({
-      async cruise() { return { output: { modules: [] } }; },
+      async cruise() { return { output: { modules: [{ source: "app/component.vue", dependencies: [
+        { module: "./useAuth", resolved: "app/useAuth.ts", dependencyTypes: ["local", "type-only"] },
+        { module: "./useAuth", resolved: "app/useAuth.ts", dependencyTypes: ["local", "import"] },
+      ] }] } }; },
     }) });
     const graph = await repository.context.frontendGraph.graph(repository.context.frontendRoots.all()[0]);
     assert.equal(graph.edges.length, 1);

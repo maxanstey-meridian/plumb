@@ -91,7 +91,7 @@ test("project ownership, test evidence, references, cycles, and providers share 
   assert.equal(f.snapshot.counters.dotnetProjectGraphBuilds, 1);
 });
 
-test("effective properties follow visible Directory.Build.props ancestry and project overrides", () => {
+test("project properties use only the nearest visible Directory.Build.props and project overrides", () => {
   const f = fixture(new Map([
     ["Directory.Build.props", '<Project><PropertyGroup><Nullable>disable</Nullable><ImplicitUsings>enable</ImplicitUsings></PropertyGroup></Project>'],
     ["src/Directory.Build.props", '<Project><PropertyGroup Condition="x"><Nullable>ignored</Nullable></PropertyGroup><PropertyGroup><Nullable>enable</Nullable></PropertyGroup></Project>'],
@@ -99,11 +99,12 @@ test("effective properties follow visible Directory.Build.props ancestry and pro
   ]), [Capability.DOTNET_PROJECTS]);
   const project = f.context.dotnetProjects.projects()[0];
   assert.equal(f.context.dotnetProjects.propsFor(project), f.context.dotnetProjects.propsFor(project));
-  assert.equal(f.context.dotnetProjects.effectiveProperty(project, "Nullable"), "enable");
-  assert.equal(f.context.dotnetProjects.effectiveProperty(project, "ImplicitUsings"), "disable");
+  assert.deepEqual(f.context.dotnetProjects.propsFor(project).map((file) => file.path), ["src/Directory.Build.props"]);
   assert.equal(f.context.dotnetProjects.projectProperty(project, "Nullable"), undefined);
   assert.equal(f.context.dotnetProjects.nearestInheritedProperty(project, "ImplicitUsings"), undefined);
-  assert.equal(f.snapshot.counters.directoryBuildPropsParses, 2);
+  assert.equal(f.context.dotnetProjects.nearestInheritedProperty(project, "Nullable"), "enable");
+  assert.equal(f.context.dotnetProjects.projectProperty(project, "ImplicitUsings"), "disable");
+  assert.equal(f.snapshot.counters.directoryBuildPropsParses, 1);
 });
 
 test("project references follow host case semantics", { skip: process.platform !== "darwin" && process.platform !== "win32" }, () => {

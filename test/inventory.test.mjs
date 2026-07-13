@@ -79,6 +79,20 @@ test("non-Git fallback remains available when Git is not installed", () => {
   }
 });
 
+test(".plumbignore and explicit excludes use gitignore pattern semantics", () => {
+  const root = temporaryRepository();
+  spawnSync("git", ["init", "-q"], { cwd: root });
+  write(root, ".plumbignore", "fixtures/\n*.generated.ts\n!src/keep.generated.ts\n");
+  write(root, "fixtures/bad/source.ts");
+  write(root, "src/drop.generated.ts");
+  write(root, "src/keep.generated.ts");
+  write(root, "coverage/report.json");
+  write(root, "src/main.ts");
+
+  const inventory = createRepositoryInventory(root, { excludes: ["coverage/"] });
+  assert.deepEqual(inventory.files, [".plumbignore", "src/keep.generated.ts", "src/main.ts"]);
+});
+
 test("manifest traversal retains dot-dot-prefixed names and excludes file symlinks", () => {
   const root = temporaryRepository();
   write(root, "..config.ts");

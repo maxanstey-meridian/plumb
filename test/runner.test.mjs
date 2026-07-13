@@ -75,6 +75,11 @@ function isolatedPlumb(producers) {
   fs.cpSync(path.join(HOME, "lib", "in-process-rules"), path.join(home, "lib", "in-process-rules"), { recursive: true });
   fs.cpSync(path.join(HOME, "configs"), path.join(home, "configs"), { recursive: true });
   fs.copyFileSync(path.join(HOME, "lib", "rivet-context.mjs"), path.join(home, "lib", "rivet-context.mjs"));
+  fs.mkdirSync(path.join(home, "node_modules", "@vue"), { recursive: true });
+  for (const dependency of ["ignore", "fast-xml-parser", "@vue/compiler-sfc"]) {
+    const target = path.join(home, "node_modules", ...dependency.split("/"));
+    fs.symlinkSync(fs.realpathSync(path.join(HOME, "node_modules", ...dependency.split("/"))), target, "dir");
+  }
   fs.chmodSync(path.join(home, "plumb"), 0o755);
   fs.writeFileSync(path.join(home, "sgconfig.yml"), "ruleDirs:\n  - rules\n");
   for (const [name, source] of Object.entries(producers)) {
@@ -120,7 +125,7 @@ test("nonexistent directory → exit 2", () => {
 
 test("option requiring a value rejects a missing value with exit 2", () => {
   const r = repo();
-  for (const flag of ["--fail-on", "--rule", "--pack", "--baseline", "--write-baseline"]) {
+  for (const flag of ["--fail-on", "--rule", "--pack", "--exclude", "--baseline", "--write-baseline"]) {
     const out = plumb(r, flag);
     assert.equal(out.status, 2, flag);
     assert.match(out.stderr, new RegExp(`${flag} requires a value`), flag);
@@ -180,6 +185,18 @@ test("gitignored build/vendor-style paths do not affect scan", () => {
   const out = plumb(d, "--rule", "MER-BE-005");
   assert.equal(out.status, 0);
   assert.ok(!out.ids.includes("MER-BE-005"), `gitignored vendor finding leaked: ${out.ids}`);
+});
+
+test(".plumbignore and repeatable --exclude patterns remove files from every rule engine", () => {
+  const d = repo([], {
+    ".plumbignore": "ignored-by-config/\n",
+    "ignored-by-config/package.json": "{}\n",
+    "ignored-by-cli/package.json": "{}\n",
+    "visible.txt": "visible\n",
+  });
+  const out = plumb(d, "--rule", "MER-TO-001", "--json", "--exclude", "ignored-by-cli/", "--exclude", "unused/");
+  assert.equal(out.status, 0, out.stderr);
+  assert.deepEqual(JSON.parse(out.stdout), []);
 });
 
 test("manifest preserves spaces and canonical separators in shell findings", () => {
@@ -688,7 +705,7 @@ test("focused in-process rules initialize only required capabilities", () => {
   const out = plumb(path.join(FIX, "MER-TO-001", "bad"), "--rule", "MER-TO-001", "--json", "--profile");
   assert.match(out.stderr, /plumb profile: in-process MER-TO-001 \(in-process\/to\.mjs\)/);
   assert.doesNotMatch(out.stderr, /plumb profile: producer MER-TO-001/);
-  assert.match(out.stderr, /plumb profile: capabilities path=1 text=1 line-map=0 json=0 basic-config=0/);
+  assert.match(out.stderr, /plumb profile: capabilities typescript=0 frontend-roots=0 frontend-graph=0 csharp=0 dotnet-projects=0/);
 });
 
 test("selected TypeScript owners share one source parse without frontend graph work", () => {
@@ -737,12 +754,12 @@ test("selected frontend consumers share Vue parsing and one graph per root", () 
 
 test("Vue rules preserve first-block and all-block selection", () => {
   const firstOnly = repo([], {
-    "app/component.vue": '<script setup lang="ts">const clean = true;</script>\n<script setup lang="ts">import { client } from "generated/client"; try { await client.GET("/x"); } catch {}</script>\n',
+    "app/component.vue": '<script setup lang="ts">const clean = true;</script>\n<script lang="ts">import { client } from "generated/client"; try { await client.GET("/x"); } catch {}</script>\n',
   });
   assert.deepEqual(JSON.parse(plumb(firstOnly, "--rule", "MER-FE-006", "--json").stdout), []);
 
   const allBlocks = repo([], {
-    "app/component.vue": '<script setup lang="ts">const clean = true;</script>\n<script setup lang="ts">import { provideAuth } from "./ports/auth"; provideAuth();</script>\n',
+    "app/component.vue": '<script setup lang="ts">const clean = true;</script>\n<script lang="ts">import { provideAuth } from "./ports/auth"; provideAuth();</script>\n',
   });
   const findings = JSON.parse(plumb(allBlocks, "--rule", "MER-FE-020", "--json").stdout);
   assert.ok(findings.some((finding) => finding.rule === "MER-FE-020" && finding.location === "app/component.vue:2"));

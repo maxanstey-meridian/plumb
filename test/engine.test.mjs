@@ -21,8 +21,8 @@ const descriptor = (id, source = "test-rule.mjs") => createRuleDescriptor({ id, 
 const inventory = (files = ["src/a.ts"], root = "/repository") => ({ root, mode: "test", files });
 
 test("capability planning closes dependencies, rejects unknown capabilities, and descriptors support multiple IDs", () => {
-  const rule = defineRepositoryRule({ descriptor: descriptor("MER-TO-901"), requirements: [Capability.JSON, Capability.LINE_MAP], analyze() {} });
-  assert.deepEqual(planCapabilities([rule]), [Capability.PATH, Capability.TEXT, Capability.JSON, Capability.LINE_MAP]);
+  const rule = defineRepositoryRule({ descriptor: descriptor("MER-TO-901"), requirements: [Capability.FRONTEND_GRAPH], analyze() {} });
+  assert.deepEqual(planCapabilities([rule]), [Capability.TYPESCRIPT, Capability.FRONTEND_ROOTS, Capability.FRONTEND_GRAPH]);
   assert.throws(() => planCapabilities([{ requirements: ["unknown"] }]), /unknown capability/);
   const multi = createRuleDescriptor({ ids: ["MER-TO-901", "MER-TO-902"], source: "family.mjs" });
   assert.deepEqual(multi.ids, ["MER-TO-901", "MER-TO-902"]);
@@ -69,7 +69,7 @@ test("line-map failures are memoized", () => {
   let reads = 0;
   const failure = new Error("unreadable");
   const snapshot = createRepositorySnapshot(inventory(["a.ts"]), { readFile() { reads++; throw failure; } });
-  const repository = createRepositoryContext(snapshot, [Capability.PATH, Capability.TEXT, Capability.LINE_MAP]);
+  const repository = createRepositoryContext(snapshot, []);
   const file = repository.context.file("a.ts");
   for (let attempt = 0; attempt < 2; attempt++) assert.throws(() => file.lineMap(), (error) => error === failure);
   assert.equal(reads, 1);
@@ -79,9 +79,7 @@ test("line-map failures are memoized", () => {
 test("JSON results memoize success and failure and deeply freeze parsed values", () => {
   const source = new Map([["good.json", '{"nested":{"value":1}}'], ["bad.json", "{"]]);
   const snapshot = createRepositorySnapshot(inventory([...source.keys()]), { readFile(file) { return source.get(path.basename(file)); } });
-  const repository = createRepositoryContext(snapshot, planCapabilities([
-    defineRepositoryRule({ descriptor: descriptor("MER-TO-901"), requirements: [Capability.JSON], analyze() {} }),
-  ]));
+  const repository = createRepositoryContext(snapshot, []);
   const good = repository.context.file("good.json").json();
   assert.equal(repository.context.file("good.json").json(), good);
   assert.ok(good.ok);
@@ -104,7 +102,7 @@ test("named configuration parsing is memoized and freezes null-prototype objects
     return value;
   });
   const snapshot = createRepositorySnapshot(inventory([]), { readFile() { throw new Error("not used"); } });
-  const repository = createRepositoryContext(snapshot, [Capability.PATH, Capability.TEXT, Capability.BASIC_CONFIG], {
+  const repository = createRepositoryContext(snapshot, [], {
     staticInputs: { golden() { loads++; return "value"; } },
   });
   const first = repository.context.staticConfig("golden", parser);
@@ -119,23 +117,11 @@ test("named configuration parsing is memoized and freezes null-prototype objects
 test("configuration parsing rejects values that remain mutable when frozen", () => {
   const parser = createConfigParser("map", () => new Map([["key", "value"]]));
   const snapshot = createRepositorySnapshot(inventory(["config"]), { readFile() { return "value"; } });
-  const repository = createRepositoryContext(snapshot, [Capability.PATH, Capability.TEXT, Capability.BASIC_CONFIG]);
+  const repository = createRepositoryContext(snapshot, []);
   const parsed = repository.context.file("config").config(parser);
   assert.equal(parsed.ok, false);
   assert.match(parsed.error.message, /unsupported mutable parsed value/);
   assert.ok(Object.isFrozen(parsed.error));
-});
-
-test("repository concepts are invocation-local and expose a read-only pack set", () => {
-  const sourcePacks = new Set(["TO"]);
-  const snapshot = createRepositorySnapshot(inventory([]));
-  const first = createRepositoryContext(snapshot, [Capability.PATH], { packs: sourcePacks });
-  sourcePacks.add("FE");
-  assert.deepEqual([...first.context.packs], ["TO"]);
-  assert.equal(first.context.packs.add, undefined);
-  const second = createRepositoryContext(createRepositorySnapshot(inventory([])), [Capability.PATH], { packs: new Set(["FE"]) });
-  assert.deepEqual([...second.context.packs], ["FE"]);
-  assert.deepEqual([...first.context.packs], ["TO"]);
 });
 
 test("file dispatch is central, capabilities are enforced, and shared files read once", async () => {
@@ -144,7 +130,6 @@ test("file dispatch is central, capabilities are enforced, and shared files read
   const analyzed = [];
   const makeRule = (id) => defineFileRule({
     descriptor: descriptor(id, `${id}.mjs`),
-    requirements: [Capability.TEXT],
     files: (file) => file.endsWith(".ts"),
     analyze(file) { analyzed.push(`${id}:${file.path}:${file.text()}`); },
   });
@@ -153,11 +138,6 @@ test("file dispatch is central, capabilities are enforced, and shared files read
   assert.deepEqual(analyzed, ["MER-TO-901:a.ts:match\n", "MER-TO-902:a.ts:match\n"]);
   assert.equal(reads, 1);
   assert.deepEqual(snapshot.counters.capabilityInitializations, {
-    path: 1,
-    text: 1,
-    "line-map": 0,
-    json: 0,
-    "basic-config": 0,
     typescript: 0,
     "frontend-roots": 0,
     "frontend-graph": 0,
@@ -165,8 +145,9 @@ test("file dispatch is central, capabilities are enforced, and shared files read
     "dotnet-projects": 0,
   });
 
-  const pathOnly = createRepositoryContext(snapshot, [Capability.PATH]);
-  assert.throws(() => pathOnly.context.file("a.ts").text(), /capability was not planned/);
+  const basic = createRepositoryContext(snapshot, []);
+  assert.equal(basic.context.file("a.ts").text(), "match\n");
+  assert.throws(() => basic.context.typescript, /capability was not planned/);
 });
 
 test("findings are owner-scoped, validated, immutable, and deterministically ordered", async () => {
@@ -182,7 +163,7 @@ test("findings are owner-scoped, validated, immutable, and deterministically ord
   assert.deepEqual(result.findings.map((finding) => `${finding.id}:${finding.loc}`), ["MER-TO-901:a:1", "MER-TO-901:b:2", "MER-TO-902:z:0"]);
   assert.ok(Object.isFrozen(result.findings));
 
-  const repository = createRepositoryContext(snapshot, [Capability.PATH]);
+  const repository = createRepositoryContext(snapshot, []);
   assert.throws(() => repository.owner(one.descriptor).report({ id: "MER-TO-999", severity: "warn", path: "a", line: 0, message: "x", docRef: "x" }), /undeclared rule ID/);
   assert.throws(() => repository.owner(one.descriptor).report({ severity: "fatal", path: "a", line: 0, message: "x", docRef: "x" }), /invalid severity/);
   assert.throws(() => repository.owner(one.descriptor).report({ severity: "warn", path: "../a", line: 0, message: "x", docRef: "x" }), /invalid location/);
@@ -263,7 +244,7 @@ test("Rivet bootstrap and rule contexts share parsed JSON", () => {
     return file.endsWith("package.json") ? '{"name":"@acme/contracts"}' : "";
   } });
   detectRivetContext(snapshot);
-  const repository = createRepositoryContext(snapshot, [Capability.PATH, Capability.TEXT, Capability.JSON]);
+  const repository = createRepositoryContext(snapshot, []);
   assert.equal(repository.context.file("package.json").json().value.name, "@acme/contracts");
   assert.equal(reads, 1);
   assert.equal(snapshot.counters.jsonParses, 1);

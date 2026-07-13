@@ -1,24 +1,54 @@
-# plumb
+# Plumb
 
-Mechanical Meridian doctrine checks for local repos.
+Plumb is Meridian's multi-language architecture and tooling policy checker.
 
-`plumb` is intentionally small: check mode builds one visible repository inventory, runs built-in in-process rules plus remaining external producers, merges their findings, and exits. It does not rewrite source files; `--write-baseline` writes only the requested baseline file. The separate `plumb init` command creates a new repository.
+It builds one invocation-scoped model of a repository, then runs rule families over shared TypeScript, Vue, C#, .NET project, configuration, and dependency-graph analysis. Most rules execute in process; ast-grep handles declarative syntax checks, and two checks still execute as isolated producers.
 
-## Install
+Check mode does not retain source changes. `--write-baseline` writes the requested baseline, while the CI-only freshness check temporarily regenerates output from a snapshot and restores it before returning. `plumb init` is a separate repository composer that creates files, initializes Git, and runs Plumb against the result.
 
-Install the wrapped tool dependencies in this repo:
+## Scope
+
+Plumb mechanically enforces selected Meridian doctrine across these packs:
+
+- `BE`: .NET backend architecture
+- `BT`: TypeScript backend architecture
+- `FE`: Nuxt/Vue frontend architecture
+- `RV`: Rivet contracts and generated artifacts
+- `TE`: testing architecture
+- `TO`: repository tooling
+- `CP`: cross-pack rules
+
+Pack detection limits the default scan to relevant rules. `--rule` bypasses pack detection for one rule; `--pack` selects explicit packs.
+
+Plumb is a policy checker, not a compiler or general-purpose static-analysis framework. Its checks are deliberately shaped around Meridian repository conventions.
+
+## Requirements
+
+- Node.js 20 or newer
+- pnpm 11, pinned by `packageManager`
+- Git for the normal repository inventory; a filesystem fallback is available
+- ast-grep on `PATH` for YAML rules
+- `task` and the target repository's toolchain for the CI-only Rivet freshness check
+
+Install Plumb's Node dependencies:
 
 ```sh
 pnpm install
 ```
 
-`ast-grep` is used for YAML rules and must be available on `PATH` for those rules to run. If it is missing, `plumb` skips YAML rules and prints a diagnostic.
+The installed runtime dependencies have explicit jobs:
 
-TypeScript-backed rules and frontend graph rules use the local `typescript`, `@vue/compiler-sfc`, and `dependency-cruiser` packages installed by `pnpm install`. If one is unavailable, only the affected rules are skipped and `plumb` prints one diagnostic; other rule families still run.
+- `typescript`: TypeScript and JavaScript parsing, tsconfig loading, and module resolution
+- `@vue/compiler-sfc`: Vue SFC extraction
+- `dependency-cruiser`: frontend dependency graphs
+- `fast-xml-parser`: `.csproj` and `Directory.Build.props` parsing
+- `ignore`: `.plumbignore` and command-line exclusion semantics
+
+If TypeScript, the Vue compiler, or dependency-cruiser is unavailable, only the affected rules are skipped and Plumb emits a diagnostic. `fast-xml-parser` and `ignore` are required runtime dependencies. If ast-grep is unavailable, YAML rules are skipped with a diagnostic.
 
 ## Run
 
-Check a repo:
+Check a repository:
 
 ```sh
 ./plumb /path/to/repo
@@ -36,34 +66,56 @@ Useful options:
 ./plumb /path/to/repo --profile
 ```
 
-`--profile` writes setup, repository inventory, selected in-process rule, remaining producer, external CI, rendering, and total timings to stderr. It also reports shared text/configuration work, TypeScript parsing, C# reads/masking/classification, Vue extraction, tsconfig and module resolution, frontend graphs, `.csproj` parsing and graphs, inherited props parsing, external adapter runs, and capability initialization. Finding stdout and JSON output remain unchanged.
+`--ci` enables checks that execute the target repository's own toolchain. `--profile` writes phase timings, selected owners, shared-analysis counters, external execution timings, and capability initialization to stderr without changing finding output.
 
-Add a `.plumbignore` at the checked repository root for persistent exclusions. It uses gitignore syntax, including negation. Repeatable `--exclude <pattern>` options add invocation-specific patterns after `.plumbignore`.
+### Repository Inventory
 
-Baseline an existing repo and then fail only on new findings:
+In a Git repository, Plumb scans tracked files and visible untracked files from `git ls-files`; Git-ignored paths are excluded. Outside Git, it falls back to one filesystem traversal with standard build and dependency directories excluded.
+
+A `.plumbignore` at the checked repository root adds persistent exclusions using gitignore syntax, including negation. Repeatable `--exclude <pattern>` options add invocation-specific patterns after `.plumbignore`.
+
+All rule engines and executable producers receive the same canonical inventory. A finding outside that inventory is discarded.
+
+### Baselines
+
+Capture existing findings and then fail only on new ones:
 
 ```sh
 ./plumb /path/to/repo --write-baseline .plumb-baseline.json
 ./plumb /path/to/repo --baseline .plumb-baseline.json
 ```
 
-Run the test harness:
+## Fidelity Boundaries
 
-```sh
-node --test "test/*.test.mjs"
-```
+TypeScript and Vue rules use the TypeScript compiler API and Vue SFC compiler. Frontend graph rules use dependency-cruiser, with compiler-backed Vue import extraction when dependency-cruiser cannot parse an SFC itself.
 
-Run fixture self-test:
+C# source checks are syntax-light: they preserve offsets while masking comments and literals, then apply convention-specific structural checks. They do not compile source or provide Roslyn semantic analysis.
 
-```sh
-./plumb --self-test
-```
+.NET project analysis parses project XML and models project ownership, references, package references, test evidence, and the nearest inherited `Directory.Build.props`. It does not perform full MSBuild evaluation, evaluate arbitrary imports or conditions, or construct an `MSBuildWorkspace`.
 
-The Node harness is the practical local gate. `--self-test` scans every fixture through the full runner and can be slow.
+`dotnet/Meridian.Analyzers/` is a separate optional build-time Roslyn analyzer. It has its own test harness and is not a mirror of the Node rule engine.
+
+## Architecture
+
+One scan creates a repository snapshot that interns visible files and memoizes text, line maps, JSON, configuration, TypeScript sources, Vue blocks, C# masks, project XML, and graph results for that invocation.
+
+- `plumb` owns CLI parsing, pack and rule selection, orchestration, baselines, rendering, and profiling.
+- `lib/engine/` owns the repository snapshot, heavyweight capability planning, shared analysis services, dispatch, and finding validation.
+- `lib/in-process-rules/` contains the built-in rule families.
+- `rules/` contains ast-grep YAML rules.
+- `checks/` contains two executable producers:
+  - `MER-FE-003` is the remaining legacy manifest-backed frontend producer.
+  - `MER-RV-024` is deliberately process-isolated because it invokes the target repository's generation task, compares output, and restores the original files.
+- `fixtures/<rule-id>/bad` and `fixtures/<rule-id>/good` define accepted behavior for every rule.
+- `test/` verifies the engine, runner, catalogue, inventory, degradation behavior, and fixture contracts.
+- `configs/` contains canonical configuration fragments consumed by tooling rules.
+- `dotnet/` contains the optional build-time Roslyn analyzer and its independent test harness.
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for the rule API, capability model, finding contract, and fixture workflow.
 
 ## Create A Repository
 
-`plumb init` composes a new repository, initializes Git, creates the first commit when Git identity is available, and runs `plumb` against the result:
+`plumb init` composes a new repository, initializes Git, creates the first commit when Git identity is available, and runs Plumb against the result:
 
 ```sh
 ./plumb init /path/to/new-repo --name example --ts-backend
@@ -71,70 +123,20 @@ The Node harness is the practical local gate. `--self-test` scans every fixture 
 ./plumb init /path/to/new-repo --name example --no-api
 ```
 
-The TypeScript backend is the default. Use `--force` to pass forced creation through to the underlying scaffold command. `MERIDIAN_RIVET_TS` and `MERIDIAN_GOLDEN` override the default Rivet scaffold and .NET exemplar locations.
+The TypeScript backend is the default. `--force` passes forced creation through to the underlying scaffold command. `MERIDIAN_RIVET_TS` and `MERIDIAN_GOLDEN` override the default Rivet scaffold and .NET exemplar locations.
 
-## Layout
+## Verify Plumb
 
-- `plumb` is the runner.
-- `lib/engine/` owns heavyweight analysis capability planning, the invocation-local repository snapshot, lazy text/configuration/TypeScript/Vue/C# services, frontend roots and graphs, the syntax-light .NET project graph, dispatch, and central findings.
-- `lib/in-process-rules/` contains path, text, configuration, TypeScript, Vue, C#, frontend graph, and .NET project rules that share the engine snapshot.
-- `checks/` contains remaining executable cross-file checks. One file per concern; `_lib/` holds shared helpers and is not run directly.
-- `rules/` contains ast-grep YAML rules.
-- `fixtures/<rule-id>/bad` and `fixtures/<rule-id>/good` prove each rule fires and does not false-positive.
-- `test/runner.test.mjs` verifies runner behavior and every executable check's output contract.
-- `configs/` contains golden config fragments checked by tool/config rules.
-- `dotnet/` contains the optional Roslyn analyzer mirror and its separate test script.
+Run the Node test gate:
 
-## Finding Format
-
-The engine's logical finding contract, and the stdout contract for remaining executable producers, is:
-
-```text
-RULE-ID<TAB>SEVERITY<TAB>PATH:LINE<TAB>MESSAGE<TAB>DOC-REF
+```sh
+node --test "test/*.test.mjs"
 ```
 
-Example:
+Run every accepted fixture through the full CLI:
 
-```text
-MER-BE-005	error	api/Modules/Auth/Application/U.cs:1	module Auth must not use Forms.Application internals — publish a contract or define a required port	backend-pa-vsa.md#across-modules
+```sh
+./plumb --self-test
 ```
 
-Executable producers exit `0` when they find drift. Non-zero exits are for internal failures only.
-
-## Add A Check
-
-1. Add a descriptor-backed rule under `lib/in-process-rules/` when built-in path, text, configuration, TypeScript, Vue, C#, resolution, frontend graph, or syntax-light .NET project capabilities are sufficient. Use an executable producer under `checks/` only when process isolation or a separate external tool boundary is required.
-2. Declare every owned rule ID and any heavyweight analysis capability it requires. Basic file, text, line, JSON, and configuration access needs no declaration. In-process rules consume only the provided repository/file contexts; executable producers consume the runner-provided manifest.
-3. Report in-process findings through the owner-scoped context. Executable producers emit only five-field finding lines on stdout; diagnostics go to stderr.
-4. Add `fixtures/MER-XX-NNN/bad` and `fixtures/MER-XX-NNN/good`.
-5. Make sure the relevant pack is detected by `plumb` or add a runner harness case.
-6. Run `node --test "test/*.test.mjs"`.
-
-For ast-grep-shaped single-file checks, add a YAML rule under `rules/<pack>/` instead of a script, then add fixtures and run the harness.
-
-### In-Process Context
-
-Use `defineFileRule` when each file can be decided independently and `defineRepositoryRule` for cross-file policy. The engine passes file rules `(file, context)` and repository rules `(context)`.
-
-Repository context exposes `root`, `files`, `rivet`, `file(path)`, static configuration inputs, owner-scoped `report()`, and the planned analysis services. File contexts expose `path`, `name`, `directory`, `text()`, `lineMap()`, `json()`, and `config(parser)`.
-
-Declare the narrowest sufficient requirement from `Capability`: `TYPESCRIPT`, `FRONTEND_ROOTS`, `FRONTEND_GRAPH`, `CSHARP`, or `DOTNET_PROJECTS`. Dependencies close transitively, expensive services initialize lazily, and shared results are memoized for one invocation. Accessing an unplanned analysis capability fails immediately.
-
-```js
-defineFileRule({
-  descriptor: createRuleDescriptor({ id: "MER-XX-001", source: "in-process/xx.mjs" }),
-  files: (path) => path.endsWith(".ts"),
-  analyze(file, context) {
-    for (const [index, line] of file.lineMap().lines.entries()) {
-      if (!line.includes("forbidden")) continue;
-      context.report({
-        severity: "warn",
-        path: file.path,
-        line: index + 1,
-        message: "explain the mechanical violation",
-        docRef: "doctrine.md#rule",
-      });
-    }
-  },
-});
-```
+The Node suite is the practical local gate. The fixture self-test starts the complete runner for all 96 fixture pairs and is intentionally slower.

@@ -4,7 +4,7 @@ import path from "node:path";
 import { Capability, planCapabilities, createRuleDescriptor, defineRepositoryRule } from "../lib/engine/contracts.mjs";
 import { createRepositoryContext } from "../lib/engine/repository-context.mjs";
 import { createRepositorySnapshot } from "../lib/engine/repository-snapshot.mjs";
-import { maskCSharpText } from "../lib/engine/dotnet-analysis.mjs";
+import { maskCSharpText, matchingCSharpDelimiter } from "../lib/engine/dotnet-analysis.mjs";
 
 function fixture(source, requirements) {
   const inventory = { root: "/repo", mode: "test", files: [...source.keys()] };
@@ -22,6 +22,26 @@ test("C# masks preserve offsets and lines for comments and literal forms", () =>
   assert.doesNotMatch(masked, /text|comment|raw/);
   const delimiters = maskCSharpText('MapGet("/literal", Handler);', { preserveStringDelimiters: true });
   assert.match(delimiters, /MapGet\("\s+", Handler\)/);
+});
+
+test("C# balanced delimiter matching supports nested generic and block shapes", () => {
+  const generic = "RouteDefinition<List<FormDto>>";
+  assert.equal(matchingCSharpDelimiter(generic, generic.indexOf("<"), "<", ">"), generic.length - 1);
+  const block = "{ Call(() => new[] { 1 }); }";
+  assert.equal(matchingCSharpDelimiter(block, 0, "{", "}"), block.length - 1);
+});
+
+test("C# ownership classifies transport contracts, published contracts, and module presentation", () => {
+  const f = fixture(new Map([
+    ["api/App.csproj", "<Project />"],
+    ["api/Contracts/Forms/FormsContract.cs", "class FormsContract {}"],
+    ["api/Modules/Forms/Contracts/FormSummary.cs", "record FormSummary;"],
+    ["api/Modules/Forms/FormsController.cs", "class FormsController {}"],
+  ]), [Capability.CSHARP]);
+  const classify = (file) => f.context.csharp.classify(f.context.file(file));
+  assert.deepEqual({ contract: classify("api/Contracts/Forms/FormsContract.cs").contract, owner: classify("api/Contracts/Forms/FormsContract.cs").contractOwner }, { contract: "transport", owner: "Forms" });
+  assert.deepEqual({ contract: classify("api/Modules/Forms/Contracts/FormSummary.cs").contract, owner: classify("api/Modules/Forms/Contracts/FormSummary.cs").contractOwner }, { contract: "published", owner: "Forms" });
+  assert.equal(classify("api/Modules/Forms/FormsController.cs").presentation, true);
 });
 
 test("C# source and masks are cached by visible file and mode", () => {

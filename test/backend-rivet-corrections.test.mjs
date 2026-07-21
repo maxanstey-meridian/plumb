@@ -52,6 +52,13 @@ test("MER-BE-009 detects each System IServiceProvider spelling after masking com
     assert.equal((output.match(/^MER-BE-009\t/gm) || []).length, 3);
 });
 
+test("MER-BE-021 exempts Brighter Command subclasses without exempting unrelated command classes", () => {
+    assert.equal(run("MER-BE-021", "good"), "");
+    const output = run("MER-BE-021", "bad");
+    assert.equal((output.match(/^MER-BE-021\t/gm) || []).length, 2);
+    assert.match(output, /LegacyOrderCommand\.cs:1\tmessage and data shapes/);
+});
+
 test("MER-BE-022 ignores masked braces and rejects nested generic CancellationToken mentions", () => {
     assert.equal(run("MER-BE-022", "good"), "");
     const output = run("MER-BE-022", "bad");
@@ -62,6 +69,37 @@ test("MER-BE-022 ignores masked braces and rejects nested generic CancellationTo
 test("MER-BE-040 inspects only repository interface bodies and points at the method declaration", () => {
     assert.equal(run("MER-BE-040", "good"), "");
     assert.match(run("MER-BE-040", "bad"), /IOrderRepository\.cs:3\tread-shaped repository return/);
+});
+
+test("published contracts reject module internals while allowing published dependencies", () => {
+    assert.equal(run("MER-BE-016", "good"), "");
+    const output = run("MER-BE-016", "bad");
+    assert.equal((output.match(/^MER-BE-016\t/gm) || []).length, 4);
+    assert.match(output, /FormsModels\.cs:1\t.*Modules\.Forms\.Domain/);
+    assert.match(output, /FormSummary\.cs:1\t.*Modules\.Forms\.Infrastructure/);
+});
+
+test("Common feature directories cannot shadow module owners", () => {
+    assert.equal(run("MER-BE-017", "good"), "");
+    assert.match(run("MER-BE-017", "bad"), /Common\/Forms\/FormSummary\.cs:0\tCommon\/Forms shadows Modules\/Forms/);
+});
+
+test("controllers cannot depend on other controllers", () => {
+    assert.equal(run("MER-BE-032", "good"), "");
+    assert.match(run("MER-BE-032", "bad"), /OrdersController\.cs:2\tOrdersController depends on OrderLinesController/);
+});
+
+test("read-shaped repository methods warn on recognized persistence mutations", () => {
+    assert.equal(run("MER-BE-042", "good"), "");
+    assert.match(run("MER-BE-042", "bad"), /EfOrderRepository\.cs:6\tFindAsync performs a persistence mutation/);
+});
+
+test("each recognized FluentValidation validator owns an error code", () => {
+    assert.equal(run("MER-BE-055", "good"), "");
+    const output = run("MER-BE-055", "bad");
+    assert.match(output, /AuthValidator\.cs:\d+\tNotEmpty has no WithErrorCode/);
+    assert.match(output, /AuthValidator\.cs:\d+\tMust has no WithErrorCode/);
+    assert.equal((output.match(/^MER-BE-055\t/gm) || []).length, 3);
 });
 
 test("MER-RV-003 supports class base routes while retaining route-specific and minimal handlers", () => {
@@ -101,6 +139,15 @@ test("MER-RV-008 ignores MapGroup, reports handlers, and does not accept comment
 test("MER-RV-009 accepts only ordinary or framework-qualified IEndpointRouteBuilder receivers", () => {
     assert.equal(run("MER-RV-009", "good"), "");
     assert.equal((run("MER-RV-009", "bad").match(/^MER-RV-009\t/gm) || []).length, 5);
+});
+
+test("Rivet route payload roots belong to their transport contract owner", () => {
+    assert.equal(run("MER-RV-011", "good"), "");
+    const output = run("MER-RV-011", "bad");
+    assert.equal((output.match(/^MER-RV-011\t/gm) || []).length, 3);
+    assert.match(output, /route payload CreateFormCommand/);
+    assert.match(output, /route payload ModuleFormSummary/);
+    assert.match(output, /route payload AuthError/);
 });
 
 test("MER-TE-001 evaluates each modular project and accepts analyzer ProjectReference wiring", () => {

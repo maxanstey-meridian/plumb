@@ -240,7 +240,22 @@ function selectedOwners(packs, rivetVariant = null, selectedRule = ruleFilter) {
   return selected;
 }
 
-async function scan(r, { allPacks = false, selectedRule = ruleFilter } = {}) {
+function isMissingFileError(error) {
+  for (let current = error; current; current = current.cause) {
+    if (current.code === "ENOENT" || /\bENOENT\b.*no such file or directory/i.test(current.message ?? "")) return true;
+  }
+  return false;
+}
+
+async function scan(r, options = {}) {
+  try { return await scanAttempt(r, options); }
+  catch (error) {
+    if (!isMissingFileError(error)) throw error;
+    return scanAttempt(r, options);
+  }
+}
+
+async function scanAttempt(r, { allPacks = false, selectedRule = ruleFilter } = {}) {
   const inventoryStarted = performance.now();
   const inventory = createRepositoryInventory(r, { excludes: excludePatterns });
   r = inventory.root;
@@ -328,7 +343,7 @@ const abs = path.resolve(root);
 if (!fs.existsSync(abs)) { console.error(`plumb: no such directory ${abs}`); process.exit(2); }
 let findings;
 try { findings = await scan(abs); }
-catch (error) { console.error(`plumb: inventory failed: ${error.message}`); process.exit(2); }
+catch (error) { console.error(`plumb: scan failed: ${error.message}`); process.exit(2); }
 
 // --baseline ratchet (contract §5, 2026-06-11): count-per-(rule,path) allowance,
 // findings over allowance are NEW; suppressed count is reported, never hidden.

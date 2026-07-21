@@ -6,6 +6,8 @@
 //   MERBE008 <-> MER-BE-008  Repository declarations do not belong in Domain
 //   MERBE009 <-> MER-BE-009  Domain/Application do not use a service locator
 //   MERBE005 <-> MER-BE-005  Sibling internals do not escape (covers BE-003/004)
+//   MERBE016 <-> MER-BE-016  Published contracts do not expose module internals
+//   MERRV011 <-> MER-RV-011  Rivet payload roots belong to their transport contract
 // Module and layer come from the file path (Modules/<X>/<Layer>/...), exactly
 // like plumb's checks — namespace conventions are not trusted. Alias usings
 // (`using Foo = Modules.Y.Bar;`) are also checked: plumb's regex skips them,
@@ -13,6 +15,7 @@
 // DOC: backend-pa-vsa.md#non-negotiable-dependency-rules / #across-modules
 using System;
 using System.Collections.Immutable;
+using System.Linq;
 using System.Text.RegularExpressions;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
@@ -66,8 +69,24 @@ public sealed class ModuleBoundaryAnalyzer : DiagnosticAnalyzer
         defaultSeverity: DiagnosticSeverity.Error,
         isEnabledByDefault: true);
 
+    private static readonly DiagnosticDescriptor ContractPurity = new(
+        id: "MERBE016",
+        title: "Published contracts are closed over published types",
+        messageFormat: "Published contract uses module-internal type '{0}' — move the shape into a published contract and map at the edge (MER-BE-016, {1})",
+        category: "MeridianBoundaries",
+        defaultSeverity: DiagnosticSeverity.Error,
+        isEnabledByDefault: true);
+
+    private static readonly DiagnosticDescriptor RivetPayloadOwnership = new(
+        id: "MERRV011",
+        title: "Rivet payload belongs to its transport contract",
+        messageFormat: "Rivet contract '{0}' uses payload type '{1}' owned outside Contracts/{0} (MER-RV-011, {2})",
+        category: "MeridianBoundaries",
+        defaultSeverity: DiagnosticSeverity.Error,
+        isEnabledByDefault: true);
+
     public override ImmutableArray<DiagnosticDescriptor> SupportedDiagnostics =>
-        ImmutableArray.Create(DomainPurity, AppNoInfra, CrossesModuleInternals, DomainRepository, ServiceLocator);
+        ImmutableArray.Create(DomainPurity, AppNoInfra, CrossesModuleInternals, DomainRepository, ServiceLocator, ContractPurity, RivetPayloadOwnership);
 
     private static readonly Regex CrossModule = new(@"(?:^|\.)Modules\.([A-Za-z_]\w*)", RegexOptions.Compiled);
     private static readonly Regex LayerRef = new(@"\.(Application|Infrastructure)(\.|$)", RegexOptions.Compiled);
@@ -91,12 +110,14 @@ public sealed class ModuleBoundaryAnalyzer : DiagnosticAnalyzer
         context.RegisterSyntaxNodeAction(AnalyzeDomainRepository, SyntaxKind.InterfaceDeclaration, SyntaxKind.ClassDeclaration);
         context.RegisterSyntaxNodeAction(AnalyzeServiceLocatorIdentifier, SyntaxKind.IdentifierName);
         context.RegisterSyntaxNodeAction(AnalyzeServiceLocatorInvocation, SyntaxKind.InvocationExpression);
+        context.RegisterSyntaxNodeAction(AnalyzeRivetRouteField, SyntaxKind.FieldDeclaration);
+        context.RegisterSyntaxNodeAction(AnalyzeRivetReturns, SyntaxKind.InvocationExpression);
     }
 
     private static void AnalyzeTypeReference(SyntaxNodeAnalysisContext context)
     {
         var node = (SimpleNameSyntax)context.Node;
-        if (IsInsideUsing(node) || !TryGetModuleLayer(node.SyntaxTree, out var module, out var layer)) return;
+        if (IsInsideUsing(node)) return;
 
         var symbol = context.SemanticModel.GetSymbolInfo(node, context.CancellationToken).Symbol;
         var type = symbol switch
@@ -106,6 +127,14 @@ public sealed class ModuleBoundaryAnalyzer : DiagnosticAnalyzer
             _ => null,
         };
         if (type is null) return;
+
+        if (TryGetContractOwner(node.SyntaxTree, out _, out _) && IsModuleInternal(type))
+        {
+            context.ReportDiagnostic(Diagnostic.Create(ContractPurity, node.GetLocation(), type.ToDisplayString(), DocRoot));
+            return;
+        }
+
+        if (!TryGetModuleLayer(node.SyntaxTree, out var module, out var layer)) return;
 
         var targetNamespace = type.ContainingNamespace.ToDisplayString();
         var targetType = type.ToDisplayString();
@@ -135,6 +164,12 @@ public sealed class ModuleBoundaryAnalyzer : DiagnosticAnalyzer
         var node = (UsingDirectiveSyntax)context.Node;
         var target = node.Name?.ToString();
         if (string.IsNullOrEmpty(target)) return;
+
+        if (TryGetContractOwner(node.SyntaxTree, out _, out _) && IsModuleInternalNamespace(target!))
+        {
+            context.ReportDiagnostic(Diagnostic.Create(ContractPurity, node.GetLocation(), target, DocRoot));
+            return;
+        }
 
         if (!TryGetModuleLayer(node.SyntaxTree, out var module, out var layer)) return;
 
@@ -208,6 +243,53 @@ public sealed class ModuleBoundaryAnalyzer : DiagnosticAnalyzer
             context.ReportDiagnostic(Diagnostic.Create(ServiceLocator, invocation.GetLocation(), method.Name, DocRoot));
     }
 
+    private static void AnalyzeRivetRouteField(SyntaxNodeAnalysisContext context)
+    {
+        var field = (FieldDeclarationSyntax)context.Node;
+        if (!TryGetTransportContractOwner(field.SyntaxTree, out var owner) || !IsInsideRivetContract(field)) return;
+        if (context.SemanticModel.GetTypeInfo(field.Declaration.Type, context.CancellationToken).Type is not INamedTypeSymbol type ||
+            type.Name is not ("RouteDefinition" or "InputRouteDefinition" or "FileRouteDefinition")) return;
+
+        foreach (var argument in type.TypeArguments)
+            AnalyzePayloadType(context, argument, field.Declaration.Type.GetLocation(), owner);
+    }
+
+    private static void AnalyzeRivetReturns(SyntaxNodeAnalysisContext context)
+    {
+        var invocation = (InvocationExpressionSyntax)context.Node;
+        if (!TryGetTransportContractOwner(invocation.SyntaxTree, out var owner) || !IsInsideRivetContract(invocation)) return;
+        if (invocation.Expression is not MemberAccessExpressionSyntax { Name: GenericNameSyntax name } ||
+            name.Identifier.ValueText != "Returns") return;
+
+        foreach (var argument in name.TypeArgumentList.Arguments)
+        {
+            var type = context.SemanticModel.GetTypeInfo(argument, context.CancellationToken).Type;
+            if (type is not null) AnalyzePayloadType(context, type, argument.GetLocation(), owner);
+        }
+    }
+
+    private static void AnalyzePayloadType(SyntaxNodeAnalysisContext context, ITypeSymbol type, Location location, string owner)
+    {
+        if (type is IArrayTypeSymbol array)
+        {
+            AnalyzePayloadType(context, array.ElementType, location, owner);
+            return;
+        }
+        if (type is not INamedTypeSymbol named) return;
+        if (IsSystemWrapper(named))
+        {
+            foreach (var argument in named.TypeArguments) AnalyzePayloadType(context, argument, location, owner);
+            return;
+        }
+
+        if (named.Name == "ErrorResponse" && IsCommonType(named)) return;
+        if (TryGetTransportContractOwner(named, out var payloadOwner) && payloadOwner == owner) return;
+        if (!named.Locations.Any(static candidate => candidate.IsInSource) &&
+            !IsModuleInternal(named) && !TryGetTransportContractOwner(named, out _)) return;
+
+        context.ReportDiagnostic(Diagnostic.Create(RivetPayloadOwnership, location, owner, named.ToDisplayString(), DocRoot));
+    }
+
     private static bool IsDomainOrApplication(SyntaxTree tree) =>
         TryGetModuleLayer(tree, out _, out var layer) && layer is "Domain" or "Application";
 
@@ -217,6 +299,89 @@ public sealed class ModuleBoundaryAnalyzer : DiagnosticAnalyzer
         {
             if (current is UsingDirectiveSyntax) return true;
         }
+        return false;
+    }
+
+    private static bool IsInsideRivetContract(SyntaxNode node)
+    {
+        for (var current = node.Parent; current is not null; current = current.Parent)
+        {
+            if (current is not ClassDeclarationSyntax declaration) continue;
+            foreach (var attributeList in declaration.AttributeLists)
+            foreach (var attribute in attributeList.Attributes)
+            {
+                var name = attribute.Name.ToString();
+                if (name is "RivetContract" or "RivetContractAttribute" || name.EndsWith(".RivetContract", StringComparison.Ordinal) || name.EndsWith(".RivetContractAttribute", StringComparison.Ordinal)) return true;
+            }
+        }
+        return false;
+    }
+
+    private static bool IsSystemWrapper(INamedTypeSymbol type) =>
+        type.Name == "PaginatedResponse" && IsCommonType(type) ||
+        type.ContainingNamespace.ToDisplayString() == "System" ||
+        type.ContainingNamespace.ToDisplayString().StartsWith("System.Collections", StringComparison.Ordinal);
+
+    private static bool IsCommonType(INamedTypeSymbol type)
+    {
+        foreach (var reference in type.DeclaringSyntaxReferences)
+        {
+            var segments = (reference.SyntaxTree.FilePath ?? "").Split('/', '\\');
+            if (Array.IndexOf(segments, "Common") >= 0) return true;
+        }
+        return Regex.IsMatch(type.ContainingNamespace.ToDisplayString(), @"(?:^|\.)Common(?:\.|$)");
+    }
+
+    private static bool IsModuleInternal(INamedTypeSymbol type) => IsModuleInternalNamespace(type.ContainingNamespace.ToDisplayString());
+
+    private static bool IsModuleInternalNamespace(string target)
+    {
+        var match = Regex.Match(target, @"(?:^|\.)Modules\.([A-Za-z_]\w*)(?:\.([A-Za-z_]\w*))?");
+        return match.Success && match.Groups[2].Value != "Contracts";
+    }
+
+    private static bool TryGetContractOwner(SyntaxTree tree, out string owner, out bool transport)
+    {
+        var segments = (tree.FilePath ?? "").Split('/', '\\');
+        var modules = Array.IndexOf(segments, "Modules");
+        if (modules >= 0 && modules + 2 < segments.Length && segments[modules + 2] == "Contracts")
+        {
+            owner = segments[modules + 1];
+            transport = false;
+            return true;
+        }
+        var contracts = Array.IndexOf(segments, "Contracts");
+        if (contracts >= 0 && contracts + 1 < segments.Length)
+        {
+            owner = segments[contracts + 1];
+            transport = true;
+            return true;
+        }
+        owner = "";
+        transport = false;
+        return false;
+    }
+
+    private static bool TryGetTransportContractOwner(SyntaxTree tree, out string owner) =>
+        TryGetContractOwner(tree, out owner, out var transport) && transport;
+
+    private static bool TryGetTransportContractOwner(INamedTypeSymbol type, out string owner)
+    {
+        foreach (var reference in type.DeclaringSyntaxReferences)
+        {
+            if (TryGetTransportContractOwner(reference.SyntaxTree, out owner)) return true;
+        }
+        var ns = type.ContainingNamespace.ToDisplayString();
+        if (!Regex.IsMatch(ns, @"(?:^|\.)Modules\.[A-Za-z_]\w*\.Contracts(?:\.|$)"))
+        {
+            var match = Regex.Match(ns, @"(?:^|\.)Contracts\.([A-Za-z_]\w*)(?:\.|$)");
+            if (match.Success)
+            {
+                owner = match.Groups[1].Value;
+                return true;
+            }
+        }
+        owner = "";
         return false;
     }
 

@@ -27,3 +27,12 @@ namespace Microsoft.Extensions.DependencyInjection
         public static T GetRequiredService<T>(this System.IServiceProvider services) => default!;
     }
 }
+public sealed class RivetContractAttribute : System.Attribute { }
+public sealed class RouteDefinition<TInput, TOutput>
+{
+    public RouteDefinition<TInput, TOutput> Returns<TError>(int status) => this;
+}
+public static class Define
+{
+    public static RouteDefinition<TInput, TOutput> Post<TInput, TOutput>(string route) => new();
+}

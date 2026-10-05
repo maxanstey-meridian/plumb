@@ -612,6 +612,18 @@ test("explicit --rule executes its owner without an automatic pack marker", () =
   assert.ok(JSON.parse(out.stdout).some((finding) => finding.rule === "MER-FE-020"));
 });
 
+test("FE-020 skips monorepo frontend test harnesses but still checks the app tree", () => {
+  const root = repo([], {
+    "apps/ui/nuxt.config.ts": "export default { ssr: false }\n",
+    "apps/ui/tests/pages/import-tab.spec.ts": 'import { provideAuth } from "../../app/ports/auth";\nprovideAuth(createFakeAuth());\n',
+    "apps/ui/tests/support/mount.ts": "export const mount = () => provideAuth(createFakeAuth());\n",
+    "tests/e2e/harness.ts": "provideAuth(createFakeAuth());\n",
+    "apps/ui/app/components/Provider.ts": "provideAuth(createAuth());\n",
+  });
+  const findings = JSON.parse(plumb(root, "--rule", "MER-FE-020", "--json").stdout);
+  assert.deepEqual(findings.map((finding) => finding.location), ["apps/ui/app/components/Provider.ts:1"]);
+});
+
 test("--rule does not execute an unrelated producer", () => {
   const isolated = isolatedPlumb({
     "MER-TO-901-selected.mjs": producer("MER-TO-901"),

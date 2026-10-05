@@ -40,6 +40,18 @@ test("FE-020 follows imported aliases and namespace property calls", () => {
   assert.equal(good.stdout, "");
 });
 
+test("FE-020 exempts test sources but not a tests folder inside the app tree", () => {
+  const good = runProducer("MER-FE-020", "good");
+  assert.equal(good.status, 0, good.stderr);
+  assert.doesNotMatch(good.stdout, /tests\/pages\/panel\.spec\.ts/);
+  assert.doesNotMatch(good.stdout, /tests\/support\/mount-with-auth\.ts/);
+  assert.doesNotMatch(good.stdout, /tests\/support\/AuthHarness\.vue/);
+  assert.doesNotMatch(good.stdout, /Panel\.spec\.ts/);
+
+  const bad = runProducer("MER-FE-020", "bad");
+  assert.match(bad.stdout, /app\/pages\/tests\/composables\/useProbe\.ts:1/);
+});
+
 test("FE-030 warns on page-local index shims but permits public feature and generated entry points", () => {
   const bad = runProducer("MER-FE-030", "bad");
   assert.equal(bad.status, 0, bad.stderr);

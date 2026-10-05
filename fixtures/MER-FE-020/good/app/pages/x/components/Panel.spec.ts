@@ -1,0 +1,1 @@
+provideAuth(createFakeAuth());

@@ -8,7 +8,7 @@ import { fileURLToPath } from "node:url";
 import { Capability, planCapabilities, createRuleDescriptor, defineRepositoryRule } from "../lib/engine/contracts.mjs";
 import { createRepositoryContext } from "../lib/engine/repository-context.mjs";
 import { createRepositorySnapshot } from "../lib/engine/repository-snapshot.mjs";
-import { isTestDirectory, isTestFileName, maskCSharpText, matchingCSharpDelimiter } from "../lib/engine/dotnet-analysis.mjs";
+import { isTestDirectory, isTestFileName, isTestPath, maskCSharpText, matchingCSharpDelimiter } from "../lib/engine/dotnet-analysis.mjs";
 
 function fixture(source, requirements) {
   const inventory = { root: "/repo", mode: "test", files: [...source.keys()] };
@@ -103,7 +103,7 @@ test("test evidence keeps project metadata, project name, path, and filename sig
 test("a project is test code by a test folder's name rule or a test framework package, not by `test` inside a word", () => {
   const project = (packages) => `<Project><ItemGroup>${packages.map((name) => `<PackageReference Include="${name}" />`).join("")}</ItemGroup></Project>`;
   const f = fixture(new Map([
-    ...["Contest", "Latest", "Attest", "App.Tests", "api-tests", "IntegrationTests"].flatMap((name) => [[`names/${name}/${name}.csproj`, "<Project />"], [`names/${name}/A.cs`, "class A {}"]]),
+    ...["Contest", "Latest", "Attest", "App.Tests", "api-tests", "IntegrationTests", "Api.E2ETests"].flatMap((name) => [[`names/${name}/${name}.csproj`, "<Project />"], [`names/${name}/A.cs`, "class A {}"]]),
     // A PascalCase `…Tests` inside the backend tree is a feature name, as for folders.
     ["api/Modules/Lab/LabTests.csproj", "<Project />"],
     ["api/Modules/Lab/A.cs", "class A {}"],
@@ -111,16 +111,23 @@ test("a project is test code by a test folder's name rule or a test framework pa
     ["tunit/A.cs", "class A {}"],
     ["xunit3/Checks.csproj", project(["xunit.v3"])],
     ["xunit3/A.cs", "class A {}"],
-    ["helpers/Checks.csproj", project(["xunit.abstractions", "NUnit3TestAdapter.Extras", "TUnitLike"])],
+    ["xunit3mtp/Checks.csproj", project(["xunit.v3.mtp-v2"])],
+    ["xunit3mtp/A.cs", "class A {}"],
+    // MSTest.Sdk sets IsTestProject itself, with no package reference.
+    ["mstestsdk/Checks.csproj", '<Project Sdk="MSTest.Sdk/3.6.0"><PropertyGroup><TargetFramework>net9.0</TargetFramework></PropertyGroup></Project>'],
+    ["mstestsdk/A.cs", "class A {}"],
+    ["helpers/Checks.csproj", project(["xunit.abstractions", "xunit.v3.assert", "NUnit3TestAdapter.Extras", "TUnitLike"])],
     ["helpers/A.cs", "class A {}"],
   ]), [Capability.DOTNET_PROJECTS]);
   const evidence = (file) => f.context.dotnetProjects.testEvidence(f.context.file(file));
   for (const name of ["Contest", "Latest", "Attest"]) assert.equal(evidence(`names/${name}/A.cs`).test, false, name);
-  for (const name of ["App.Tests", "api-tests", "IntegrationTests"]) assert.equal(evidence(`names/${name}/A.cs`).projectName, true, name);
+  for (const name of ["App.Tests", "api-tests", "IntegrationTests", "Api.E2ETests"]) assert.equal(evidence(`names/${name}/A.cs`).projectName, true, name);
   assert.equal(evidence("api/Modules/Lab/A.cs").test, false);
   assert.equal(evidence("tunit/A.cs").projectMetadata, true);
   assert.equal(evidence("tunit/A.cs").test, true);
   assert.equal(evidence("xunit3/A.cs").test, true);
+  assert.equal(evidence("xunit3mtp/A.cs").projectMetadata, true);
+  assert.equal(evidence("mstestsdk/A.cs").projectMetadata, true);
   assert.equal(evidence("helpers/A.cs").test, false);
 });
 
@@ -247,8 +254,10 @@ test("project references follow host case semantics", { skip: process.platform !
   assert.deepEqual(f.context.dotnetProjects.referencedProjects("src/App/App.csproj").map((project) => project.path), ["src/Data/Data.csproj"]);
 });
 
-test("test directories are tests/test segments, separated or PascalCase *Tests suffixes outside Modules/; test file names end Test(s).cs", () => {
-  const testDirectories = ["tests", "Tests", "test", "Orders.Tests", "integration-tests", "unit_tests", "IntegrationTests", "App.IntegrationTests", "Foo.UnitTests"];
+test("test directories are tests/test segments, separated *Tests suffixes, PascalCase *Tests outside Modules/; test file names end Test(s).cs", () => {
+  const testDirectories = ["tests", "Tests", "test", "Orders.Tests", "integration-tests", "unit_tests", "IntegrationTests", "App.IntegrationTests", "Foo.UnitTests",
+    // An acronym or digit before `Tests`; a separated name is a test project even inside the backend tree.
+    "E2ETests", "Api.E2ETests", "App.UITests", "App.APITests", "Api.V2Tests", "Modules/Orders/Orders.UnitTests", "Common/Common.Tests"];
   // Inside Modules/, Contracts/ or Common/ a *Tests folder is a feature name, not a test project.
   const otherDirectories = ["Contests", "Latest", "Modules/LabTests", "Contracts/LabTests", "Modules/Lab/Application/BloodTests"];
   const f = fixture(new Map([...testDirectories, ...otherDirectories].map((segment) => [`api/${segment}/Orders.cs`, "class Orders {}"])), [Capability.CSHARP]);
@@ -266,6 +275,16 @@ test("test directories are tests/test segments, separated or PascalCase *Tests s
   // Inside the backend tree a *Test.cs name is production code (a connection test, a lab test).
   assert.equal(isTestFileName("GovUkPayConnectionTest.cs", ["api", "Modules", "Payments", "Infrastructure"]), false);
   assert.equal(isTestFileName("OrdersTests.cs", ["tests", "Api.Tests"]), true);
+  for (const [filePath, expected] of [
+    ["tests/Api.E2ETests/OrdersFlow.cs", true],
+    ["App.UITests/Pages/Home.cs", true],
+    ["src/Modules/Orders/Orders.UnitTests/PlaceOrder.cs", true],
+    ["src/Modules/Orders/Orders-IntegrationTests/PlaceOrder.cs", true],
+    ["src/Modules/LabTests/Domain/Panel.cs", false],
+    ["src/Modules/Lab/Application/BloodTests/Order.cs", false],
+    ["src/Contests/Entry.cs", false],
+    ["src/Latest/Feed.cs", false],
+  ]) assert.equal(isTestPath(filePath), expected, filePath);
 });
 
 // TE rules read test source through the same definitions as classify(): a separated `Orders.Tests` folder
@@ -420,4 +439,50 @@ test("C# type names prefer the declaration in the referrer's project closure", (
   assert.equal(csharp.resolveType("Remote", uses, uses.text().indexOf("record Uses"))?.fullName, "App.Contracts.Remote");
   const clash = file("one/UsesClash.cs");
   assert.equal(csharp.resolveType("Clash", clash, clash.text().indexOf("record UsesClash")), null);
+});
+
+test("C# declarations: nested types, bodyless records, attribute starts, constraint keywords, block and file-scoped namespaces", async () => {
+  const { csharpDeclarations } = await import("../lib/engine/csharp-types.mjs");
+  const shape = (text) => {
+    const { types, namespaces } = csharpDeclarations(maskCSharpText(text));
+    return {
+      types: types.map(({ name, start, offset, end, namespace }) => ({ name, head: text.slice(start, offset), text: text.slice(start, end), namespace })),
+      namespaces: namespaces.map(({ fullName, start, end }) => ({ fullName, text: text.slice(start, end) })),
+    };
+  };
+  // A type's own attribute starts its range; an [assembly:] attribute belongs to the file. `where T : class`
+  // declares nothing, a nested type follows the type around it, and a bodyless record ends at its `;`.
+  const block = [
+    '[assembly: InternalsVisibleTo("Tests")]',
+    "[Serializable]",
+    "public sealed class Top { }",
+    "namespace App.Orders",
+    "{",
+    "    public sealed class Outer<T> where T : class",
+    "    {",
+    "        public sealed record Inner(int A);",
+    "        [Obsolete] private struct Deep { }",
+    "    }",
+    "}",
+    "",
+  ].join("\n");
+  const outer = block.slice(block.indexOf("    public sealed class Outer") + 4, block.lastIndexOf("    }\n}") + 5);
+  assert.deepEqual(shape(block), {
+    types: [
+      { name: "Top", head: "[Serializable]\npublic sealed ", text: "[Serializable]\npublic sealed class Top { }", namespace: "" },
+      { name: "Outer", head: "public sealed ", text: outer, namespace: "App.Orders" },
+      { name: "Inner", head: "public sealed ", text: "public sealed record Inner(int A);", namespace: "App.Orders" },
+      { name: "Deep", head: "[Obsolete] private ", text: "[Obsolete] private struct Deep { }", namespace: "App.Orders" },
+    ],
+    namespaces: [{ fullName: "App.Orders", text: block.slice(block.indexOf("namespace"), block.lastIndexOf("}")) }],
+  });
+  // A file-scoped namespace runs to the end of the file.
+  const fileScoped = "namespace App.Shipping;\n\npublic record Parcel(string Name);\npublic class Box { }\n";
+  assert.deepEqual(shape(fileScoped), {
+    types: [
+      { name: "Parcel", head: "public ", text: "public record Parcel(string Name);", namespace: "App.Shipping" },
+      { name: "Box", head: "public ", text: "public class Box { }", namespace: "App.Shipping" },
+    ],
+    namespaces: [{ fullName: "App.Shipping", text: fileScoped }],
+  });
 });

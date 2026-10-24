@@ -1,5 +1,5 @@
 <script setup lang="ts">
-defineProps<{ noun: string; subject: string; typeLabel: string }>();
+defineProps<{ noun?: string; subject?: string; typeLabel?: string }>();
 </script>
 
 <template>

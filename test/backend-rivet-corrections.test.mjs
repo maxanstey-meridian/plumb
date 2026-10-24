@@ -96,8 +96,9 @@ test("MER-BE-024 flags ambient time in a *Tests.cs file of a production project"
 // A test project's files are test code wherever its folders sit (ArchitectureTesting/Modules/…), by its metadata.
 test("BE's layer, module-shape, style and placement rules exempt a test project's files by project metadata, not only by test folder or file names", () => {
     const rules = ["MER-BE-001", "MER-BE-002", "MER-BE-003", "MER-BE-004", "MER-BE-005", "MER-BE-007", "MER-BE-008", "MER-BE-009",
-        "MER-BE-010", "MER-BE-011", "MER-BE-016", "MER-BE-017", "MER-BE-020", "MER-BE-021", "MER-BE-022", "MER-BE-023", "MER-BE-024",
-        "MER-BE-030", "MER-BE-031", "MER-BE-032", "MER-BE-042", "MER-BE-051", "MER-BE-052", "MER-BE-053", "MER-BE-055", "MER-BE-060"];
+        "MER-BE-010", "MER-BE-011", "MER-BE-012", "MER-BE-013", "MER-BE-014", "MER-BE-016", "MER-BE-017", "MER-BE-020", "MER-BE-021",
+        "MER-BE-022", "MER-BE-023", "MER-BE-024", "MER-BE-030", "MER-BE-031", "MER-BE-032", "MER-BE-042", "MER-BE-051", "MER-BE-052",
+        "MER-BE-053", "MER-BE-054", "MER-BE-055", "MER-BE-060"];
     for (const rule of rules) {
         const files = (project) => Object.fromEntries(fs.readdirSync(path.join(FIXTURES, rule, "bad"), { recursive: true })
             .filter((file) => fs.statSync(path.join(FIXTURES, rule, "bad", file)).isFile() && !file.endsWith(".csproj"))
@@ -203,15 +204,19 @@ test("MER-RV-006 finds multiline implicit-private behavior only in the attribute
     assert.match(output, /OrdersContract\.cs:4\t.*may contain only/);
 });
 
-test("MER-RV-007 flags every app-written RivetResult extension named like an adapter or returning an HTTP result, and app code that copies RivetActionResult into a result of its own, by the type it's declared in, and leaves Rivet's own adapters, helpers that call them, filters that only read it, tests and mentions in comments or strings", () => {
-    // Good: a result filter that only logs the adapter's status, an attribute naming it above a class that builds
-    // no result, and a Verification/ project whose <IsTestProject> alone makes it test code.
+test("MER-RV-007 flags every app-written RivetResult extension named like an adapter or returning an HTTP result, and app code whose one statement copies RivetActionResult's StatusCode or Value into a result or the response, by the type it's declared in, and leaves Rivet's own adapters, helpers that call them, filters that only read it, tests and mentions in comments, strings or attributes", () => {
+    // Good: result filters that log or record the adapter's status in an app's own AuditResult/ValidationResult
+    // or audit.Results, and set context.Result in a statement of their own; an attribute's typeof() on a
+    // controller that calls Problem() elsewhere; another project's own `record Adapted` beside App's global alias
+    // of that name; and a Verification/ project whose <IsTestProject> alone makes it test code.
     assert.equal(run("MER-RV-007", "good"), "");
     const output = run("MER-RV-007", "bad");
     const locations = [...output.matchAll(/^MER-RV-007\twarn\t(\S+)/gm)].map((match) => match[1]).sort();
     assert.deepEqual(locations, [
         // A plain static helper that copies the adapter's output into an ObjectResult.
         "Modules/Common/AdapterStatus.cs:1",
+        // Straight off a cast, in the statement that builds the result.
+        "Modules/Common/CastRelay.cs:4",
         // `where T : class where U : struct` declares no type named "where".
         "Modules/Common/ConstrainedRelay.cs:2",
         // Bridges that call the adapter and rebuild its output or hand-write the error path, and a ToResult
@@ -234,6 +239,10 @@ test("MER-RV-007 flags every app-written RivetResult extension named like an ada
         "Modules/Orders/OrderResultExtensions.cs:1",
         // The outer class's method, after a nested class.
         "Modules/Orders/OuterRelay.cs:3",
+        // A controller's `return Ok(a.Value);`.
+        "Modules/Orders/RelayController.cs:4",
+        // A result filter that sets Response.StatusCode and writes the value with WriteAsJsonAsync.
+        "Modules/Orders/ResponseWritingFilter.cs:4",
         // An endpoint filter's `is global::Rivet.RivetActionResult` pattern rebuilt as Results.Json.
         "Modules/Orders/ResultStatusFilter.cs:4",
         // A struct-only file: once, at the struct.
@@ -242,23 +251,29 @@ test("MER-RV-007 flags every app-written RivetResult extension named like an ada
         "Modules/Orders/TypedResultExtensions.cs:1",
         // A top-level statement in Program.cs, at its own line.
         "Program.cs:3",
+        // The adapter's output under an alias only its own project's .csproj <Using> declares.
+        "Relay/WrappedRelay.cs:4",
     ]);
-    const copies = [...output.matchAll(/^MER-RV-007\twarn\t(\S+)\t(.+?) copies RivetActionResult/gm)].map((match) => `${match[1]} ${match[2]}`).sort();
+    const copies = [...output.matchAll(/^MER-RV-007\twarn\t(\S+)\t(.+?) copies the StatusCode or Value of RivetActionResult/gm)].map((match) => `${match[1]} ${match[2]}`).sort();
     assert.deepEqual(copies, [
         "Modules/Common/AdapterStatus.cs:1 AdapterStatus",
+        "Modules/Common/CastRelay.cs:4 CastRelay",
         "Modules/Common/ConstrainedRelay.cs:2 ConstrainedRelay",
         "Modules/Common/Shims.cs:12 Leak",
         "Modules/Common/WrapperRecord.cs:9 Wrapper",
         "Modules/Orders/AliasedRelay.cs:6 AliasedRelay",
         "Modules/Orders/BridgeThenStruct.cs:7 Relay",
         "Modules/Orders/OuterRelay.cs:3 OuterRelay",
+        "Modules/Orders/RelayController.cs:4 RelayController",
+        "Modules/Orders/ResponseWritingFilter.cs:4 ResponseWritingFilter",
         "Modules/Orders/ResultStatusFilter.cs:4 ResultStatusFilter",
         "Modules/Orders/StatusCopy.cs:4 StatusCopy",
         "Program.cs:3 This line",
+        "Relay/WrappedRelay.cs:4 WrappedRelay",
     ]);
     assert.match(output, /FunctionResultExtensions\.cs:1\tFunctionResultExtensions hand-writes an HTTP-result bridge off RivetResult \(ToResponse, Rebuild, ToHttp, OneArm\)/);
     assert.match(output, /FunctionResultExtensions\.cs:1\tFunctionResultExtensions declares its own ToResult off RivetResult, so a handler's call may bind to it instead of Rivet's first-party adapter — rename or delete it\trivet\.md#minimal-apis$/m);
-    assert.match(output, /AdapterStatus\.cs:1\tAdapterStatus copies RivetActionResult, the output of Rivet's \.ToActionResult\(\) adapter, into an HTTP result of its own — a hand-written bridge; return \.ToResult\(\)\/\.ToActionResult\(\) directly, and at most read its StatusCode or Value\trivet\.md#anti-patterns$/m);
+    assert.match(output, /AdapterStatus\.cs:1\tAdapterStatus copies the StatusCode or Value of RivetActionResult, the output of Rivet's \.ToActionResult\(\) adapter, into an HTTP result or response of its own — a hand-written bridge; return \.ToResult\(\)\/\.ToActionResult\(\) directly, and at most read its StatusCode or Value\trivet\.md#minimal-apis$/m);
     assert.match(output, /BridgeThenStruct\.cs:1\tStructBridgeExtensions hand-writes an HTTP-result bridge off RivetResult \(ToHttp\)/);
     assert.match(output, /HttpResultExtensions\.cs:1\tHttpResultExtensions hand-writes an HTTP-result bridge off RivetResult \(ToHttpResult, Respond\) — delete it and use Rivet's first-party \.ToResult\(\)\/\.ToActionResult\(\) adapters\trivet\.md#minimal-apis$/m);
 });

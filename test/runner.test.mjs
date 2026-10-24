@@ -222,7 +222,7 @@ test("MER-BE-006 propagates contract consumers to enum, nested record, and colle
   assert.ok(bad.findings.some((finding) => finding.message.includes("Common type SlugRules is referenced only by module Forms")));
 });
 
-test("MER-BE-010 discovers nested Modules roots from manifest paths", () => {
+test("MER-BE-010 discovers nested Modules roots from C# paths", () => {
   const r = repo([], {
     "App.csproj": "<Project/>\n",
     "api/Modules/Outer/Modules/Inner/Source.cs": "namespace App.Modules.Inner;\n",
@@ -766,11 +766,10 @@ test("selected C# owners share source masks and parse each visible project once"
 test("focused syntax-light C# work does not construct the project graph", () => {
   const r = repo([], {
     "App.csproj": "<Project />\n",
-    "Program.cs": "app.MapControllers();\n",
-    "Modules/Auth/Api/ErrorResponse.cs": "public record ErrorResponse(string Code);\n",
+    "Modules/Orders/Application/Ports/IOrderRepository.cs": "public interface IOrderRepository\n{\n    Task<OrderDto> GetAsync(Guid id);\n}\n",
   });
-  // BE-054 reads only C# source; rules that judge test code by its project (BE-001, BE-052 and others) build the graph.
-  const out = plumb(r, "--rule", "MER-BE-054", "--json", "--profile");
+  // BE-040 reads only C# source; rules that judge test code by its project (BE-001, BE-052, BE-054 and others) build the graph.
+  const out = plumb(r, "--rule", "MER-BE-040", "--json", "--profile");
   assert.equal(JSON.parse(out.stdout).length, 1, out.stderr);
   assert.match(out.stderr, /analysis-counters .*dotnet-project-parse=0 dotnet-project-graph-build=0 /);
   assert.match(out.stderr, /capabilities .*csharp=1 dotnet-projects=0/);
@@ -1003,6 +1002,7 @@ test("baseline: shrinking is reported and suggests ratcheting down", () => {
   const withCiOnly = JSON.parse(fs.readFileSync(bl, "utf8"));
   fs.writeFileSync(bl, JSON.stringify({ ...withCiOnly, entries: { ...withCiOnly.entries, "MER-RV-024\tweb/package.json": 1 } }));
   assert.match(plumb(r, "--baseline", bl).stdout, /shrunk; ratchet down with --write-baseline on a run of every rule with --ci/);
+  assert.match(plumb(r, "--baseline", bl, "--rule", "MER-BE-005", "--ci").stdout, /on a run of every rule with --ci\)/);
   // …nor count as one when they're the only entries that run couldn't produce.
   const kept = repo(["MER-BE-005"], { "App.csproj": "<Project/>\n" });
   const keptBaseline = path.join(kept, ".plumb-baseline.json");
@@ -1039,10 +1039,13 @@ test("baseline identity and suppression are unchanged for migrated findings", ()
 
 // index.vue lines 10, 11 and 15 are a literal type, a template literal type and an interface member: type
 // positions never count. Line 16's route argument is the generated client's, but the id in its query is a copy.
-// crm-positions.ts and CrmLinks.vue hold one id position each per line. The good fixture's server declares
-// ExportId = "export", and its crm-copy.ts and CrmConflict.vue use "export" as wording (`noun:`, `title:`,
-// `typeLabel:`, `subject=`, `class=`, `data-testid=`, `id=`, `:noun=`, an interpolation, a returned value, a call
-// argument, and the whitespace path "Choose import/export") and stay clean.
+// Each crm-positions.ts and CrmLinks.vue line shows one kind of id position, some with several ids in it
+// (crm-positions.ts:15, 16 and 20, CrmLinks.vue:3 and 4). The good fixture's server declares ExportId = "export",
+// and its crm-copy.ts and CrmConflict.vue use "export" as wording and stay clean: `noun:`, `title:`, `typeLabel:`,
+// a native element's `class=`, `title=`, `data-testid=` and `id=`, a component's `noun=`/`:noun=`, test hooks
+// (`data-test-id=`, `:data-qa-id=`), a route name (`:to="{ name: 'export' }"`), `:class` object keys, a `new Map`
+// entry's value, a class field and `this.title =` under wording names, an interpolation, a returned value, a call
+// argument, and the whitespace path "Choose import/export".
 test("MER-CP-001 names each copied id's qualified owner at its exact location", () => {
   const findings = JSON.parse(plumb(path.join(FIX, "MER-CP-001", "bad"), "--rule", "MER-CP-001", "--json").stdout);
   const owner = (finding) => finding.message.match(/ is (\S+) on the server/)?.[1];
@@ -1052,7 +1055,10 @@ test("MER-CP-001 names each copied id's qualified owner at its exact location", 
     ["ui/app/pages/crm/components/CrmLinks.vue:3", "CrmIntegration.Webhooks.HandlerId"],
     ["ui/app/pages/crm/components/CrmLinks.vue:4", "CrmIntegration.Webhooks.HandlerId"], // id-named bound attributes
     ["ui/app/pages/crm/components/CrmLinks.vue:4", "CrmIntegration.IntegrationId"],
-    ["ui/app/pages/crm/index.vue:12", "CrmIntegration.IntegrationId"], // compared against a literal-typed value
+    ["ui/app/pages/crm/components/CrmLinks.vue:5", "CrmIntegration.IntegrationId"], // under an id-named key in a bound object
+    ["ui/app/pages/crm/components/CrmLinks.vue:6", "CrmIntegration.IntegrationId"], // a component's `type` prop
+    ["ui/app/pages/crm/components/CrmLinks.vue:7", "CrmIntegration.Webhooks.HandlerId"], // v-bind object, id-named key
+    ["ui/app/pages/crm/index.vue:12","CrmIntegration.IntegrationId"], // compared against a literal-typed value
     ["ui/app/pages/crm/index.vue:13", "CrmIntegration.IntegrationId"], // hand-built /api/ URL
     ["ui/app/pages/crm/index.vue:14", "TestCrmConnectionUseCase.ProbeId"], // production type named Test…
     ["ui/app/pages/crm/index.vue:16", "CrmIntegration.IntegrationId"], // an id in the client call's options
@@ -1096,6 +1102,11 @@ test("MER-CP-001 names each copied id's qualified owner at its exact location", 
     ["ui/app/pages/crm/logic/crm-positions.ts:40", "CrmConnector.ConnectorId"], // destructuring default
     ["ui/app/pages/crm/logic/crm-positions.ts:41", "CrmIntegration.IntegrationId"], // class field
     ["ui/app/pages/crm/logic/crm-positions.ts:42", "TestCrmConnectionUseCase.ProbeId"], // <T> type assertion
+    ["ui/app/pages/crm/logic/crm-positions.ts:43", "CrmIntegration.IntegrationId"], // ref(…)'s initial value
+    ["ui/app/pages/crm/logic/crm-positions.ts:44", "CrmIntegration.IntegrationId"], // right side of &&, held
+    ["ui/app/pages/crm/logic/crm-positions.ts:45", "CrmIntegration.IntegrationId"], // ??=
+    ["ui/app/pages/crm/logic/crm-positions.ts:46", "CrmIntegration.IntegrationId"], // .get( key
+    ["ui/app/pages/crm/logic/crm-positions.ts:47", "CrmIntegration.IntegrationId"], // Id split off an acronym
     ["ui/app/pages/crm/logic/crm-positions.ts:5", "CrmConnector.ConnectorId"], // !=
     ["ui/app/pages/crm/logic/crm-positions.ts:8", "CrmIntegration.Webhooks.HandlerId"], // case label
   ]);
@@ -1103,7 +1114,7 @@ test("MER-CP-001 names each copied id's qualified owner at its exact location", 
   assert.deepEqual(good, []);
 });
 
-// Names are read by their last whole word, and HTML's own `id`, `type` and `key` attributes aren't ids. The
+// Names are read by their last whole word, and a native element's `id` and `type`, and Vue's `key`, aren't ids. The
 // held lines (2-5, 15, 16) count; the rest are wording, a conditional's condition, a returned value, a plain call
 // argument, `+=` and a whitespace "path".
 test("MER-CP-001 reads names by whole word and keeps wording, returns and call arguments out", () => {

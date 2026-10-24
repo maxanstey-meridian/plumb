@@ -40,3 +40,8 @@ export const openWith = (kind = "acme-webhook") => kind;
 export const openFrom = ({ kind = "acme-connector" }: { kind?: string }) => kind;
 export class CrmPanel { readonly kind = "acme-crm"; }
 export const asserted = <string>"acme-probe";
+export const picked = ref("acme-crm");
+export const flagged = (flag: boolean) => { const id = flag && "acme-crm"; return id; };
+export const filled = (id?: string) => { let chosen = id; chosen ??= "acme-crm"; return chosen; };
+export const panelFrom = (map: ReadonlyMap<string, string>) => map.get("acme-crm");
+export const external = { externalCRMId: "acme-crm" };

@@ -1,0 +1,5 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <ItemGroup>
+    <Using Include="Rivet.RivetActionResult" Alias="Wrapped" />
+  </ItemGroup>
+</Project>

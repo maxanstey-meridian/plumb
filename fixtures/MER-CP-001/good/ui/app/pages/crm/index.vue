@@ -20,7 +20,7 @@ const lookup = "acme-lookup";
 </script>
 
 <template>
-  <a v-if="settings" :href="settings">{{ label }}</a>
+  <NuxtLink v-if="settings" :to="settings">{{ label }}</NuxtLink>
   <NuxtLink :to="legacy">Legacy</NuxtLink>
   <AcmeCrmPanel :data-key="key" :data-secret="secret" :data-fixture="fixture" />
   <span class="acme" :data-kinds="kinds.join()" :data-status="status?.connected" :data-lookup="lookup">acme</span>

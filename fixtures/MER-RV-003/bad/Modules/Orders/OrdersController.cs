@@ -20,3 +20,19 @@ public sealed class MembersController
     [HttpGet]
     public Task<ListMembersResponse> List() => useCase.ExecuteAsync();
 }
+
+public sealed class OrderDraftsController
+{
+    [HttpGet(OrdersContract.DraftRoute)]
+    public Task<OrderDraftResponse> GetDraft(Guid id) => useCase.ExecuteAsync(id);
+
+    [HttpPut(OrdersContract.DraftRoute)]
+    public IActionResult SaveDraft(Guid id, SaveOrderDraftRequest request) =>
+        OrdersContract.GetDraft.Success(useCase.Save(id, request)).ToActionResult();
+}
+
+public sealed class MembersInviteController
+{
+    [HttpPost(MembersContract.InviteRoute)]
+    public Task<InviteMemberResponse> Invite(InviteMemberRequest request) => useCase.ExecuteAsync(request);
+}

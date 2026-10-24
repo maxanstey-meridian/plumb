@@ -1,3 +1,4 @@
+using System.Text.Json.Serialization;
 using App.Common;
 using Rivet;
 
@@ -18,10 +19,13 @@ public static class OrdersContract
     >(CreateRoute);
 
     public static readonly RouteDefinition<ImportOrdersRequest, ImportOrdersResponse> Import =
-        Define.Post<ImportOrdersRequest, ImportOrdersResponse>(ImportRoute);
+        Define.Post<ImportOrdersRequest, ImportOrdersResponse>(ImportRoute)
+            .Returns<OrderConflictResponse>(409, "Already imported")
+            .Returns<ErrorResponse>(422, "Validation failed");
 }
 
-public sealed record CreateOrderRequest(string Name, string? Note = null);
+// Request-only: a default or a write-side JsonIgnore on what the client sends is not RV-027's concern.
+public sealed record CreateOrderRequest(string Name, [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? Note = null);
 
 public sealed record OrderDto(Guid Id, IReadOnlyList<OrderLineDto> Lines, string? Note);
 
@@ -30,3 +34,6 @@ public sealed record OrderLineDto(string Sku, int? Quantity);
 public sealed record ImportOrdersRequest(IReadOnlyList<CreateOrderRequest> Orders);
 
 public sealed record ImportOrdersResponse(int Imported, IReadOnlyList<ErrorResponse> Failures);
+
+// Always sent, null included; an unconditional [JsonIgnore] keeps a server-only field off the wire entirely.
+public sealed record OrderConflictResponse(Guid OrderId, DateTimeOffset? SubmittedAt, [property: JsonIgnore] string? InternalTrace);

@@ -6,3 +6,9 @@ public static class CrmIntegration
     public const string IntegrationKey = "acme-key";
     private const string SecretId = "acme-secret";
 }
+
+// The dev seed's stand-in connector; its ids aren't the server's.
+public sealed class FakeCrmLookup
+{
+    public const string LookupId = "acme-lookup";
+}

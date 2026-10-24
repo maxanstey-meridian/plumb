@@ -7,3 +7,4 @@ export const x = 1; // a comment after code is out of scope: MER-TO-015 only mea
 export const y = 2; /* a block comment opening after code is out of scope on that line: only comment-only lines are measured
    while its short middle line is measured
 */
+export const owned = "a code line the formatter owns: it keeps code to its width, so plumb never measures code lines, however long";

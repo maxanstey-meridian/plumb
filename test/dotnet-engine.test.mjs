@@ -1,6 +1,10 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import path from "node:path";
+import { spawnSync } from "node:child_process";
+import fs from "node:fs";
+import os from "node:os";
+import { fileURLToPath } from "node:url";
 import { Capability, planCapabilities, createRuleDescriptor, defineRepositoryRule } from "../lib/engine/contracts.mjs";
 import { createRepositoryContext } from "../lib/engine/repository-context.mjs";
 import { createRepositorySnapshot } from "../lib/engine/repository-snapshot.mjs";
@@ -151,4 +155,93 @@ test("test directories are tests/test segments, separated or PascalCase *Tests s
   }
   for (const name of ["OrdersTests.cs", "OrderTest.cs", "IntegrationTests.cs", "LabTests.cs"]) assert.equal(isTestFileName(name), true, name);
   for (const name of ["Contests.cs", "Latest.cs", "tests.cs", "OrdersTests.cs.bak", "Testing.cs"]) assert.equal(isTestFileName(name), false, name);
+});
+
+// TE rules read test source through the same definitions as classify(): a separated `Orders.Tests` folder
+// is tests, a `Contests` folder or a `LabTests` feature inside Modules/ is not, and a frontend `tests`
+// folder inside the app tree is app code.
+test("TE rules agree with the shared C# and frontend test-source definitions", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "plumb-te-"));
+  const files = {
+    "api/Api.csproj": '<Project Sdk="Microsoft.NET.Sdk.Web" />\n',
+    "api/Contests/MockJudge.cs": "class MockJudge {}\n",
+    "api/Modules/LabTests/Application/MockResult.cs": "class MockResult {}\n",
+    "tests/Orders.UnitTests/MockClock.cs": "class MockClock {}\n",
+    "tests/Orders.Tests/CheckoutSpec.cs": "Received.InOrder(() => {});\n",
+    "ui/app/utils/tests/order.ts": "vi.mock('a'); vi.mock('b'); vi.mock('c'); vi.mock('d'); vi.mock('e'); vi.mock('f');\n",
+    "ui/e2e/checkout.ts": "vi.mock('a'); vi.mock('b'); vi.mock('c'); vi.mock('d'); vi.mock('e'); vi.mock('f');\n",
+  };
+  try {
+    for (const [file, content] of Object.entries(files)) {
+      fs.mkdirSync(path.dirname(path.join(root, file)), { recursive: true });
+      fs.writeFileSync(path.join(root, file), content);
+    }
+    const plumb = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "plumb");
+    const locations = (rule) => {
+      const result = spawnSync(plumb, [root, "--rule", rule, "--ci", "--json"], { encoding: "utf8" });
+      assert.ok([0, 1].includes(result.status), result.stderr);
+      return JSON.parse(result.stdout).map((finding) => finding.location).sort();
+    };
+    assert.deepEqual(locations("MER-TE-005"), ["tests/Orders.UnitTests/MockClock.cs:1"]);
+    assert.deepEqual(locations("MER-TE-003"), ["tests/Orders.Tests/CheckoutSpec.cs:1"]);
+    assert.deepEqual(locations("MER-TE-002"), ["ui/e2e/checkout.ts:0"]);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("C# type names resolve the way the compiler looks them up: nested types, namespaces and parents, usings, aliases", () => {
+  const f = fixture(new Map([
+    ["api/Api.csproj", '<Project Sdk="Microsoft.NET.Sdk.Web"><ItemGroup><Using Include="App.Shared" /><Using Include="App.Wire" Alias="Wire" /><Using Include="App.Statics" Static="true" /></ItemGroup></Project>'],
+    ["api/Contracts/Orders/OrderModels.cs", "namespace App.Contracts.Orders;\npublic sealed record OrderDto(Guid Id);\n"],
+    ["api/Modules/Orders/Contracts/OrderDto.cs", "namespace App.Modules.Orders.Contracts;\npublic sealed record OrderDto(Guid Id, int Version = 1);\npublic sealed record OnlyHere(int A);\n"],
+    ["api/Modules/Billing/Contracts/OnlyHere.cs", "namespace App.Modules.Billing.Contracts\n{\n    public sealed record OnlyHere(int B);\n}\n"],
+    ["api/Common/Paging.cs", "namespace App;\npublic sealed record Paging(int Page);\n"],
+    ["api/Shared/Money.cs", "namespace App.Shared;\npublic readonly record struct Money(decimal Amount);\n"],
+    ["api/Wire/Envelope.cs", "namespace App.Wire;\npublic sealed record Envelope(int A);\n"],
+    ["api/Outer.cs", "namespace App.Contracts.Orders;\npublic static class Outer\n{\n    public sealed record Inner(int A);\n    public sealed record UsesInner(Inner Value);\n}\npublic sealed record Inner(int B);\n"],
+    ["api/Noise.cs", "namespace App.Noise;\npublic static class Noise\n{\n    static void Run<T>(List<OrderDto> records) where T : class\n    {\n        foreach (var record in records) { }\n    }\n}\n"],
+    ["api/Referrer.cs",
+      "using App.Modules.Orders.Contracts;\nusing App.Modules.Billing.Contracts;\nusing Published = App.Modules.Orders.Contracts;\nusing Dto = App.Contracts.Orders.OrderDto;\n" +
+      "namespace App.Contracts.Orders.Deep;\npublic sealed record Referrer(OrderDto A);\n"],
+  ]), [Capability.CSHARP]);
+  const { csharp } = f.context;
+  const file = (name) => csharp.csharpFiles.find((value) => value.path === name);
+  const referrer = file("api/Referrer.cs"), at = referrer.text().indexOf("public sealed record Referrer");
+  const resolved = (name, from = referrer, offset = at) => csharp.resolveType(name, from, offset)?.fullName ?? null;
+
+  // A parent namespace (App.Contracts.Orders) wins over a using of the same short name.
+  assert.equal(resolved("OrderDto"), "App.Contracts.Orders.OrderDto");
+  assert.equal(resolved("Paging"), "App.Paging");
+  assert.equal(resolved("App.Modules.Orders.Contracts.OrderDto"), "App.Modules.Orders.Contracts.OrderDto");
+  assert.equal(resolved("global::App.Modules.Orders.Contracts.OrderDto"), "App.Modules.Orders.Contracts.OrderDto");
+  assert.equal(resolved("Published.OrderDto"), "App.Modules.Orders.Contracts.OrderDto");
+  assert.equal(resolved("Dto"), "App.Contracts.Orders.OrderDto");
+  // Project-level <Using>, plain and aliased; a Static one imports no types.
+  assert.equal(resolved("Money"), "App.Shared.Money");
+  assert.equal(resolved("Wire.Envelope"), "App.Wire.Envelope");
+  // Two usings bring the same name in: CS0104, so ambiguous.
+  assert.equal(resolved("OnlyHere"), null);
+  assert.equal(resolved("Guid"), null);
+  // A nested type wins inside its outer type; outside, the namespace's own Inner.
+  const outer = file("api/Outer.cs");
+  assert.equal(resolved("Inner", outer, outer.text().indexOf("UsesInner")), "App.Contracts.Orders.Outer.Inner");
+  assert.equal(resolved("Inner", outer, outer.text().lastIndexOf("record Inner")), "App.Contracts.Orders.Inner");
+  // `where T : class` and `var record in` declare nothing.
+  assert.equal(resolved("App.Noise.Noise.where"), null);
+  assert.equal(resolved("App.Noise.Noise.in"), null);
+});
+
+test("C# type names prefer the declaration in the referrer's project closure", () => {
+  const f = fixture(new Map([
+    ["one/One.csproj", "<Project />"],
+    ["one/OrderDto.cs", "namespace App.Contracts;\npublic sealed record OrderDto(int A);\n"],
+    ["one/Uses.cs", "namespace App.Contracts;\npublic sealed record Uses(OrderDto A);\n"],
+    ["two/Two.csproj", "<Project />"],
+    ["two/OrderDto.cs", "namespace App.Contracts;\npublic sealed record OrderDto(int B);\n"],
+  ]), [Capability.CSHARP, Capability.DOTNET_PROJECTS]);
+  const { csharp } = f.context;
+  const uses = csharp.csharpFiles.find((value) => value.path === "one/Uses.cs");
+  const result = csharp.resolveType("OrderDto", uses, uses.text().indexOf("record Uses"));
+  assert.deepEqual(result.declarations.map((declaration) => declaration.file.path), ["one/OrderDto.cs"]);
 });

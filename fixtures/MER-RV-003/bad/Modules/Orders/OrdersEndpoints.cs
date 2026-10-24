@@ -4,4 +4,7 @@ public static class OrdersEndpoints
         endpoints.MapPost(
             OrdersContract.Create.Route,
             (CreateOrderRequest request) => useCase.ExecuteAsync(AdminOrdersContract.Create.Bind(request)));
+
+    public static void MapDrafts(IEndpointRouteBuilder endpoints) =>
+        endpoints.MapGet(OrdersContract.DraftRoute, (Guid id) => useCase.ExecuteAsync(id));
 }

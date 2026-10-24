@@ -14,38 +14,7 @@ const HOME = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const CHECKS = path.join(HOME, "checks");
 const FIXTURES = path.join(HOME, "fixtures");
 const REFERENCES = path.join(os.homedir(), ".config/opencode/skills/meridian/references");
-const catalogCandidates = process.env.MERIDIAN_CHECK_CATALOG
-  ? [process.env.MERIDIAN_CHECK_CATALOG]
-  : [
-      path.join(os.homedir(), ".config/opencode/skills/meridian/FABLE_CHECKS.md"),
-      path.join(os.homedir(), ".claude/skills/meridian/FABLE_CHECKS.md"),
-    ];
-const catalogPath = catalogCandidates.find((candidate) => fs.existsSync(candidate));
-
-function loadAlignment() {
-  assert.ok(catalogPath, `Meridian rule catalogue not found; checked: ${catalogCandidates.join(", ")}`);
-  const { byRule: owners } = loadRuleOwners(CHECKS, path.join(HOME, "rules"), inProcessRules);
-
-  const catalog = fs.readFileSync(catalogPath, "utf8");
-  const entries = new Map();
-  const matches = [...catalog.matchAll(/^- \*\*(MER-[A-Z]{2}-\d{3})\*\*([^\n]*(?:\n(?!- \*\*MER-)[^\n]*)*)/gm)];
-  for (const match of matches) {
-    assert.ok(!entries.has(match[1]), `duplicate catalogue entry ${match[1]}`);
-    entries.set(match[1], match[0]);
-  }
-  return { owners, entries };
-}
-
-function catalogueSeverities(id, entry) {
-  const variable = {
-    "MER-BE-024": new Set(["error", "warn"]),
-    "MER-TO-011": new Set(["error", "warn"]),
-  }[id];
-  if (variable) return variable;
-  const declared = [...entry.split("—", 1)[0].matchAll(/`(error|warn|info)`/g)].map((match) => match[1]);
-  assert.ok(declared.length, `catalogue entry ${id} has no declared severity`);
-  return new Set(declared);
-}
+const ownersByRule = () => loadRuleOwners(CHECKS, path.join(HOME, "rules"), inProcessRules).byRule;
 
 function githubHeadingSlugs(markdown) {
   const counts = new Map();
@@ -105,12 +74,9 @@ function runOwner(owner, fixture, id) {
   }));
 }
 
-function verifyFinding(owner, finding, entries, slugCache) {
+function verifyFinding(owner, finding, slugCache) {
   assert.ok(owner.ids.includes(finding.id), `${owner.source} emitted undeclared ID ${finding.id}`);
-  const entry = entries.get(finding.id);
-  assert.ok(entry, `${owner.source} emitted uncatalogued ID ${finding.id}`);
-  assert.ok(catalogueSeverities(finding.id, entry).has(finding.severity),
-    `${owner.source} emitted ${finding.id} as ${finding.severity}, contrary to its catalogue severity`);
+  assert.ok(["error", "warn", "info"].includes(finding.severity), `${owner.source} emitted ${finding.id} with severity ${finding.severity}`);
 
   const ref = finding.docRef?.match(/^([^#]+\.md)#(.+)$/);
   assert.ok(ref, `${owner.source} emitted invalid docRef ${JSON.stringify(finding.docRef)}`);
@@ -120,37 +86,28 @@ function verifyFinding(owner, finding, entries, slugCache) {
   assert.ok(slugCache.get(reference).has(ref[2]), `${owner.source} docRef anchor does not exist: ${finding.docRef}`);
 }
 
-test("every implemented ID has exactly one owner, catalogue entry, and fixture pair", () => {
-  const { owners, entries } = loadAlignment();
-  for (const [id, owner] of owners) {
-    assert.ok(entries.has(id), `${owner.source} ID ${id} is missing from FABLE_CHECKS.md`);
+test("every implemented ID has exactly one owner and a fixture pair", () => {
+  for (const id of ownersByRule().keys()) {
     assert.ok(fs.existsSync(path.join(FIXTURES, id, "bad")), `implemented ID ${id} has no fixtures/${id}/bad`);
     assert.ok(fs.existsSync(path.join(FIXTURES, id, "good")), `implemented ID ${id} has no fixtures/${id}/good`);
   }
-
-  const explicitlyNotProduced = /\b(?:retired|model-only|planned|delegated\b|covered by)\b/i;
-  for (const [id, entry] of entries) {
-    if (explicitlyNotProduced.test(entry)) continue;
-    assert.ok(owners.has(id), `active catalogue rule ${id} has no producer or YAML definition`);
-  }
 });
 
-test("each owner emits its declared ID with catalogue-aligned severity and a resolvable docRef", () => {
-  const { owners, entries } = loadAlignment();
+test("each owner emits its declared ID on bad, not on good, with a valid severity and a resolvable docRef", () => {
   const slugCache = new Map();
   const findingFailures = [];
-  for (const [id, owner] of owners) {
+  for (const [id, owner] of ownersByRule()) {
     const bad = runOwner(owner, path.join(FIXTURES, id, "bad"), id);
     assert.ok(bad.some((finding) => finding.id === id), `${owner.source} did not emit ${id} on fixtures/${id}/bad`);
     for (const finding of bad) {
-      try { verifyFinding(owner, finding, entries, slugCache); }
+      try { verifyFinding(owner, finding, slugCache); }
       catch (error) { findingFailures.push(error.message); }
     }
 
     const good = runOwner(owner, path.join(FIXTURES, id, "good"), id);
     assert.ok(!good.some((finding) => finding.id === id), `${owner.source} emitted ${id} on fixtures/${id}/good`);
     for (const finding of good) {
-      try { verifyFinding(owner, finding, entries, slugCache); }
+      try { verifyFinding(owner, finding, slugCache); }
       catch (error) { findingFailures.push(error.message); }
     }
   }

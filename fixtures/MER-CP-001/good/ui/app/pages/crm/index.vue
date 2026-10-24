@@ -12,11 +12,15 @@ const legacy = "/settings/acme-crm-legacy";
 const key = "acme-key";
 const secret = "acme-secret";
 const fixture = "acme-fixture";
+type Kind = "acme-crm" | "acme-other";
+const kinds: readonly Kind[] = [];
+const status = "/api/integrations/acme-crm/status";
+const lookup = "acme-lookup";
 </script>
 
 <template>
   <a v-if="settings" :href="settings">{{ label }}</a>
   <NuxtLink :to="legacy">Legacy</NuxtLink>
   <AcmeCrmPanel :data-key="key" :data-secret="secret" :data-fixture="fixture" />
-  <span class="acme">acme</span>
+  <span class="acme" :data-kinds="kinds.join()" :data-status="status" :data-lookup="lookup">acme</span>
 </template>

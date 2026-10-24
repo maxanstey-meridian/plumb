@@ -1,10 +1,10 @@
-using App.Contracts.Orders;
+using App.Modules.Orders.Contracts;
 
 namespace App.Modules.Orders.Infrastructure;
 
-// Infrastructure sits outside the published contract, domain and use cases.
+// The adapter reads into the module's own published type; the controller maps it to transport.
 public sealed class OrderReader
 {
-    public Task<IReadOnlyList<OrderDto>> ListAsync(CancellationToken ct) =>
-        Task.FromResult<IReadOnlyList<OrderDto>>([]);
+    public Task<IReadOnlyList<OrderSummary>> ListAsync(CancellationToken ct) =>
+        Task.FromResult<IReadOnlyList<OrderSummary>>([]);
 }

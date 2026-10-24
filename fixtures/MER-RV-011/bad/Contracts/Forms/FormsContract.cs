@@ -6,4 +6,5 @@ namespace App.Contracts.Forms;
 public static class FormsContract
 {
     public static readonly RouteDefinition<CreateFormCommand, ModuleFormSummary> Create = Define.Post<CreateFormCommand, ModuleFormSummary>("/api/forms").Returns<AuthError>(422);
+    public static readonly RouteDefinition<FormDraft> Draft = Define.Get<FormDraft>("/api/forms/draft");
 }

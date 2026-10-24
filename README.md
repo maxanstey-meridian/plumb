@@ -43,8 +43,10 @@ The installed runtime dependencies have explicit jobs:
 - `dependency-cruiser`: frontend dependency graphs
 - `fast-xml-parser`: `.csproj` and `Directory.Build.props` parsing
 - `ignore`: `.plumbignore` and command-line exclusion semantics
+- `yaml`: CSharpier YAML config parsing for comment widths
+- `picomatch`: CSharpier override and `.editorconfig` section globs
 
-If TypeScript, the Vue compiler, or dependency-cruiser is unavailable, only the affected rules are skipped and Plumb emits a diagnostic. `fast-xml-parser` and `ignore` are required runtime dependencies. If ast-grep is unavailable, YAML rules are skipped with a diagnostic.
+If TypeScript, the Vue compiler, or dependency-cruiser is unavailable, only the affected rules are skipped and Plumb emits a diagnostic. `fast-xml-parser`, `ignore`, `yaml` and `picomatch` are required runtime dependencies. If ast-grep is unavailable, YAML rules are skipped with a diagnostic.
 
 ## Run
 

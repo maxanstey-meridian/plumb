@@ -1,0 +1,7 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+  <!-- <Using Include="App.Contracts.Orders" /> in a comment is not a using -->
+  <ItemGroup>
+    <Using Include="System.Text.Json" />
+    <Using Include="App.Contracts.Orders" />
+  </ItemGroup>
+</Project>

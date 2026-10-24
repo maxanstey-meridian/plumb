@@ -223,3 +223,19 @@ test("TE-009 reads test folders relative to a nested frontend root", () => {
     assert.deepEqual(run(), ["src/web/e2e/support/orders.ts:2"]);
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
+
+test("FE-006/007/010/015 skip a Nuxt fixture app under tests/ by the shared frontend test-source definition", () => {
+  const good = runProducer("MER-FE-010", "good");
+  assert.equal(good.status, 0, good.stderr);
+  assert.equal(good.stdout, "");
+  // The same port file in a frontend root outside tests/ is app code and is reported.
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "plumb-fe010-root-"));
+  try {
+    const app = path.join(HOME, "fixtures", "MER-FE-010", "good", "tests", "fixtures", "portal");
+    fs.cpSync(app, path.join(root, "portal"), { recursive: true });
+    assert.equal(spawnSync("git", ["init", "-q"], { cwd: root }).status, 0);
+    const out = spawnSync(path.join(HOME, "plumb"), [root, "--rule", "MER-FE-010", "--json", "--ci"], { encoding: "utf8" });
+    assert.ok([0, 1].includes(out.status), out.stderr);
+    assert.deepEqual(JSON.parse(out.stdout || "[]").map((finding) => finding.location), ["portal/app/pages/index/ports/auth.ts:8"]);
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});

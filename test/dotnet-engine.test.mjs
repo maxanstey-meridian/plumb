@@ -107,6 +107,9 @@ test("a project is test code by a test folder's name rule or a test framework pa
     // A PascalCase `…Tests` inside the backend tree is a feature name, as for folders.
     ["api/Modules/Lab/LabTests.csproj", "<Project />"],
     ["api/Modules/Lab/A.cs", "class A {}"],
+    // A per-module project named after its own `…Tests` feature is production.
+    ["api/Modules/LabTests/Acme.LabTests.csproj", "<Project />"],
+    ["api/Modules/LabTests/Domain/Panel.cs", "class Panel {}"],
     ["tunit/Checks.csproj", project(["TUnit"])],
     ["tunit/A.cs", "class A {}"],
     ["xunit3/Checks.csproj", project(["xunit.v3"])],
@@ -116,6 +119,8 @@ test("a project is test code by a test folder's name rule or a test framework pa
     // MSTest.Sdk sets IsTestProject itself, with no package reference.
     ["mstestsdk/Checks.csproj", '<Project Sdk="MSTest.Sdk/3.6.0"><PropertyGroup><TargetFramework>net9.0</TargetFramework></PropertyGroup></Project>'],
     ["mstestsdk/A.cs", "class A {}"],
+    ["mstestsdkelement/Checks.csproj", '<Project><Sdk Name="MSTest.Sdk" Version="3.6.0" /></Project>'],
+    ["mstestsdkelement/A.cs", "class A {}"],
     ["helpers/Checks.csproj", project(["xunit.abstractions", "xunit.v3.assert", "NUnit3TestAdapter.Extras", "TUnitLike"])],
     ["helpers/A.cs", "class A {}"],
   ]), [Capability.DOTNET_PROJECTS]);
@@ -123,11 +128,13 @@ test("a project is test code by a test folder's name rule or a test framework pa
   for (const name of ["Contest", "Latest", "Attest"]) assert.equal(evidence(`names/${name}/A.cs`).test, false, name);
   for (const name of ["App.Tests", "api-tests", "IntegrationTests", "Api.E2ETests"]) assert.equal(evidence(`names/${name}/A.cs`).projectName, true, name);
   assert.equal(evidence("api/Modules/Lab/A.cs").test, false);
+  assert.equal(evidence("api/Modules/LabTests/Domain/Panel.cs").test, false);
   assert.equal(evidence("tunit/A.cs").projectMetadata, true);
   assert.equal(evidence("tunit/A.cs").test, true);
   assert.equal(evidence("xunit3/A.cs").test, true);
   assert.equal(evidence("xunit3mtp/A.cs").projectMetadata, true);
   assert.equal(evidence("mstestsdk/A.cs").projectMetadata, true);
+  assert.equal(evidence("mstestsdkelement/A.cs").projectMetadata, true);
   assert.equal(evidence("helpers/A.cs").test, false);
 });
 
@@ -257,9 +264,12 @@ test("project references follow host case semantics", { skip: process.platform !
 test("test directories are tests/test segments, separated *Tests suffixes, PascalCase *Tests outside Modules/; test file names end Test(s).cs", () => {
   const testDirectories = ["tests", "Tests", "test", "Orders.Tests", "integration-tests", "unit_tests", "IntegrationTests", "App.IntegrationTests", "Foo.UnitTests",
     // An acronym or digit before `Tests`; a separated name is a test project even inside the backend tree.
-    "E2ETests", "Api.E2ETests", "App.UITests", "App.APITests", "Api.V2Tests", "Modules/Orders/Orders.UnitTests", "Common/Common.Tests"];
+    "E2ETests", "Api.E2ETests", "App.UITests", "App.APITests", "Api.V2Tests", "Modules/Orders/Orders.UnitTests", "Common/Common.Tests",
+    // Only the feature folder right under Modules/ names a feature's project; a nested IntegrationTests folder doesn't.
+    "Modules/Orders/IntegrationTests/Orders.IntegrationTests"];
   // Inside Modules/, Contracts/ or Common/ a *Tests folder is a feature name, not a test project.
-  const otherDirectories = ["Contests", "Latest", "Modules/LabTests", "Contracts/LabTests", "Modules/Lab/Application/BloodTests"];
+  // A separated name ending in its own feature folder's name is that feature's project.
+  const otherDirectories = ["Contests", "Latest", "Modules/LabTests", "Contracts/LabTests", "Modules/Lab/Application/BloodTests", "Modules/LabTests/Acme.Modules.LabTests"];
   const f = fixture(new Map([...testDirectories, ...otherDirectories].map((segment) => [`api/${segment}/Orders.cs`, "class Orders {}"])), [Capability.CSHARP]);
   for (const [segments, expected] of [[testDirectories, true], [otherDirectories, false]]) {
     for (const segment of segments) {

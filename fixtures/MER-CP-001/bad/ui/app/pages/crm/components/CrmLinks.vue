@@ -5,4 +5,5 @@
   <IntegrationCard :params="{ kind: 'acme-crm' }" />
   <IntegrationCard type="acme-crm" />
   <span v-bind="{ handlerId: 'acme-webhook' }" />
+  <FieldEditor type="email" />
 </template>

@@ -236,6 +236,11 @@ test("MER-RV-007 flags every app-written RivetResult extension named like an ada
         // A bridge class, then a struct that copies the adapter's output: one finding each.
         "Modules/Orders/BridgeThenStruct.cs:1",
         "Modules/Orders/BridgeThenStruct.cs:7",
+        // A controller deriving from the app's own base; the app's own result set on `ctx.Result`; a response
+        // held in a local.
+        "Modules/Orders/DerivedRelays.cs:21",
+        "Modules/Orders/DerivedRelays.cs:33",
+        "Modules/Orders/DerivedRelays.cs:6",
         "Modules/Orders/OrderResultExtensions.cs:1",
         // The outer class's method, after a nested class.
         "Modules/Orders/OuterRelay.cs:3",
@@ -263,6 +268,9 @@ test("MER-RV-007 flags every app-written RivetResult extension named like an ada
         "Modules/Common/WrapperRecord.cs:9 Wrapper",
         "Modules/Orders/AliasedRelay.cs:6 AliasedRelay",
         "Modules/Orders/BridgeThenStruct.cs:7 Relay",
+        "Modules/Orders/DerivedRelays.cs:21 EnvelopeFilter",
+        "Modules/Orders/DerivedRelays.cs:33 LocalResponseFilter",
+        "Modules/Orders/DerivedRelays.cs:6 DerivedRelayController",
         "Modules/Orders/OuterRelay.cs:3 OuterRelay",
         "Modules/Orders/RelayController.cs:4 RelayController",
         "Modules/Orders/ResponseWritingFilter.cs:4 ResponseWritingFilter",
@@ -273,7 +281,7 @@ test("MER-RV-007 flags every app-written RivetResult extension named like an ada
     ]);
     assert.match(output, /FunctionResultExtensions\.cs:1\tFunctionResultExtensions hand-writes an HTTP-result bridge off RivetResult \(ToResponse, Rebuild, ToHttp, OneArm\)/);
     assert.match(output, /FunctionResultExtensions\.cs:1\tFunctionResultExtensions declares its own ToResult off RivetResult, so a handler's call may bind to it instead of Rivet's first-party adapter — rename or delete it\trivet\.md#minimal-apis$/m);
-    assert.match(output, /AdapterStatus\.cs:1\tAdapterStatus copies the StatusCode or Value of RivetActionResult, the output of Rivet's \.ToActionResult\(\) adapter, into an HTTP result or response of its own — a hand-written bridge; return \.ToResult\(\)\/\.ToActionResult\(\) directly, and at most read its StatusCode or Value\trivet\.md#minimal-apis$/m);
+    assert.match(output, /AdapterStatus\.cs:1\tAdapterStatus copies the StatusCode or Value of RivetActionResult, the output of Rivet's \.ToActionResult\(\) adapter, into an HTTP result or response of its own — a hand-written bridge; return \.ToResult\(\)\/\.ToActionResult\(\) directly \(in a filter, let Rivet write the response\), and at most read its StatusCode or Value\trivet\.md#controller-or-functions-aspnet-integration$/m);
     assert.match(output, /BridgeThenStruct\.cs:1\tStructBridgeExtensions hand-writes an HTTP-result bridge off RivetResult \(ToHttp\)/);
     assert.match(output, /HttpResultExtensions\.cs:1\tHttpResultExtensions hand-writes an HTTP-result bridge off RivetResult \(ToHttpResult, Respond\) — delete it and use Rivet's first-party \.ToResult\(\)\/\.ToActionResult\(\) adapters\trivet\.md#minimal-apis$/m);
 });

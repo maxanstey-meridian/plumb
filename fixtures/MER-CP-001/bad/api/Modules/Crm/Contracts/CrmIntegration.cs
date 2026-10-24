@@ -8,6 +8,8 @@ public static class CrmIntegration
     }
 
     public const string IntegrationId = "acme-crm";
+    // A channel id that is also one of HTML's input types.
+    public const string EmailChannelId = "email";
 }
 
 public readonly record struct CrmConnector(string Name)

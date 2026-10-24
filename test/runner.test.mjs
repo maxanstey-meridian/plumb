@@ -1058,7 +1058,9 @@ test("MER-CP-001 names each copied id's qualified owner at its exact location", 
     ["ui/app/pages/crm/components/CrmLinks.vue:5", "CrmIntegration.IntegrationId"], // under an id-named key in a bound object
     ["ui/app/pages/crm/components/CrmLinks.vue:6", "CrmIntegration.IntegrationId"], // a component's `type` prop
     ["ui/app/pages/crm/components/CrmLinks.vue:7", "CrmIntegration.Webhooks.HandlerId"], // v-bind object, id-named key
-    ["ui/app/pages/crm/index.vue:12","CrmIntegration.IntegrationId"], // compared against a literal-typed value
+    ["ui/app/pages/crm/components/CrmLinks.vue:8", "CrmIntegration.EmailChannelId"], // an HTML type on a component that isn't an input
+    ["ui/app/pages/crm/composables/useCrmDestination.ts:6", "CrmIntegration.IntegrationId"], // ref(…)'s initial value, held by a variable
+    ["ui/app/pages/crm/index.vue:12", "CrmIntegration.IntegrationId"], // compared against a literal-typed value
     ["ui/app/pages/crm/index.vue:13", "CrmIntegration.IntegrationId"], // hand-built /api/ URL
     ["ui/app/pages/crm/index.vue:14", "TestCrmConnectionUseCase.ProbeId"], // production type named Test…
     ["ui/app/pages/crm/index.vue:16", "CrmIntegration.IntegrationId"], // an id in the client call's options
@@ -1102,11 +1104,13 @@ test("MER-CP-001 names each copied id's qualified owner at its exact location", 
     ["ui/app/pages/crm/logic/crm-positions.ts:40", "CrmConnector.ConnectorId"], // destructuring default
     ["ui/app/pages/crm/logic/crm-positions.ts:41", "CrmIntegration.IntegrationId"], // class field
     ["ui/app/pages/crm/logic/crm-positions.ts:42", "TestCrmConnectionUseCase.ProbeId"], // <T> type assertion
-    ["ui/app/pages/crm/logic/crm-positions.ts:43", "CrmIntegration.IntegrationId"], // ref(…)'s initial value
+    ["ui/app/pages/crm/logic/crm-positions.ts:43", "CrmIntegration.IntegrationId"], // assigned at a computed index of an id-named collection
     ["ui/app/pages/crm/logic/crm-positions.ts:44", "CrmIntegration.IntegrationId"], // right side of &&, held
     ["ui/app/pages/crm/logic/crm-positions.ts:45", "CrmIntegration.IntegrationId"], // ??=
     ["ui/app/pages/crm/logic/crm-positions.ts:46", "CrmIntegration.IntegrationId"], // .get( key
     ["ui/app/pages/crm/logic/crm-positions.ts:47", "CrmIntegration.IntegrationId"], // Id split off an acronym
+    ["ui/app/pages/crm/logic/crm-positions.ts:48", "CrmIntegration.IntegrationId"], // `test` + `id` after another word is no test hook
+    ["ui/app/pages/crm/logic/crm-positions.ts:49", "CrmIntegration.IntegrationId"], // a ref array's element, by the ref's name
     ["ui/app/pages/crm/logic/crm-positions.ts:5", "CrmConnector.ConnectorId"], // !=
     ["ui/app/pages/crm/logic/crm-positions.ts:8", "CrmIntegration.Webhooks.HandlerId"], // case label
   ]);

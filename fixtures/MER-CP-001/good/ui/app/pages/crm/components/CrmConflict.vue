@@ -14,5 +14,8 @@ defineProps<{ active: boolean }>();
     <NuxtLink :to="{ name: 'export' }">Export</NuxtLink>
     <span :class="{ export: active }" />
     <span :class="{ 'export': active }" />
+    <svg><linearGradient id="export" /></svg>
+    <UInput type="email" />
+    <UButton :type="'email'" />
   </section>
 </template>

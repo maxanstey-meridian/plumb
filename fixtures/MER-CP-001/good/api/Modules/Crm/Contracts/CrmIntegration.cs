@@ -6,6 +6,7 @@ public static class CrmIntegration
     public const string ExportId = "export";
     // A channel id that is also one of HTML's input types.
     public const string EmailChannelId = "email";
+    public const string CsvFormatId = "csv";
     public const string IntegrationKey = "acme-key";
     private const string SecretId = "acme-secret";
 }

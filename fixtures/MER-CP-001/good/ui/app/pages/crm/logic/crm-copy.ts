@@ -15,3 +15,14 @@ export class ExportDialog {
     this.title = "export";
   }
 }
+// Labels, colours, icons and orderings keyed on a server id are presentation (string values only).
+export const integrationLabels = { "acme-crm": "Acme CRM" };
+export const integrationColours = { ["acme-crm"]: "primary" } as const;
+export const integrationIcons = new Map([["acme-crm", "i-lucide-plug"]]);
+export const integrationTitles = new Map([["acme-crm", "Acme CRM"] as const]);
+export const integrationNames = (name: string) => ({ "acme-crm": `${name} CRM` });
+export const integrationOrder = { "acme-crm": "first" as const } satisfies Record<string, string>;
+// Wording across a whole template literal, and MIME types whose subtype equals the server's "csv" id.
+export const exportPrompt = (mode: string) => `Choose ${mode}/export`;
+export const csvType = "text/csv";
+export const csvTypeFor = (header: boolean) => `text/csv${header ? ";header=present" : ""}`;

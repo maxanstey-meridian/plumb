@@ -17,5 +17,7 @@ defineProps<{ active: boolean }>();
     <svg><linearGradient id="export" /></svg>
     <UInput type="email" />
     <UButton :type="'email'" />
+    <UInput id="export" />
+    <UFormField :id="'export'" />
   </section>
 </template>

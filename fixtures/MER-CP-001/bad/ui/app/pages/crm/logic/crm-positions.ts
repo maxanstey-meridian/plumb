@@ -18,7 +18,7 @@ export const listedAt = (id: string) => ["acme-webhook"].indexOf(id);
 export const CRM_HANDLERS = ["acme-webhook"] as const;
 export const CRM_ID = "acme-crm" as const;
 export const destination = { handlerId: "acme-webhook", kind: "acme-connector" };
-export const panels = { "acme-crm": "AcmeCrmPanel" };
+export const exportable = { "acme-crm": true };
 export const settingsLink = (tab: string) => `/settings/acme-crm/${tab}`;
 export const connectorLink = (base: string) => `${base}/acme-connector`;
 export const webhookLink = (base: string, tab: string) => `${base}/acme-webhook/${tab}`;
@@ -28,7 +28,7 @@ export const pickedKind = (flag: boolean) => ({ kind: flag ? "acme-connector" : 
 export const fallbackHandler = (id: string | null) => { const handler = id ?? "acme-webhook"; return handler; };
 export const orProbe = (id: string) => { const probe = id || "acme-probe"; return probe; };
 export const CRM_SET = new Set(["acme-crm"]);
-export const CRM_PANELS = new Map([["acme-connector", "ConnectorPanel"]]);
+export const CRM_ACTIONS = new Map([["acme-connector", ["export"]]]);
 export const inSet = (id: string) => new Set(["acme-probe"]).has(id);
 export const handlers = { handlerIds: ["acme-webhook"] };
 export const select = (state: { handlerId: string }) => { state.handlerId = "acme-webhook"; };
@@ -47,3 +47,4 @@ export const panelFrom = (map: ReadonlyMap<string, string>) => map.get("acme-crm
 export const external = { externalCRMId: "acme-crm" };
 export const variant = { abTestId: "acme-crm" };
 export const chooseIn = (kinds: { value: string[] }) => { kinds.value[0] = "acme-crm"; };
+export class CrmIds { static readonly CRM = "acme-crm"; }

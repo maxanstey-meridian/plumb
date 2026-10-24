@@ -1,4 +1,4 @@
-namespace Rivet.Shims
+namespace Rivet
 {
     public static class Adapted
     {

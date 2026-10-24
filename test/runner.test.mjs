@@ -977,6 +977,21 @@ test("baseline: the repo's own .plumb-baseline.json applies without --baseline; 
   assert.match(rewrite.stdout, new RegExp(`baseline written — ${flagged} findings`));
 });
 
+test("baseline: a run whose check failed can't tell a shrink, and says nothing of one", () => {
+  const baselineOf = (isolated) => {
+    const file = path.join(isolated.target, ".plumb-baseline.json");
+    fs.writeFileSync(file, JSON.stringify({ version: 1, entries: { "MER-TO-909\tresult.txt": 1 } }));
+    return file;
+  };
+  const quiet = isolatedPlumb({ "MER-TO-909-quiet.mjs": "#!/usr/bin/env node\n" });
+  assert.match(quiet.run("--rule", "MER-TO-909", "--baseline", baselineOf(quiet)).stdout, /shrunk/);
+  const failing = isolatedPlumb({ "MER-TO-909-failure.mjs": "#!/usr/bin/env node\nprocess.exit(2);\n" });
+  const out = failing.run("--rule", "MER-TO-909", "--baseline", baselineOf(failing));
+  assert.match(out.stderr, /check .*MER-TO-909-failure\.mjs failed/);
+  assert.match(out.stdout, /baseline holds 1/);
+  assert.doesNotMatch(out.stdout, /shrunk/);
+});
+
 test("baseline: shrinking is reported and suggests ratcheting down", () => {
   const r = repo(["MER-BE-005"], { "App.csproj": "<Project/>\n" });
   const bl = path.join(r, ".plumb-baseline.json");
@@ -1042,10 +1057,12 @@ test("baseline identity and suppression are unchanged for migrated findings", ()
 // Each crm-positions.ts and CrmLinks.vue line shows one kind of id position, some with several ids in it
 // (crm-positions.ts:15, 16 and 20, CrmLinks.vue:3 and 4). The good fixture's server declares ExportId = "export",
 // and its crm-copy.ts and CrmConflict.vue use "export" as wording and stay clean: `noun:`, `title:`, `typeLabel:`,
-// a native element's `class=`, `title=`, `data-testid=` and `id=`, a component's `noun=`/`:noun=`, test hooks
-// (`data-test-id=`, `:data-qa-id=`), a route name (`:to="{ name: 'export' }"`), `:class` object keys, a `new Map`
-// entry's value, a class field and `this.title =` under wording names, an interpolation, a returned value, a call
-// argument, and the whitespace path "Choose import/export".
+// a native element's `class=`, `title=`, `data-testid=` and `id=`, a component's `id=`/`:id=` and `noun=`/`:noun=`,
+// test hooks (`data-test-id=`, `:data-qa-id=`), a route name (`:to="{ name: 'export' }"`), `:class` object keys, a
+// `new Map` entry's value, a class field and `this.title =` under wording names, an interpolation, a returned value,
+// a call argument, and the whitespace paths "Choose import/export" and `Choose ${mode}/export`. Its labels, colours,
+// icons and orderings keyed on "acme-crm" or "csv" (quoted, computed, `new Map` entries, through `as const` and
+// `satisfies`) are presentation, and "text/csv" is a MIME type, not a path to the "csv" id.
 test("MER-CP-001 names each copied id's qualified owner at its exact location", () => {
   const findings = JSON.parse(plumb(path.join(FIX, "MER-CP-001", "bad"), "--rule", "MER-CP-001", "--json").stdout);
   const owner = (finding) => finding.message.match(/ is (\S+) on the server/)?.[1];
@@ -1080,7 +1097,7 @@ test("MER-CP-001 names each copied id's qualified owner at its exact location", 
     ["ui/app/pages/crm/logic/crm-positions.ts:19", "CrmIntegration.IntegrationId"], // constant, `as const`
     ["ui/app/pages/crm/logic/crm-positions.ts:20", "CrmIntegration.Webhooks.HandlerId"], // id-named properties
     ["ui/app/pages/crm/logic/crm-positions.ts:20", "CrmConnector.ConnectorId"],
-    ["ui/app/pages/crm/logic/crm-positions.ts:21", "CrmIntegration.IntegrationId"], // object key
+    ["ui/app/pages/crm/logic/crm-positions.ts:21", "CrmIntegration.IntegrationId"], // object key mapped to a capability, not a label
     ["ui/app/pages/crm/logic/crm-positions.ts:22", "CrmIntegration.IntegrationId"], // template head building a path
     ["ui/app/pages/crm/logic/crm-positions.ts:23", "CrmConnector.ConnectorId"], // template tail
     ["ui/app/pages/crm/logic/crm-positions.ts:24", "CrmIntegration.Webhooks.HandlerId"], // template middle
@@ -1091,7 +1108,7 @@ test("MER-CP-001 names each copied id's qualified owner at its exact location", 
     ["ui/app/pages/crm/logic/crm-positions.ts:29", "TestCrmConnectionUseCase.ProbeId"], // || fallback
     ["ui/app/pages/crm/logic/crm-positions.ts:3", "CrmIntegration.IntegrationId"], // !==
     ["ui/app/pages/crm/logic/crm-positions.ts:30", "CrmIntegration.IntegrationId"], // new Set([…])
-    ["ui/app/pages/crm/logic/crm-positions.ts:31", "CrmConnector.ConnectorId"], // new Map([[…]])
+    ["ui/app/pages/crm/logic/crm-positions.ts:31", "CrmConnector.ConnectorId"], // new Map([[…]]) key mapped to a list, not a label
     ["ui/app/pages/crm/logic/crm-positions.ts:32", "TestCrmConnectionUseCase.ProbeId"], // a Set tested with .has
     ["ui/app/pages/crm/logic/crm-positions.ts:33", "CrmIntegration.Webhooks.HandlerId"], // array under an id-named property
     ["ui/app/pages/crm/logic/crm-positions.ts:34", "CrmIntegration.Webhooks.HandlerId"], // right side of =
@@ -1102,7 +1119,7 @@ test("MER-CP-001 names each copied id's qualified owner at its exact location", 
     ["ui/app/pages/crm/logic/crm-positions.ts:39", "CrmIntegration.Webhooks.HandlerId"], // default parameter
     ["ui/app/pages/crm/logic/crm-positions.ts:4", "CrmIntegration.IntegrationId"], // ==
     ["ui/app/pages/crm/logic/crm-positions.ts:40", "CrmConnector.ConnectorId"], // destructuring default
-    ["ui/app/pages/crm/logic/crm-positions.ts:41", "CrmIntegration.IntegrationId"], // class field
+    ["ui/app/pages/crm/logic/crm-positions.ts:41", "CrmIntegration.IntegrationId"], // class field under an id name
     ["ui/app/pages/crm/logic/crm-positions.ts:42", "TestCrmConnectionUseCase.ProbeId"], // <T> type assertion
     ["ui/app/pages/crm/logic/crm-positions.ts:43", "CrmIntegration.IntegrationId"], // assigned at a computed index of an id-named collection
     ["ui/app/pages/crm/logic/crm-positions.ts:44", "CrmIntegration.IntegrationId"], // right side of &&, held
@@ -1112,6 +1129,7 @@ test("MER-CP-001 names each copied id's qualified owner at its exact location", 
     ["ui/app/pages/crm/logic/crm-positions.ts:48", "CrmIntegration.IntegrationId"], // `test` + `id` after another word is no test hook
     ["ui/app/pages/crm/logic/crm-positions.ts:49", "CrmIntegration.IntegrationId"], // a ref array's element, by the ref's name
     ["ui/app/pages/crm/logic/crm-positions.ts:5", "CrmConnector.ConnectorId"], // !=
+    ["ui/app/pages/crm/logic/crm-positions.ts:50", "CrmIntegration.IntegrationId"], // static field, whatever its name
     ["ui/app/pages/crm/logic/crm-positions.ts:8", "CrmIntegration.Webhooks.HandlerId"], // case label
   ]);
   const good = JSON.parse(plumb(path.join(FIX, "MER-CP-001", "good"), "--rule", "MER-CP-001", "--json").stdout);

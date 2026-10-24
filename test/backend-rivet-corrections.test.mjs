@@ -227,7 +227,9 @@ test("MER-RV-007 flags every app-written RivetResult extension named like an ada
         "Modules/Common/HttpResultExtensions.cs:1",
         "Modules/Common/ResultExtensions.Actions.cs:1",
         "Modules/Common/ResultExtensions.cs:1",
-        // The app namespace after a `namespace Rivet.Shims { }` block; the shim itself is Rivet's.
+        // An app's own `namespace Rivet.Shims`: only `Rivet` itself is Rivet's.
+        "Modules/Common/RivetNamedShim.cs:4",
+        // The app namespace after a `namespace Rivet { }` block; the shim itself is Rivet's.
         "Modules/Common/Shims.cs:12",
         // A record after a class, its reference in the record's parameter list.
         "Modules/Common/WrapperRecord.cs:9",
@@ -241,6 +243,8 @@ test("MER-RV-007 flags every app-written RivetResult extension named like an ada
         "Modules/Orders/DerivedRelays.cs:21",
         "Modules/Orders/DerivedRelays.cs:33",
         "Modules/Orders/DerivedRelays.cs:6",
+        // Copied through a local, then built into a result.
+        "Modules/Orders/LocalCopyFilter.cs:4",
         "Modules/Orders/OrderResultExtensions.cs:1",
         // The outer class's method, after a nested class.
         "Modules/Orders/OuterRelay.cs:3",
@@ -264,6 +268,7 @@ test("MER-RV-007 flags every app-written RivetResult extension named like an ada
         "Modules/Common/AdapterStatus.cs:1 AdapterStatus",
         "Modules/Common/CastRelay.cs:4 CastRelay",
         "Modules/Common/ConstrainedRelay.cs:2 ConstrainedRelay",
+        "Modules/Common/RivetNamedShim.cs:4 Adapted",
         "Modules/Common/Shims.cs:12 Leak",
         "Modules/Common/WrapperRecord.cs:9 Wrapper",
         "Modules/Orders/AliasedRelay.cs:6 AliasedRelay",
@@ -271,6 +276,7 @@ test("MER-RV-007 flags every app-written RivetResult extension named like an ada
         "Modules/Orders/DerivedRelays.cs:21 EnvelopeFilter",
         "Modules/Orders/DerivedRelays.cs:33 LocalResponseFilter",
         "Modules/Orders/DerivedRelays.cs:6 DerivedRelayController",
+        "Modules/Orders/LocalCopyFilter.cs:4 LocalCopyFilter",
         "Modules/Orders/OuterRelay.cs:3 OuterRelay",
         "Modules/Orders/RelayController.cs:4 RelayController",
         "Modules/Orders/ResponseWritingFilter.cs:4 ResponseWritingFilter",

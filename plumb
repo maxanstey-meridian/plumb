@@ -182,6 +182,10 @@ function detectPacks(snapshot) {
   return packs;
 }
 
+// Whether an engine this run needed was missing or failed (ast-grep, a check script, or an in-process capability
+// that reported a diagnostic): some rules then found nothing for want of running, so a shrink can't be judged.
+let degraded = false;
+
 function runAstGrep(r, selected, allYaml) {
   if (!selected.length) return [];
   const args = selected.length === allYaml.length
@@ -190,9 +194,9 @@ function runAstGrep(r, selected, allYaml) {
   const started = performance.now();
   const out = spawnSync("ast-grep", args, { cwd: r, encoding: "utf8", maxBuffer: 64 * 1024 * 1024 });
   timings.astGrep.push({ ids: selected.flatMap((owner) => owner.ids), duration: elapsed(started) });
-  if (out.error) { console.error("plumb: ast-grep unavailable — YAML rules skipped"); return []; }
+  if (out.error) { degraded = true; console.error("plumb: ast-grep unavailable — YAML rules skipped"); return []; }
   let arr = [];
-  try { arr = JSON.parse(out.stdout || "[]"); } catch { return []; }
+  try { arr = JSON.parse(out.stdout || "[]"); } catch { degraded = true; return []; }
   return arr.map((m) => ({
     id: m.ruleId,
     sev: m.severity === "warning" ? "warn" : (m.severity || "error"),
@@ -213,6 +217,7 @@ function runChecks(r, selected, rivetVariant) {
     const duration = elapsed(started);
     (owner.ciOnly ? timings.external : timings.producers).push({ owner, duration });
     if (out.error || (out.status && out.status > 1)) {
+      degraded = true;
       console.error(`plumb: check ${owner.source} failed: ${out.error?.message || out.stderr}`);
       continue;
     }
@@ -300,6 +305,7 @@ async function scanAttempt(r, { allPacks = false, selectedRule = ruleFilter } = 
     timings.rules.push({ owner, duration: entry.duration });
   }
   for (const diagnostic of inProcess.diagnostics) process.stderr.write(`${diagnostic}\n`);
+  if (inProcess.diagnostics.length) degraded = true;
   timings.counters = snapshot.counters;
   let found = [...runAstGrep(r, selectedYaml, allYaml), ...inProcess.findings, ...runChecks(r, selectedScripts, rivet.variant)]
     .filter((f) => visibleFinding(r, visibility, f));
@@ -395,12 +401,13 @@ if (baselineFile) {
 // The baseline by its path inside the checked root (`.plumb-baseline.json`), or as given when it's elsewhere.
 const baselineName = baselineFile && (/^\.\.(?:[\\/]|$)/.test(path.relative(abs, path.resolve(baselineFile))) ? baselineFile : path.relative(abs, path.resolve(baselineFile)));
 // The baseline shrank when fewer of the findings it holds for the rules that ran came back. --exclude hides files
-// from every rule, so a run with it can't tell. A narrowed run says to ratchet down from a run of every rule.
+// from every rule, and a degraded run skipped some, so neither can tell. A narrowed run says to ratchet down from a
+// run of every rule.
 const shrunkHint = !narrowed ? " — shrunk; re-run --write-baseline to ratchet down"
   : ` — shrunk; ratchet down with --write-baseline on a run of every rule${ciOnlyHeld ? " with --ci" : ""}`;
 const baselineNote = baselineFile
   ? `+${baselined} baselined by ${baselineName}, baseline holds ${baselineTotal}` +
-    (baselined < ranTotal && !excludePatterns.length ? shrunkHint : "")
+    (baselined < ranTotal && !excludePatterns.length && !degraded ? shrunkHint : "")
   : null;
 const renderStarted = performance.now();
 if (json) {

@@ -195,6 +195,8 @@ test("TE-009 flags hand-written stand-ins, including json/body that replaces a f
     "ui/e2e/orders.spec.ts:11",
     "ui/e2e/orders.spec.ts:12",
     "ui/e2e/orders.spec.ts:15",
+    "ui/e2e/orders.spec.ts:23",
+    "ui/e2e/orders.spec.ts:29",
     "ui/e2e/orders.spec.ts:8",
   ]);
 

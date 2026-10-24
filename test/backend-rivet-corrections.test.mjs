@@ -2,6 +2,8 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
+import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -203,4 +205,49 @@ test("MER-RV-027 follows transport namesakes, checks PaginatedResponse, and asks
         [`${contract}:32`, "OrderSettingsDto.ReminderDays has a default on a response, so a builder can leave it out and still compile — remove the default (it's a request type too)"],
         [`${contract}:35`, "PaginatedResponse.Total has a default on a response"],
     ]);
+});
+
+// A throwaway repo holding only `files`, scanned for one rule.
+function scan(rule, files) {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "plumb-backend-"));
+    try {
+        for (const [file, content] of Object.entries(files)) {
+            fs.mkdirSync(path.dirname(path.join(root, file)), { recursive: true });
+            fs.writeFileSync(path.join(root, file), content);
+        }
+        const result = spawnSync(PLUMB, [root, "--rule", rule, "--ci", "--json"], { encoding: "utf8" });
+        assert.ok([0, 1].includes(result.status), result.stderr);
+        return JSON.parse(result.stdout).map((finding) => `${finding.location}\t${finding.message}`);
+    } finally {
+        fs.rmSync(root, { recursive: true, force: true });
+    }
+}
+
+test("MER-RV-027 resolves a shared name to the referrer's own contract feature and never flags ErrorResponse", () => {
+    const findings = scan("MER-RV-027", {
+        "api/Api.csproj": '<Project Sdk="Microsoft.NET.Sdk.Web" />\n',
+        "api/Contracts/Orders/OrdersContract.cs":
+            "[RivetContract]\npublic static class OrdersContract\n{\n" +
+            '    public static readonly RouteDefinition<OrderDto> Get = Define.Get<OrderDto>("/api/orders/{id}");\n' +
+            '    public static readonly RouteDefinition<ImportResponse> Import = Define.Post<ImportResponse>("/api/orders/import");\n}\n' +
+            "public sealed record OrderDto(Guid Id, string? Note = null);\n" +
+            "public sealed record ImportResponse(int Imported, IReadOnlyList<ErrorResponse> Failures);\n",
+        // Same name, published by the Orders module: the transport contract's own OrderDto is the one checked.
+        "api/Modules/Orders/Contracts/OrderDto.cs": "public sealed record OrderDto(Guid Id, string Note, int Version = 1);\n",
+        // A canonical ErrorResponse outside Common/ is still BE-054's to judge, not RV-027's.
+        "api/Contracts/Shared/ErrorResponse.cs":
+            "public sealed record ErrorResponse(string Code, string Message, IReadOnlyDictionary<string, string[]>? Errors = null);\n",
+    });
+    assert.equal(findings.length, 1, findings.join("\n"));
+    assert.match(findings[0], /^api\/Contracts\/Orders\/OrdersContract\.cs:7\tOrderDto\.Note has a default on a response/);
+});
+
+test("MER-BE-018 says 'declares itself' only for the namespace name, not a using on the same line", () => {
+    const findings = scan("MER-BE-018", {
+        "api/Api.csproj": '<Project Sdk="Microsoft.NET.Sdk.Web" />\n',
+        "api/Contracts/Orders/OrderModels.cs": "namespace App.Contracts.Orders;\npublic sealed record OrderDto(Guid Id);\n",
+        "api/Modules/Orders/Application/Uses.cs": "namespace App.Modules.Orders.Application { using App.Contracts.Orders; }\n",
+    });
+    assert.equal(findings.length, 1, findings.join("\n"));
+    assert.match(findings[0], /Uses\.cs:1\tmodule Orders Application uses App\.Contracts\.Orders, the API's transport contract/);
 });

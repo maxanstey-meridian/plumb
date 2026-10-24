@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { useCrmDestination } from "./crm/composables/useCrmDestination";
+import { useCrmDestination } from "./composables/useCrmDestination";
 
 const { destination, load } = useCrmDestination();
 await load();

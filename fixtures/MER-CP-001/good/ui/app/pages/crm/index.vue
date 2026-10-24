@@ -1,6 +1,6 @@
 <script setup lang="ts">
-import AcmeCrmPanel from "./crm/components/acme-crm/AcmeCrmPanel.vue";
-import { useCrmDestination } from "./crm/composables/useCrmDestination";
+import AcmeCrmPanel from "./components/acme-crm/AcmeCrmPanel.vue";
+import { useCrmDestination } from "./composables/useCrmDestination";
 
 const { destination, load } = useCrmDestination();
 await load();

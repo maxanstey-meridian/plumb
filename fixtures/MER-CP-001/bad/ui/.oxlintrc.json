@@ -1,1 +1,22 @@
-{ "ignorePatterns": ["app/generated/**"] }
+{
+  "categories": {
+    "correctness": "warn"
+  },
+  "rules": {
+    "no-unused-vars": "warn",
+    "curly": [
+      "error",
+      "all"
+    ],
+    "typescript/no-non-null-assertion": "error",
+    "typescript/consistent-type-assertions": [
+      "error",
+      {
+        "assertionStyle": "never"
+      }
+    ]
+  },
+  "ignorePatterns": [
+    "app/generated/**"
+  ]
+}

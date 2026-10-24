@@ -135,14 +135,15 @@ test("project references follow host case semantics", { skip: process.platform !
   assert.deepEqual(f.context.dotnetProjects.referencedProjects("src/App/App.csproj").map((project) => project.path), ["src/Data/Data.csproj"]);
 });
 
-test("test directories are whole tests/test segments or a .-_ suffix; test file names end Test(s).cs", () => {
-  const testDirectories = ["tests", "Tests", "test", "Orders.Tests", "integration-tests", "unit_tests"];
-  // IntegrationTests is deliberately not a test directory: test projects are sibling *.Tests projects.
-  const otherDirectories = ["Contests", "Latest", "LabTests", "IntegrationTests"];
+test("test directories are tests/test segments, separated or PascalCase *Tests suffixes outside Modules/; test file names end Test(s).cs", () => {
+  const testDirectories = ["tests", "Tests", "test", "Orders.Tests", "integration-tests", "unit_tests", "IntegrationTests", "App.IntegrationTests", "Foo.UnitTests"];
+  // Inside Modules/, Contracts/ or Common/ a *Tests folder is a feature name, not a test project.
+  const otherDirectories = ["Contests", "Latest", "Modules/LabTests", "Contracts/LabTests", "Modules/Lab/Application/BloodTests"];
   const f = fixture(new Map([...testDirectories, ...otherDirectories].map((segment) => [`api/${segment}/Orders.cs`, "class Orders {}"])), [Capability.CSHARP]);
   for (const [segments, expected] of [[testDirectories, true], [otherDirectories, false]]) {
     for (const segment of segments) {
-      assert.equal(isTestDirectory(segment), expected, segment);
+      const parts = ["api", ...segment.split("/")];
+      assert.equal(isTestDirectory(parts.at(-1), parts.slice(0, -1)), expected, segment);
       const classification = f.context.csharp.classify(f.context.file(`api/${segment}/Orders.cs`));
       assert.equal(classification.testPath, expected, segment);
       assert.equal(classification.testFileName, false, segment);

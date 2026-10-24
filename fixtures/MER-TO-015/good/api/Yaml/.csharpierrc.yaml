@@ -1,4 +1,4 @@
 overrides:
-- files: "*.cs"
+- files: "*.cst"
   printWidth: 80
 printWidth: 120

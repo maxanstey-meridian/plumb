@@ -15,3 +15,25 @@ test("lists orders", async ({ page }) => {
     await route.fulfill({ response, json: { id: "4" } });
   });
 });
+
+test("patches with a name that isn't the real body", async ({ page }) => {
+  await page.route("**/api/orders/5", async (route) => {
+    const response = await route.fetch();
+    const body = { id: "5" };
+    await route.fulfill({ response, json: { ...body, flagged: true } });
+  });
+  await page.route("**/api/orders/6", async (route) => {
+    const response = await route.fetch();
+    let real = await response.json();
+    real = { id: "6" };
+    await route.fulfill({ response, json: { ...real, flagged: true } });
+  });
+});
+
+test("reads the real body under the same name elsewhere", async ({ page }) => {
+  await page.route("**/api/orders/7", async (route) => {
+    const response = await route.fetch();
+    const body = await response.json();
+    await route.fulfill({ response, json: { ...body, flagged: true } });
+  });
+});

@@ -14,4 +14,13 @@ test("lists orders", async ({ page }) => {
     const response = await route.fetch();
     await route.fulfill({ response, json: { ...(await response.json()), flagged: true } });
   });
+  await page.route("**/api/orders/4", async (route) => {
+    const response = await route.fetch();
+    await route.fulfill({ response, json: { ...((await response.json()) satisfies OrderDto), flagged: true } });
+  });
+  await page.route("**/api/orders/5", async (route) => {
+    const response = await route.fetch();
+    const real: OrderDto = await response.json();
+    await route.fulfill({ response, json: { ...real, flagged: true } });
+  });
 });

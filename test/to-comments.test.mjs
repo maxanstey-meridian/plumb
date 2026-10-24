@@ -72,3 +72,11 @@ test("TO-015 ignores a max_line_length that isn't a positive integer and keeps t
   assert.deepEqual(reported.map((finding) => finding.location), ["api/Report.cs:3"]);
   assert.match(reported[0].message, /past the 100-character line width/);
 });
+
+test("MER-TO-015 reads .editorconfig keys case-insensitively", () => {
+  const root = repo({
+    ".editorconfig": "ROOT = true\n\n[*.cs]\nMax_Line_Length = 80\n",
+    "api/Note.cs": `${"// a few short words ".repeat(5).trimEnd()}\npublic static class Note;\n`,
+  });
+  assert.deepEqual(findings(root).map((finding) => finding.location), ["api/Note.cs:1"]);
+});

@@ -965,12 +965,12 @@ test("MER-CP-001 names each copied id's qualified owner at its exact location", 
   const findings = JSON.parse(plumb(path.join(FIX, "MER-CP-001", "bad"), "--rule", "MER-CP-001", "--json").stdout);
   const owner = (finding) => finding.message.match(/ is (\S+) on the server/)?.[1];
   assert.deepEqual(findings.map((finding) => [finding.location, owner(finding)]), [
-    ["ui/app/pages/crm.vue:14", "CrmIntegration.IntegrationId"],
-    ["ui/app/pages/crm.vue:15", "CrmIntegration.IntegrationId"],
-    ["ui/app/pages/crm.vue:6", "CrmIntegration.IntegrationId"],
-    ["ui/app/pages/crm.vue:7", "CrmIntegration.IntegrationId"],
-    ["ui/app/pages/crm.vue:8", "CrmConnector.ConnectorId"],
-    ["ui/app/pages/crm.vue:9", "CrmIntegration.Webhooks.HandlerId"],
+    ["ui/app/pages/crm/index.vue:14", "CrmIntegration.IntegrationId"],
+    ["ui/app/pages/crm/index.vue:15", "CrmIntegration.IntegrationId"],
+    ["ui/app/pages/crm/index.vue:6", "CrmIntegration.IntegrationId"],
+    ["ui/app/pages/crm/index.vue:7", "CrmIntegration.IntegrationId"],
+    ["ui/app/pages/crm/index.vue:8", "CrmConnector.ConnectorId"],
+    ["ui/app/pages/crm/index.vue:9", "CrmIntegration.Webhooks.HandlerId"],
   ]);
 });
 
@@ -984,4 +984,22 @@ test("MER-CP-001 skips frontend tests but not a tests/ route folder inside the a
   });
   const findings = JSON.parse(plumb(r, "--rule", "MER-CP-001", "--json").stdout);
   assert.deepEqual(findings.map((finding) => finding.location), ["app/pages/tests/index.vue:2"]);
+});
+
+test("MER-CP-001 reads constrained generics and `new` consts, and test paths relative to a nested frontend root", () => {
+  const r = repo([], {
+    "api/Modules/Crm/Contracts/Handlers.cs":
+      "public static class Handlers<T, U> where T : class where U : struct\n{\n" +
+      '    public new const string AId = "a-id";\n    new public const string BId = "b-id";\n    protected new const string CId = "c-id";\n}\n',
+    "src/web/nuxt.config.ts": "export default defineNuxtConfig({ ssr: false });\n",
+    "src/web/pages/index.vue": '<script setup lang="ts">\nconst ids = ["a-id", "b-id", "c-id"];\n</script>\n',
+    "src/web/tests/helpers.ts": 'export const id = "a-id";\n',
+    "tests/fixtures/basic/nuxt.config.ts": "export default defineNuxtConfig({ ssr: false });\n",
+    "tests/fixtures/basic/pages/index.vue": '<script setup lang="ts">\nconst id = "a-id";\n</script>\n',
+  });
+  const findings = JSON.parse(plumb(r, "--rule", "MER-CP-001", "--json").stdout);
+  assert.deepEqual(findings.map((finding) => [finding.location, finding.message.match(/ is (\S+) on the server/)?.[1]]), [
+    ["src/web/pages/index.vue:2", "Handlers.AId"],
+    ["src/web/pages/index.vue:2", "Handlers.BId"],
+  ]);
 });

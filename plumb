@@ -80,6 +80,8 @@ const failOn = parsed.values["fail-on"] ?? "error";
 const ruleFilter = parsed.values.rule ?? null;
 const packFilter = parsed.values.pack ? new Set(parsed.values.pack.split(",")) : null;
 const excludePatterns = parsed.values.exclude ?? [];
+// Whether --rule / --pack let a rule id through. Findings and the baseline's shrink check both read it.
+const ruleSelected = (id) => (!ruleFilter || id === ruleFilter) && (!packFilter || packFilter.has(id.split("-")[1]));
 let baselineFile = parsed.values.baseline ?? null;
 const noBaseline = parsed.values["no-baseline"] ?? false;
 const writeBaselineFile = parsed.values["write-baseline"] ?? null;
@@ -142,7 +144,7 @@ function detectPacks(snapshot) {
   const packs = new Set(["TO", "CP"]);
   let csproj = false, modules = false, rivet = false, nuxt = false, tests = false, bts = false;
   const btsDomain = new Set(), btsApp = new Set();
-  // A Nuxt app's src/app/ or domain/ tree is frontend code, which the BT rules skip, so it doesn't turn the pack on.
+  // A Nuxt app's src/app/ or domain/ tree is frontend code, not a TypeScript backend, so it doesn't turn the BT pack on.
   const files = { files: snapshot.files.map((file) => ({ ...file, text: () => snapshot.text(file) })) };
   const backendTree = (file) => !inNuxtFrontend(files, file);
   for (const file of snapshot.files) {
@@ -302,8 +304,7 @@ async function scanAttempt(r, { allPacks = false, selectedRule = ruleFilter } = 
   let found = [...runAstGrep(r, selectedYaml, allYaml), ...inProcess.findings, ...runChecks(r, selectedScripts, rivet.variant)]
     .filter((f) => visibleFinding(r, visibility, f));
   if (packs) found = found.filter((f) => packs.has(f.id.split("-")[1]));
-  if (ruleFilter) found = found.filter((f) => f.id === ruleFilter);
-  if (packFilter) found = found.filter((f) => packFilter.has(f.id.split("-")[1]));
+  found = found.filter((f) => ruleSelected(f.id));
   found.sort((a, b) => SEV[b.sev] - SEV[a.sev] || a.id.localeCompare(b.id) || a.loc.localeCompare(b.loc));
   return found;
   } finally {
@@ -369,17 +370,21 @@ if (writeBaselineFile) {
   emitProfile();
   process.exit(0);
 }
-let baselined = 0, baselineTotal = 0, ranTotal = 0;
+let baselined = 0, baselineTotal = 0, ranTotal = 0, narrowed = false, ciOnlyHeld = false;
 if (baselineFile) {
   let bl;
   try { bl = JSON.parse(fs.readFileSync(baselineFile, "utf8")); }
   catch (e) { console.error(`plumb: cannot read baseline ${baselineFile}: ${e.message}`); process.exit(2); }
   const allowance = { ...(bl.entries || {}) };
-  // The rules this run could have reported: all of them, less what --rule / --pack leave out and the CI-only ones
-  // a run without --ci skips. A rule that doesn't apply to the repo (its pack isn't detected) ran and found nothing.
-  const ranIds = new Set(catalogue.owners.filter((owner) => !owner.ciOnly || ci).flatMap((owner) => owner.ids)
-    .filter((id) => (!ruleFilter || id === ruleFilter) && (!packFilter || packFilter.has(id.split("-")[1]))));
-  ranTotal = Object.entries(allowance).filter(([key]) => ranIds.has(key.split("\t")[0])).reduce((sum, [, count]) => sum + count, 0);
+  // The entries for rules this run could have reported: all of them, less what --rule / --pack leave out and the
+  // CI-only ones a run without --ci skips. A rule that doesn't apply to the repo (its pack isn't detected) ran and
+  // found nothing; so did a rule the catalogue no longer has, whose entries can only go.
+  const ciOnly = (id) => catalogue.byRule.get(id)?.ciOnly ?? false;
+  const ran = (id) => ruleSelected(id) && (ci || !ciOnly(id));
+  ranTotal = Object.entries(allowance).filter(([key]) => ran(key.split("\t")[0])).reduce((sum, [, count]) => sum + count, 0);
+  ciOnlyHeld = Object.keys(allowance).some((key) => ciOnly(key.split("\t")[0]));
+  // --write-baseline writes only what the run found, so a run that left rules out would drop their entries.
+  narrowed = !!ruleFilter || !!packFilter || (ciOnlyHeld && !ci);
   baselineTotal = Object.values(allowance).reduce((a, b) => a + b, 0);
   findings = findings.filter((f) => {
     if (allowance[bKey(f)] > 0) { allowance[bKey(f)]--; baselined++; return false; }
@@ -387,13 +392,15 @@ if (baselineFile) {
   });
 }
 
-// The baseline shrank when fewer of the findings it holds for the rules that ran came back. --exclude hides files
-// from every rule, so a run with it can't tell.
 // The baseline by its path inside the checked root (`.plumb-baseline.json`), or as given when it's elsewhere.
 const baselineName = baselineFile && (/^\.\.(?:[\\/]|$)/.test(path.relative(abs, path.resolve(baselineFile))) ? baselineFile : path.relative(abs, path.resolve(baselineFile)));
+// The baseline shrank when fewer of the findings it holds for the rules that ran came back. --exclude hides files
+// from every rule, so a run with it can't tell. A narrowed run says to ratchet down from a run of every rule.
+const shrunkHint = !narrowed ? " — shrunk; re-run --write-baseline to ratchet down"
+  : ` — shrunk; ratchet down with --write-baseline on a run of every rule${ciOnlyHeld ? " with --ci" : ""}`;
 const baselineNote = baselineFile
   ? `+${baselined} baselined by ${baselineName}, baseline holds ${baselineTotal}` +
-    (baselined < ranTotal && !excludePatterns.length ? " — shrunk; re-run --write-baseline to ratchet down" : "")
+    (baselined < ranTotal && !excludePatterns.length ? shrunkHint : "")
   : null;
 const renderStarted = performance.now();
 if (json) {

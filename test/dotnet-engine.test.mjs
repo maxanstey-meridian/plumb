@@ -100,6 +100,30 @@ test("test evidence keeps project metadata, project name, path, and filename sig
   for (const name of ["ArchitectureTesting", "api.tests", "orders-test", "Orders_test"]) assert.equal(evidence(`names/${name}/A.cs`).projectNameContainsTest, true, name);
 });
 
+test("a project is test code by a test folder's name rule or a test framework package, not by `test` inside a word", () => {
+  const project = (packages) => `<Project><ItemGroup>${packages.map((name) => `<PackageReference Include="${name}" />`).join("")}</ItemGroup></Project>`;
+  const f = fixture(new Map([
+    ...["Contest", "Latest", "Attest", "App.Tests", "api-tests", "IntegrationTests"].flatMap((name) => [[`names/${name}/${name}.csproj`, "<Project />"], [`names/${name}/A.cs`, "class A {}"]]),
+    // A PascalCase `…Tests` inside the backend tree is a feature name, as for folders.
+    ["api/Modules/Lab/LabTests.csproj", "<Project />"],
+    ["api/Modules/Lab/A.cs", "class A {}"],
+    ["tunit/Checks.csproj", project(["TUnit"])],
+    ["tunit/A.cs", "class A {}"],
+    ["xunit3/Checks.csproj", project(["xunit.v3"])],
+    ["xunit3/A.cs", "class A {}"],
+    ["helpers/Checks.csproj", project(["xunit.abstractions", "NUnit3TestAdapter.Extras", "TUnitLike"])],
+    ["helpers/A.cs", "class A {}"],
+  ]), [Capability.DOTNET_PROJECTS]);
+  const evidence = (file) => f.context.dotnetProjects.testEvidence(f.context.file(file));
+  for (const name of ["Contest", "Latest", "Attest"]) assert.equal(evidence(`names/${name}/A.cs`).test, false, name);
+  for (const name of ["App.Tests", "api-tests", "IntegrationTests"]) assert.equal(evidence(`names/${name}/A.cs`).projectName, true, name);
+  assert.equal(evidence("api/Modules/Lab/A.cs").test, false);
+  assert.equal(evidence("tunit/A.cs").projectMetadata, true);
+  assert.equal(evidence("tunit/A.cs").test, true);
+  assert.equal(evidence("xunit3/A.cs").test, true);
+  assert.equal(evidence("helpers/A.cs").test, false);
+});
+
 test("one using parse with offsets serves the resolver and MER-BE-018: every C# directive form and every <Using> item form", () => {
   const props = '<Project>\n  <!-- <ItemGroup><Using Include="Commented.Out" /></ItemGroup> -->\n  <ItemGroup />\n' +
     "  <ItemGroup Label=\"a > b\">\n    <Using\n      Include=\"App.One; global::App.Two\" Alias='Two' />\n    <Using Include=\"App.Statics\" Static=\"true\" />\n" +

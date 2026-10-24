@@ -94,10 +94,10 @@ test("MER-BE-024 flags ambient time in a *Tests.cs file of a production project"
 });
 
 // A test project's files are test code wherever its folders sit (ArchitectureTesting/Modules/…), by its metadata.
-test("BE's layer, style and placement rules exempt a test project's files by project metadata, not only by test folder or file names", () => {
+test("BE's layer, module-shape, style and placement rules exempt a test project's files by project metadata, not only by test folder or file names", () => {
     const rules = ["MER-BE-001", "MER-BE-002", "MER-BE-003", "MER-BE-004", "MER-BE-005", "MER-BE-007", "MER-BE-008", "MER-BE-009",
-        "MER-BE-016", "MER-BE-020", "MER-BE-021", "MER-BE-022", "MER-BE-023", "MER-BE-024", "MER-BE-030", "MER-BE-031", "MER-BE-032",
-        "MER-BE-042", "MER-BE-053", "MER-BE-055", "MER-BE-060"];
+        "MER-BE-010", "MER-BE-011", "MER-BE-016", "MER-BE-017", "MER-BE-020", "MER-BE-021", "MER-BE-022", "MER-BE-023", "MER-BE-024",
+        "MER-BE-030", "MER-BE-031", "MER-BE-032", "MER-BE-042", "MER-BE-051", "MER-BE-052", "MER-BE-053", "MER-BE-055", "MER-BE-060"];
     for (const rule of rules) {
         const files = (project) => Object.fromEntries(fs.readdirSync(path.join(FIXTURES, rule, "bad"), { recursive: true })
             .filter((file) => fs.statSync(path.join(FIXTURES, rule, "bad", file)).isFile() && !file.endsWith(".csproj"))
@@ -106,6 +106,31 @@ test("BE's layer, style and placement rules exempt a test project's files by pro
         assert.notDeepEqual(scan(rule, files('<Project Sdk="Microsoft.NET.Sdk" />\n')), [], rule);
         assert.deepEqual(scan(rule, files('<Project Sdk="Microsoft.NET.Sdk"><PropertyGroup><IsTestProject>true</IsTestProject></PropertyGroup></Project>\n')), [], rule);
     }
+});
+
+const testProject = (references = "") => `<Project Sdk="Microsoft.NET.Sdk"><PropertyGroup><IsTestProject>true</IsTestProject></PropertyGroup><ItemGroup>${references}</ItemGroup></Project>\n`;
+
+// A test beside a module's code exercises the Common type; it doesn't make that module a second owner.
+test("MER-BE-006 leaves a test project under another module out of a Common type's consumers", () => {
+    assert.deepEqual(scan("MER-BE-006", {
+        "api/Api.csproj": '<Project Sdk="Microsoft.NET.Sdk" />\n',
+        "api/Common/Paging.cs": "namespace Acme.Common;\npublic sealed record Paging(int Page, int Size);\n",
+        "api/Modules/Forms/FormsQuery.cs": "using Acme.Common;\nnamespace Acme.Modules.Forms;\npublic sealed record FormsQuery(Paging Paging);\n",
+        "api/Modules/Users/Specs/Specs.csproj": testProject('<ProjectReference Include="../../../Api.csproj" />'),
+        "api/Modules/Users/Specs/PagingSpecs.cs": "using Acme.Common;\nnamespace Acme.Specs;\npublic sealed class PagingSpecs { public Paging Sample { get; } = new(1, 20); }\n",
+    }), ["api/Common/Paging.cs:0\tCommon type Paging is referenced only by module Forms — review ownership; move it only if Forms truly owns it"]);
+});
+
+// A test double named like an entity, in a test project's Modules/Forms/Domain/, doesn't make Forms the entity's owner.
+test("MER-BE-060 takes an entity's owner only from production Domain code", () => {
+    assert.deepEqual(scan("MER-BE-060", {
+        // Sorts before api/ either way, so it would be the first Domain match.
+        "acceptance/Acceptance.csproj": testProject(),
+        "acceptance/Modules/Forms/Domain/Form.cs": "namespace Acceptance.Modules.Forms.Domain;\npublic sealed class Form { }\n",
+        "api/Api.csproj": '<Project Sdk="Microsoft.NET.Sdk" />\n',
+        "api/Modules/Users/Domain/Form.cs": "namespace A.Modules.Users.Domain;\npublic sealed class Form { public int Id { get; set; } }\n",
+        "api/Modules/Users/Infrastructure/Persistence/FormEntityConfiguration.cs": "namespace A.Modules.Users.Infrastructure.Persistence;\npublic sealed class FormEntityConfiguration : IEntityTypeConfiguration<Form>\n{\n    public void Configure(EntityTypeBuilder<Form> builder) { }\n}\n",
+    }), []);
 });
 
 test("MER-BE-009 detects each System IServiceProvider spelling after masking comments and strings", () => {
@@ -178,13 +203,17 @@ test("MER-RV-006 finds multiline implicit-private behavior only in the attribute
     assert.match(output, /OrdersContract\.cs:4\t.*may contain only/);
 });
 
-test("MER-RV-007 flags every app-written RivetResult extension named like an adapter or returning an HTTP result, and any app code that reads RivetActionResult, and leaves Rivet's own adapters, helpers that call them, tests and mentions in comments or strings", () => {
+test("MER-RV-007 flags every app-written RivetResult extension named like an adapter or returning an HTTP result, and app code that copies RivetActionResult into a result of its own, by the type it's declared in, and leaves Rivet's own adapters, helpers that call them, filters that only read it, tests and mentions in comments or strings", () => {
+    // Good: a result filter that only logs the adapter's status, an attribute naming it above a class that builds
+    // no result, and a Verification/ project whose <IsTestProject> alone makes it test code.
     assert.equal(run("MER-RV-007", "good"), "");
     const output = run("MER-RV-007", "bad");
     const locations = [...output.matchAll(/^MER-RV-007\twarn\t(\S+)/gm)].map((match) => match[1]).sort();
     assert.deepEqual(locations, [
-        // A plain static helper that casts to RivetActionResult.
+        // A plain static helper that copies the adapter's output into an ObjectResult.
         "Modules/Common/AdapterStatus.cs:1",
+        // `where T : class where U : struct` declares no type named "where".
+        "Modules/Common/ConstrainedRelay.cs:2",
         // Bridges that call the adapter and rebuild its output or hand-write the error path, and a ToResult
         // namesake returning object. The bridges' RivetActionResult casts add no third finding.
         "Modules/Common/FunctionResultExtensions.cs:1",
@@ -193,19 +222,45 @@ test("MER-RV-007 flags every app-written RivetResult extension named like an ada
         "Modules/Common/HttpResultExtensions.cs:1",
         "Modules/Common/ResultExtensions.Actions.cs:1",
         "Modules/Common/ResultExtensions.cs:1",
+        // The app namespace after a `namespace Rivet.Shims { }` block; the shim itself is Rivet's.
+        "Modules/Common/Shims.cs:12",
+        // A record after a class, its reference in the record's parameter list.
+        "Modules/Common/WrapperRecord.cs:9",
+        // The adapter's output under a using alias; the alias line itself builds no result.
+        "Modules/Orders/AliasedRelay.cs:6",
+        // A bridge class, then a struct that copies the adapter's output: one finding each.
+        "Modules/Orders/BridgeThenStruct.cs:1",
+        "Modules/Orders/BridgeThenStruct.cs:7",
         "Modules/Orders/OrderResultExtensions.cs:1",
-        // An endpoint filter's `is global::Rivet.RivetActionResult` pattern.
+        // The outer class's method, after a nested class.
+        "Modules/Orders/OuterRelay.cs:3",
+        // An endpoint filter's `is global::Rivet.RivetActionResult` pattern rebuilt as Results.Json.
         "Modules/Orders/ResultStatusFilter.cs:4",
+        // A struct-only file: once, at the struct.
+        "Modules/Orders/StatusCopy.cs:4",
         // A typed Results<…> union, spaces in its generics.
         "Modules/Orders/TypedResultExtensions.cs:1",
         // A top-level statement in Program.cs, at its own line.
         "Program.cs:3",
     ]);
+    const copies = [...output.matchAll(/^MER-RV-007\twarn\t(\S+)\t(.+?) copies RivetActionResult/gm)].map((match) => `${match[1]} ${match[2]}`).sort();
+    assert.deepEqual(copies, [
+        "Modules/Common/AdapterStatus.cs:1 AdapterStatus",
+        "Modules/Common/ConstrainedRelay.cs:2 ConstrainedRelay",
+        "Modules/Common/Shims.cs:12 Leak",
+        "Modules/Common/WrapperRecord.cs:9 Wrapper",
+        "Modules/Orders/AliasedRelay.cs:6 AliasedRelay",
+        "Modules/Orders/BridgeThenStruct.cs:7 Relay",
+        "Modules/Orders/OuterRelay.cs:3 OuterRelay",
+        "Modules/Orders/ResultStatusFilter.cs:4 ResultStatusFilter",
+        "Modules/Orders/StatusCopy.cs:4 StatusCopy",
+        "Program.cs:3 This line",
+    ]);
     assert.match(output, /FunctionResultExtensions\.cs:1\tFunctionResultExtensions hand-writes an HTTP-result bridge off RivetResult \(ToResponse, Rebuild, ToHttp, OneArm\)/);
-    assert.match(output, /FunctionResultExtensions\.cs:1\tFunctionResultExtensions declares its own ToResult off RivetResult, so a handler's call may bind to it instead of Rivet's first-party adapter — rename or delete it\t/);
-    assert.match(output, /AdapterStatus\.cs:1\tAdapterStatus reads RivetActionResult, the output of Rivet's \.ToActionResult\(\) adapter, which only a hand-written bridge needs — return \.ToResult\(\)\/\.ToActionResult\(\) directly instead\trivet\.md#minimal-apis$/m);
-    assert.match(output, /Program\.cs:3\tCode outside any class reads RivetActionResult/);
-    assert.match(output, /HttpResultExtensions\.cs:1\tHttpResultExtensions hand-writes an HTTP-result bridge off RivetResult \(ToHttpResult, Respond\) — delete it and use Rivet's first-party \.ToResult\(\)\/\.ToActionResult\(\) adapters\t/);
+    assert.match(output, /FunctionResultExtensions\.cs:1\tFunctionResultExtensions declares its own ToResult off RivetResult, so a handler's call may bind to it instead of Rivet's first-party adapter — rename or delete it\trivet\.md#minimal-apis$/m);
+    assert.match(output, /AdapterStatus\.cs:1\tAdapterStatus copies RivetActionResult, the output of Rivet's \.ToActionResult\(\) adapter, into an HTTP result of its own — a hand-written bridge; return \.ToResult\(\)\/\.ToActionResult\(\) directly, and at most read its StatusCode or Value\trivet\.md#anti-patterns$/m);
+    assert.match(output, /BridgeThenStruct\.cs:1\tStructBridgeExtensions hand-writes an HTTP-result bridge off RivetResult \(ToHttp\)/);
+    assert.match(output, /HttpResultExtensions\.cs:1\tHttpResultExtensions hand-writes an HTTP-result bridge off RivetResult \(ToHttpResult, Respond\) — delete it and use Rivet's first-party \.ToResult\(\)\/\.ToActionResult\(\) adapters\trivet\.md#minimal-apis$/m);
 });
 
 test("MER-RV-008 ignores MapGroup, reports handlers, and does not accept commented composition", () => {

@@ -1,6 +1,11 @@
+<script setup lang="ts">
+import AcmeCrmPanel from "./acme-crm/AcmeCrmPanel.vue";
+</script>
+
 <template>
-  <section class="acme-crm" icon="acme-connector" subject="acme-crm" noun="acme-webhook">
-    <AcmeCrmPanel :noun="'acme-crm'" :subject="`acme-connector`" />
-    {{ 'acme-webhook' }}
+  <section class="export" icon="export" subject="export" noun="export" title="export" data-testid="export">
+    <AcmeCrmPanel :noun="'export'" :subject="`export`" :type-label="'export'" />
+    <span id="export">{{ 'export' }}</span>
+    <button type="button" :title="'Choose import/export'">Export</button>
   </section>
 </template>

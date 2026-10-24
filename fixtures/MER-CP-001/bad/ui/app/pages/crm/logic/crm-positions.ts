@@ -22,3 +22,21 @@ export const panels = { "acme-crm": "AcmeCrmPanel" };
 export const settingsLink = (tab: string) => `/settings/acme-crm/${tab}`;
 export const connectorLink = (base: string) => `${base}/acme-connector`;
 export const webhookLink = (base: string, tab: string) => `${base}/acme-webhook/${tab}`;
+export enum CrmKind { Crm = "acme-crm" }
+export const pickKind = (flag: boolean) => { const kind = flag ? "acme-crm" : null; return kind; };
+export const pickedKind = (flag: boolean) => ({ kind: flag ? "acme-connector" : "other" });
+export const fallbackHandler = (id: string | null) => { const handler = id ?? "acme-webhook"; return handler; };
+export const orProbe = (id: string) => { const probe = id || "acme-probe"; return probe; };
+export const CRM_SET = new Set(["acme-crm"]);
+export const CRM_PANELS = new Map([["acme-connector", "ConnectorPanel"]]);
+export const inSet = (id: string) => new Set(["acme-probe"]).has(id);
+export const handlers = { handlerIds: ["acme-webhook"] };
+export const select = (state: { handlerId: string }) => { state.handlerId = "acme-webhook"; };
+export const panelOf = (map: Record<string, string>) => map["acme-crm"];
+export const computedKey = { ["acme-connector"]: 1 };
+export const computedIdName = { ["handlerId"]: "acme-webhook" };
+export const hasCrm = (map: object) => "acme-crm" in map;
+export const openWith = (kind = "acme-webhook") => kind;
+export const openFrom = ({ kind = "acme-connector" }: { kind?: string }) => kind;
+export class CrmPanel { readonly kind = "acme-crm"; }
+export const asserted = <string>"acme-probe";

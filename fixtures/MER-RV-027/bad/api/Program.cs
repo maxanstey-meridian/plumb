@@ -11,10 +11,6 @@ builder.Services.AddControllers().AddJsonOptions(options =>
 var app = builder.Build();
 app.Run();
 
-static class Wire
-{
-    public static readonly JsonSerializerOptions Options = new()
-    {
-        DefaultIgnoreCondition = global::System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull,
-    };
-}
+[JsonSourceGenerationOptions(DefaultIgnoreCondition = global::System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+[JsonSerializable(typeof(object))]
+partial class WireContext : JsonSerializerContext;

@@ -168,11 +168,13 @@ test("MER-RV-006 finds multiline implicit-private behavior only in the attribute
     assert.match(output, /OrdersContract\.cs:4\t.*may contain only/);
 });
 
-test("MER-RV-007 flags every app-written RivetResult extension returning an HTTP result, whatever its name, and leaves Rivet's own adapters", () => {
+test("MER-RV-007 flags every app-written RivetResult extension named like an adapter or returning an HTTP result, and leaves Rivet's own adapters and helpers that call them", () => {
     assert.equal(run("MER-RV-007", "good"), "");
     const output = run("MER-RV-007", "bad");
     const locations = [...output.matchAll(/^MER-RV-007\twarn\t(\S+)/gm)].map((match) => match[1]).sort();
     assert.deepEqual(locations, [
+        // ToResponse returning Task<HttpResponseData>, and a ToResult returning object.
+        "Modules/Common/FunctionResultExtensions.cs:1",
         // ToHttpResult returning IResult, and Respond returning ValueTask<HttpResults.Ok<T>>.
         "Modules/Common/HttpResultExtensions.cs:1",
         "Modules/Common/ResultExtensions.Actions.cs:1",
@@ -181,6 +183,7 @@ test("MER-RV-007 flags every app-written RivetResult extension returning an HTTP
         // A typed Results<…> union, spaces in its generics.
         "Modules/Orders/TypedResultExtensions.cs:1",
     ]);
+    assert.match(output, /FunctionResultExtensions\.cs:1\tFunctionResultExtensions hand-writes an HTTP-result bridge off RivetResult \(ToResponse, ToResult\)/);
     assert.match(output, /HttpResultExtensions\.cs:1\tHttpResultExtensions hand-writes an HTTP-result bridge off RivetResult \(ToHttpResult, Respond\) — delete it and use Rivet's first-party \.ToResult\(\)\/\.ToActionResult\(\) adapters\t/);
 });
 
@@ -281,21 +284,21 @@ test("MER-RV-027 follows transport namesakes and .Returns<T> payloads, checks Pa
         ["api/Modules/Connectors/Contracts/ConnectorManifest.cs:4", "ConnectorManifest.Returns has a default on a response"],
         ["api/Modules/Connectors/Contracts/ConnectorManifest.cs:6", "ConnectorStep.Order has a default on a response"],
         // Responses whose fields are properties, and the attributes and defaults on those properties.
-        ["api/Contracts/Orders/OrderSummaryContract.cs:17", "OrderSummaryView is a class with properties on a response"],
+        ["api/Contracts/Orders/OrderSummaryContract.cs:17", "Response type OrderSummaryView is a class with properties, so a builder"],
         ["api/Contracts/Orders/OrderSummaryContract.cs:21", "OrderSummaryView.Note is [JsonIgnore(Condition = WhenWritingNull)] on a response"],
         ["api/Contracts/Orders/OrderSummaryContract.cs:24", "OrderSummaryView.Priority is [RivetOptional] on a response"],
         ["api/Contracts/Orders/OrderSummaryContract.cs:41", "OrderTotalsView.Currency has a default on a response"],
-        ["api/Contracts/Orders/OrderSummaryContract.cs:46", "OrderHistoryDto is a record whose fields are properties on a response"],
+        ["api/Contracts/Orders/OrderSummaryContract.cs:46", "Response type OrderHistoryDto is a record whose fields are properties, so a builder"],
         ["api/Contracts/Orders/OrderSummaryContract.cs:50", "Entry.By has a default on a response"],
-        ["api/Contracts/Orders/OrderSummaryContract.cs:54", "OrderTagsView is a class with properties on a response"],
+        ["api/Contracts/Orders/OrderSummaryContract.cs:54", "Response type OrderTagsView is a class with properties, so a builder"],
         ["api/Contracts/Orders/OrderSummaryContract.cs:61", "OrderTagsView.Colour is [RivetOptional] on a response"],
-        // A global DefaultIgnoreCondition drops fields from every response.
-        ["api/Program.cs:5", "DefaultIgnoreCondition = WhenWritingNull drops every null field from every response"],
-        ["api/Program.cs:8", "DefaultIgnoreCondition = WhenWritingDefault drops every field holding its type's default"],
-        ["api/Program.cs:18", "DefaultIgnoreCondition = WhenWritingNull drops every null field from every response"],
+        // A DefaultIgnoreCondition in the host's JSON options drops fields from every response.
+        ["api/Program.cs:5", "DefaultIgnoreCondition = WhenWritingNull in the host's JSON options drops every null field from every response"],
+        ["api/Program.cs:8", "DefaultIgnoreCondition = WhenWritingDefault in the host's JSON options drops every field holding its type's default"],
+        ["api/Program.cs:14", "DefaultIgnoreCondition = WhenWritingNull in the host's JSON options drops every null field from every response"],
         // Settable body properties on positional records, and union cases reached through [JsonDerivedType].
-        ["api/Contracts/Orders/OrderEventsContract.cs:15", "OrderEventDto.Actor is a body property on a response record"],
-        ["api/Contracts/Orders/OrderEventsContract.cs:17", "OrderEventDto.Sequence is a body property on a response record"],
+        ["api/Contracts/Orders/OrderEventsContract.cs:15", "OrderEventDto.Actor is set in the record body"],
+        ["api/Contracts/Orders/OrderEventsContract.cs:17", "OrderEventDto.Sequence is set in the record body"],
         ["api/Contracts/Orders/OrderEventsContract.cs:17", "OrderEventDto.Sequence is [RivetOptional] on a response"],
         ["api/Contracts/Orders/OrderEventsContract.cs:35", "Placed.Channel has a default and is [RivetOptional] on a response"],
         ["api/Contracts/Orders/OrderEventsContract.cs:42", "OrderCancelled.Reason has a default on a response"],
@@ -389,7 +392,7 @@ test("MER-BE-018 reads every <Using> form and global using statement, and exempt
             // A self-closing group has no body; the test-only group after it keeps its Condition.
             "  <ItemGroup />\n  <ItemGroup Condition=\"'$(IsTestProject)' == 'true' \">\n    <Using Include=\"App.Contracts.Orders\" />\n  </ItemGroup>\n</Project>\n",
         "api/Contracts/Orders/OrderModels.cs": "namespace App.Contracts.Orders;\npublic sealed record OrderDto(Guid Id);\npublic sealed record Page<T>(T Item);\n",
-        "api/GlobalUsings.cs": "global using System; global using static App.Contracts.Orders.OrderDto;\nglobal using Wire = App.Contracts.Orders.Page<App.Contracts.Orders.OrderDto>;\n",
+        "api/GlobalUsings.cs": "global using System; global using static App.Contracts.Orders.OrderDto;\nglobal using Wire = App.Contracts.Orders.Page<App.Contracts.Orders.OrderDto>;\nglobal using Dtos = App.Contracts.Orders.OrderDto[];\n",
         // SDK-generated build output repeats the project's usings.
         "api/obj/Debug/net10.0/Api.GlobalUsings.g.cs": "global using global::App.Contracts.Orders;\n",
         // A test project known only by its test SDK, not by its folder or file names.
@@ -407,6 +410,7 @@ test("MER-BE-018 reads every <Using> form and global using statement, and exempt
         "api/Api.csproj:3\t<Using Include=\"App.Contracts.Orders\">",
         "api/GlobalUsings.cs:1\tglobal using static App.Contracts.Orders.OrderDto",
         "api/GlobalUsings.cs:2\tglobal using Wire = App.Contracts.Orders.Page<App.Contracts.Orders.OrderDto>",
+        "api/GlobalUsings.cs:3\tglobal using Dtos = App.Contracts.Orders.OrderDto[]",
         "api/Modules/Orders/Application/Usings.cs:1\tglobal using Wire = App.Contracts.Orders.OrderDto",
         "api/Modules/Payments/Infrastructure/GovUkPayConnectionTest.cs:1\tmodule Payments Infrastructure uses App.Contracts.Orders, the API's transport contract — map at the edge (a controller, endpoint, request validator or transport mapper at the module root or under Contracts/) and keep the module on its own types",
     ]);

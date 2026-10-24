@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// The BT, FE-043 and RV-021 rules read test code through the shared isTypeScriptTestSource definition
+// The BT, FE-043 and RV-021 rules read test code through the shared isTestScript definition
 // (testing-philosophy.md#test-location): a package's top-level test/, tests/ and e2e/ trees are tests, and a
 // test/ or tests/ folder inside the app tree is production code.
 import { test } from "node:test";
@@ -69,6 +69,22 @@ test("the BT pack takes a workspace package's own test/ tree as its package's te
         "packages/api/src/tests/env.ts": "export const mode = process.env.MODE;\n",
     }, ["--rule", "MER-BT-017"]);
     assert.deepEqual(findings, ["MER-BT-017\tpackages/api/src/tests/env.ts:1"]);
+});
+
+test("the BT pack measures a test tree from a Nuxt root that has no package.json, and a settings-only pnpm-workspace.yaml leaves its package a package", () => {
+    // A Nuxt app nested in a repo package without its own package.json: its tests/ tree is tests for every rule.
+    assert.deepEqual(scan({
+        "package.json": '{"name":"repo"}\n',
+        "web/nuxt.config.ts": "export default {}\n",
+        "web/tests/support/env.ts": "export const mode = process.env.MODE;\n",
+    }, ["--rule", "MER-BT-017"]), []);
+    // pnpm keeps settings in pnpm-workspace.yaml too; without `packages:` it declares no workspace, so lib/test/ is
+    // a folder inside the package, not its top-level test tree.
+    assert.deepEqual(scan({
+        "package.json": '{"name":"tool"}\n',
+        "pnpm-workspace.yaml": "onlyBuiltDependencies:\n  - esbuild\n",
+        "lib/test/env.ts": "export const mode = process.env.MODE;\n",
+    }, ["--rule", "MER-BT-017"]), ["MER-BT-017\tlib/test/env.ts:1"]);
 });
 
 test("MER-FE-043 exempts the frontend root's tests/ and e2e/ trees but checks a tests/ folder inside the app", () => {

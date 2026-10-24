@@ -10,3 +10,9 @@ builder.Services.AddControllers().AddNewtonsoftJson(options => options.Serialize
 
 var app = builder.Build();
 app.Run();
+
+// An adapter's own options write what it sends to another service, not a response.
+static class Outbound
+{
+    public static readonly System.Text.Json.JsonSerializerOptions Options = new() { DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull };
+}

@@ -16,10 +16,10 @@ const DOC_REF = "rivet.md#route-payload-ownership";
 const omitNull = "is [JsonIgnore(Condition = WhenWritingNull)] on a response, so the server drops it from the JSON when it is null and the client sees the field as optional — remove the attribute so it is always sent";
 const optional = "is [RivetOptional] on a response, so the client type marks it optional though the server always sends it — drop the attribute";
 const defaulted = "has a default on a response, so a builder can leave it out and still compile — remove the default";
-const positional = "on a response — declare it as a positional record so every field is always sent";
-const bodyProperty = "is a body property on a response record, so it sits outside the positional parameters — move it into the parameter list so every field is always sent";
-const globalNull = "DefaultIgnoreCondition = WhenWritingNull drops every null field from every response this serializer writes, so the client sees all of them as optional — remove it so every field is always sent";
-const globalDefault = "DefaultIgnoreCondition = WhenWritingDefault drops every field holding its type's default (null, 0, false…) from every response this serializer writes, so the client sees all of them as optional — remove it so every field is always sent";
+const positional = ", so a builder can leave a field out and still compile — declare it as a positional record";
+const bodyProperty = "is set in the record body, so a builder can leave it out and still compile — move it into the parameter list";
+const globalNull = "DefaultIgnoreCondition = WhenWritingNull in the host's JSON options drops every null field from every response, so the client sees all of them as optional — remove it so every field is always sent";
+const globalDefault = "DefaultIgnoreCondition = WhenWritingDefault in the host's JSON options drops every field holding its type's default (null, 0, false…) from every response, so the client sees all of them as optional — remove it so every field is always sent";
 
 // Every RV-027 finding for a repo root, as `location<TAB>message`, sorted; severity and docRef are checked here.
 function findings(root) {
@@ -66,14 +66,14 @@ test("MER-RV-027 fixtures: the good tree stays clean and the bad tree pins the p
     const summary = "api/Contracts/Orders/OrderSummaryContract.cs";
     const events = "api/Contracts/Orders/OrderEventsContract.cs";
     for (const expected of [
-        `${summary}:17\tOrderSummaryView is a class with properties ${positional}`,
+        `${summary}:17\tResponse type OrderSummaryView is a class with properties${positional}`,
         `${summary}:21\tOrderSummaryView.Note ${omitNull}`,
         `${summary}:24\tOrderSummaryView.Priority ${optional}`,
         // Followed through a property; InternalAudit sits behind an unconditional [JsonIgnore], so it isn't.
         `${summary}:41\tOrderTotalsView.Currency ${defaulted}`,
-        `${summary}:46\tOrderHistoryDto is a record whose fields are properties ${positional}`,
+        `${summary}:46\tResponse type OrderHistoryDto is a record whose fields are properties${positional}`,
         `${summary}:50\tEntry.By ${defaulted}`,
-        `${summary}:54\tOrderTagsView is a class with properties ${positional}`,
+        `${summary}:54\tResponse type OrderTagsView is a class with properties${positional}`,
         `${summary}:61\tOrderTagsView.Colour ${optional}`,
         // Settable body auto-properties of a positional record; computed, get-only and privately set ones aren't.
         `${events}:15\tOrderEventDto.Actor ${bodyProperty}`,
@@ -84,11 +84,11 @@ test("MER-RV-027 fixtures: the good tree stays clean and the bad tree pins the p
         `${events}:42\tOrderCancelled.Reason ${defaulted}`,
         `api/Program.cs:5\t${globalNull}`,
         `api/Program.cs:8\t${globalDefault}`,
-        `api/Program.cs:18\t${globalNull}`,
+        `api/Program.cs:14\t${globalNull}`,
     ]) assert.ok(bad.includes(expected), `missing ${expected}\n${bad.join("\n")}`);
 });
 
-test("MER-RV-027 flags a global DefaultIgnoreCondition in every options form, bare or qualified, and nothing that only reads or names it", () => {
+test("MER-RV-027 flags a DefaultIgnoreCondition in every host JSON options form, bare or qualified, and nothing that only reads or names it", () => {
     const actual = scan({
         "api/Api.csproj": webProject,
         "api/Contracts/Orders/OrdersContract.cs": contract("OrderDto", "public sealed record OrderDto(Guid Id);"),
@@ -97,7 +97,11 @@ test("MER-RV-027 flags a global DefaultIgnoreCondition in every options form, ba
             "builder.Services.ConfigureHttpJsonOptions(o => o.SerializerOptions.DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull);",
             "builder.Services.AddControllers().AddJsonOptions(o => o.JsonSerializerOptions.DefaultIgnoreCondition =",
             "    System.Text.Json.Serialization.JsonIgnoreCondition . WhenWritingDefault);",
-            "var options = new JsonSerializerOptions { DefaultIgnoreCondition = global::System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull };",
+            "builder.Services.Configure<Microsoft.AspNetCore.Http.Json.JsonOptions>(o => o.SerializerOptions.DefaultIgnoreCondition = global::System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull);",
+            "builder.Services.PostConfigure<JsonOptions>(o =>",
+            "    o.JsonSerializerOptions.DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingDefault);",
+            // An adapter's own options write what it sends elsewhere, not a response.
+            "var options = new JsonSerializerOptions { DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull };",
             "options.DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingDefault;",
             // Never, a comparison, a comment, a string and Newtonsoft's setting drop nothing from a response.
             "options.DefaultIgnoreCondition = JsonIgnoreCondition.Never;",
@@ -106,25 +110,28 @@ test("MER-RV-027 flags a global DefaultIgnoreCondition in every options form, ba
             "// options.DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull;",
             'var text = "DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull";',
             "settings.NullValueHandling = NullValueHandling.Ignore;",
+            "[JsonSourceGenerationOptions(DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull)]",
+            "partial class Wire : JsonSerializerContext;",
         ],
     });
     assert.deepEqual(actual, sorted([
         `api/Program.cs:2\t${globalNull}`,
         `api/Program.cs:3\t${globalDefault}`,
         `api/Program.cs:5\t${globalNull}`,
-        `api/Program.cs:6\t${globalDefault}`,
+        `api/Program.cs:7\t${globalDefault}`,
+        `api/Program.cs:16\t${globalNull}`,
     ]));
 });
 
 test("MER-RV-027 reads a global DefaultIgnoreCondition only where Rivet responses are served, never in test code", () => {
-    const setting = (namespace) => [`namespace ${namespace};`, "static class Json", "{", "    public static readonly JsonSerializerOptions Options = new() { DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull };", "}"];
+    const setting = (namespace) => [`namespace ${namespace};`, "static class Json", "{", "    public static void Use(IServiceCollection services) => services.ConfigureHttpJsonOptions(o => o.SerializerOptions.DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull);", "}"];
     const files = {
-        // The host references the contracts project, so its options write the responses.
+        // The host references the contracts project, so its JSON options write the responses.
         "src/Contracts/Contracts.csproj": '<Project Sdk="Microsoft.NET.Sdk" />\n',
         "src/Contracts/Orders/OrdersContract.cs": contract("OrderDto", "public sealed record OrderDto(Guid Id);"),
         "src/Host/Host.csproj": '<Project Sdk="Microsoft.NET.Sdk.Web"><ItemGroup><ProjectReference Include="../Contracts/Contracts.csproj" /></ItemGroup></Project>\n',
         "src/Host/Json.cs": setting("App.Host"),
-        // A tool beside them writes files, not responses.
+        // A tool beside them configures a host that serves no Rivet response.
         "src/Tool/Tool.csproj": '<Project Sdk="Microsoft.NET.Sdk" />\n',
         "src/Tool/Json.cs": setting("App.Tool"),
         // A test project known only by its test SDK (not its folder or file name) is test code.
@@ -182,12 +189,12 @@ test("MER-RV-027 flags a class, struct or property record response once and read
     });
     const at = (line, message) => `api/Contracts/Orders/OrdersContract.cs:${line}\t${message}`;
     assert.deepEqual(actual, sorted([
-        at(7, `OrderView is a class with properties ${positional}`),
+        at(7, `Response type OrderView is a class with properties${positional}`),
         at(10, "OrderView.Id is [JsonIgnore(Condition = WhenWritingDefault)] on a response, so the server drops it from the JSON when it holds its type's default (null, 0, false…) and the client sees the field as optional — remove the attribute so it is always sent"),
         at(11, `OrderView.Note ${omitNull}`),
         at(13, `OrderView.Priority ${optional}`),
         at(30, `Parts.Count ${defaulted}`),
-        at(33, `OrderStamp is a struct with properties ${positional}`),
+        at(33, `Response type OrderStamp is a struct with properties${positional}`),
     ]));
 });
 
@@ -223,9 +230,9 @@ test("MER-RV-027 skips property types never sent, fieldless and abstract-only ty
     });
     const at = (line, message) => `api/Contracts/Orders/OrdersContract.cs:${line}\t${message}`;
     assert.deepEqual(actual, sorted([
-        at(9, `OrderView is a class with properties ${positional}`),
+        at(9, `Response type OrderView is a class with properties${positional}`),
         // Kind's [JsonIgnore(Condition = Never)] property is always sent, so its class is followed.
-        at(21, `Kind is a class with properties ${positional}`),
+        at(21, `Response type Kind is a class with properties${positional}`),
     ]));
 });
 
@@ -259,7 +266,7 @@ test("MER-RV-027 merges a partial response's parts, leaves a request-only class 
         `api/Contracts/Orders/NoteView.Tags.cs:4\tNoteView.Tags ${optional}`,
         `api/Contracts/Orders/NoteView.Tags.cs:4\tNoteView.Tags ${bodyProperty}`,
         `api/Contracts/Orders/NoteView.Tags.cs:6\tTag.Name ${defaulted}`,
-        `api/Contracts/Orders/OrdersContract.cs:10\tNoteSettings is a class with properties ${positional} (it's a request type too)`,
+        `api/Contracts/Orders/OrdersContract.cs:10\tResponse type NoteSettings is a class with properties${positional} (it's a request type too)`,
     ]));
 });
 
@@ -368,5 +375,42 @@ test("MER-RV-027 flags a positional response record's settable body auto-propert
         at(10, `OrderDto.Count ${bodyProperty}`),
         at(11, `OrderDto.Tag ${bodyProperty}`),
         at(11, `OrderDto.Tag ${omitNull}`),
+    ]));
+});
+
+test("MER-RV-027 skips ignored, redeclared and converter-written members, reads array properties, and reads past a method with a default", () => {
+    const actual = scan({
+        "api/Api.csproj": webProject,
+        "api/Contracts/Orders/OrdersContract.cs": contract("OrderDto",
+            "public sealed record OrderDto(string Name, Money Total, Stamp At) : Base",
+            "{",
+            "    [JsonIgnore] public string? CacheKey { get; init; }",
+            "    [JsonPropertyName(\"n\")] public string Name { get; init; } = Name;",
+            "    public string Describe(int indent = 0) { return Name; }",
+            "    public required OrderLine[] Lines { get; init; }",
+            "}",
+            "public abstract record Base { [JsonIgnore] public string? Etag { get; init; } }",
+            "public sealed class OrderLine { public string Text { get; init; } = \"\"; }",
+            // A converter writes the type's JSON itself, on the type or on the member that holds it.
+            "[JsonConverter(typeof(MoneyConverter))]",
+            "public readonly struct Money { public decimal Amount { get; init; } }",
+            "public sealed class Stamp { public DateTimeOffset At { get; init; } }",
+        ),
+        "api/Contracts/Orders/HolderContract.cs": [
+            "namespace App.Contracts.Orders;",
+            "[RivetContract]",
+            "public static class HolderContract",
+            "{",
+            '    public static readonly RouteDefinition<HolderView> Get = Define.Get<HolderView>("/api/holders/{id}");',
+            "}",
+            "public sealed record HolderView([property: JsonConverter(typeof(StampConverter))] Stamp At);",
+        ],
+    });
+    const at = (line, message) => `api/Contracts/Orders/OrdersContract.cs:${line}\t${message}`;
+    assert.deepEqual(actual, sorted([
+        at(12, `OrderDto.Lines ${bodyProperty}`),
+        at(15, `Response type OrderLine is a class with properties${positional}`),
+        // OrderDto's own Stamp has no converter, so it is followed; HolderView's is written by one.
+        at(18, `Response type Stamp is a class with properties${positional}`),
     ]));
 });

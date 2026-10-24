@@ -299,6 +299,8 @@ test("C# type names resolve the way the compiler looks them up: nested types, na
     ["api/Nested.cs", "namespace App.Contracts.Orders;\npublic sealed record Shipment(IReadOnlyList<Parcel> Parcels)\n{\n    public sealed record Parcel(int Weight);\n}\n" +
       "public sealed record Crate(IReadOnlyList<Box> Boxes)\n{\n    public sealed record Box(int Size);\n}\npublic sealed record Box(int Size = 0);\n"],
     ["api/Pragma.cs", "#nullable enable\nrecord Loose(int A);\n#region Response record types\n#endregion\n"],
+    ["api/Shadow.cs", "using Inner = App.Wire.Envelope;\nusing Paging = App.Wire.Envelope;\nusing Envelopes = App.Wire.Envelope[];\nnamespace App.Contracts.Orders;\n" +
+      "public static class Shadow\n{\n    public sealed record Inner(int A);\n    public sealed record UsesInner(Inner Value);\n}\npublic sealed record UsesPaging(Paging P, Envelopes E);\n"],
     ["api/Usings.cs", "global using App.Globals;\n"],
     ["api/Globals/Flag.cs", "namespace App.Globals;\npublic sealed record Flag(bool On);\n"],
     ["Directory.Build.props", '<Project><ItemGroup><Using Include="App.Props" /></ItemGroup></Project>'],
@@ -336,6 +338,12 @@ test("C# type names resolve the way the compiler looks them up: nested types, na
   const outer = file("api/Outer.cs");
   assert.equal(resolved("Inner", outer, outer.text().indexOf("UsesInner")), "App.Contracts.Orders.Outer.Inner");
   assert.equal(resolved("Inner", outer, outer.text().lastIndexOf("record Inner")), "App.Contracts.Orders.Inner");
+  // A file's aliases come after enclosing types and every enclosing namespace's own members; an array alias
+  // names its element type.
+  const shadow = file("api/Shadow.cs");
+  assert.equal(resolved("Inner", shadow, shadow.text().indexOf("UsesInner")), "App.Contracts.Orders.Shadow.Inner");
+  assert.equal(resolved("Paging", shadow, shadow.text().indexOf("UsesPaging")), "App.Paging");
+  assert.equal(resolved("Envelopes", shadow, shadow.text().indexOf("UsesPaging")), "App.Wire.Envelope");
   // A positional record's parameter list is outside its body, so it doesn't see its nested types (CS0246): an
   // unqualified Parcel there finds nothing, and Box finds the namespace's own Box.
   const nested = file("api/Nested.cs");

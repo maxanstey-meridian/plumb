@@ -377,18 +377,25 @@ if (baselineFile) {
   });
 }
 
+// A run narrowed by --rule, --pack or --exclude can't produce every baselined finding, so it can't tell a shrunk baseline.
+const narrowed = Boolean(ruleFilter || packFilter || excludePatterns.length);
+// The baseline by its path inside the checked root (`.plumb-baseline.json`), or as given when it's elsewhere.
+const baselineName = baselineFile && (/^\.\.(?:[\\/]|$)/.test(path.relative(abs, path.resolve(baselineFile))) ? baselineFile : path.relative(abs, path.resolve(baselineFile)));
+const baselineNote = baselineFile
+  ? `+${baselined} baselined by ${baselineName}, baseline holds ${baselineTotal}` +
+    (baselined < baselineTotal && !narrowed ? " — shrunk; re-run --write-baseline to ratchet down" : "")
+  : null;
 const renderStarted = performance.now();
 if (json) {
   console.log(JSON.stringify(findings.map((f) => ({ rule: f.id, severity: f.sev, location: f.loc, message: f.msg, docRef: f.ref })), null, 2));
+  // stdout stays pure JSON; the baseline that hid findings is still said.
+  if (baselineNote) console.error(`plumb: ${baselineNote}`);
 } else {
   for (const f of findings) console.log(`${f.id}\t${f.sev}\t${f.loc}\t${f.msg}`);
   const c = { error: 0, warn: 0, info: 0 };
   for (const f of findings) c[f.sev] = (c[f.sev] || 0) + 1;
   let summary = `\nplumb: ${c.error} error, ${c.warn} warn, ${c.info} info`;
-  if (baselineFile) {
-    summary += ` (+${baselined} baselined, baseline holds ${baselineTotal})`;
-    if (baselined < baselineTotal) summary += ` — shrunk; re-run --write-baseline to ratchet down`;
-  }
+  if (baselineNote) summary += ` (${baselineNote})`;
   console.log(summary);
 }
 timings.rendering += elapsed(renderStarted);

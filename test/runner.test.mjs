@@ -924,7 +924,7 @@ test("baseline: write → rerun clean exit 0 with visible suppressed count; new 
   const ratcheted = plumb(r, "--baseline", bl);
   assert.equal(ratcheted.status, 0);
   assert.deepEqual(ratcheted.ids, []);
-  assert.match(ratcheted.stdout, /\+\d+ baselined, baseline holds \d+/);
+  assert.match(ratcheted.stdout, /\+\d+ baselined by \.plumb-baseline\.json, baseline holds \d+/);
   // a NEW violation in a different file is not absorbed by the allowance
   fs.cpSync(path.join(FIX, "MER-BE-005", "bad", "api", "Modules", "Auth", "Application", "U.cs"),
     path.join(r, "api", "Modules", "Auth", "Application", "U2.cs"));
@@ -941,7 +941,15 @@ test("baseline: the repo's own .plumb-baseline.json applies without --baseline; 
   const discovered = plumb(r);
   assert.equal(discovered.status, 0);
   assert.deepEqual(discovered.ids, []);
-  assert.match(discovered.stdout, /\+\d+ baselined, baseline holds \d+/);
+  assert.match(discovered.stdout, /\+\d+ baselined by \.plumb-baseline\.json, baseline holds \d+/);
+  // --json keeps stdout pure and still says what the baseline hid.
+  const asJson = plumb(r, "--json");
+  assert.deepEqual(JSON.parse(asJson.stdout), []);
+  assert.match(asJson.stderr, new RegExp(`^plumb: \\+${flagged} baselined by \\.plumb-baseline\\.json, baseline holds ${flagged}$`, "m"));
+  // An explicit --baseline wins over the discovered one.
+  fs.writeFileSync(path.join(r, "empty.json"), JSON.stringify({ version: 1, entries: {} }));
+  assert.equal(plumb(r, "--baseline", path.join(r, "empty.json")).ids.length, flagged);
+  assert.equal(plumb(r, "--no-baseline", "--write-baseline", path.join(r, "x.json")).status, 2);
   const everything = plumb(r, "--no-baseline");
   assert.equal(everything.ids.length, flagged);
   // --write-baseline captures every finding, not just those the existing baseline leaves.
@@ -959,6 +967,8 @@ test("baseline: shrinking is reported and suggests ratcheting down", () => {
   const out = plumb(r, "--baseline", bl);
   assert.equal(out.status, 0);
   assert.match(out.stdout, /shrunk; re-run --write-baseline/);
+  // A run narrowed to one rule can't produce the rest of the baseline, so it doesn't call it shrunk.
+  assert.doesNotMatch(plumb(r, "--baseline", bl, "--rule", "MER-BE-001").stdout, /shrunk/);
 });
 
 test("baseline: --json emits only actionable findings; unreadable baseline → exit 2", () => {

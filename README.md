@@ -88,7 +88,7 @@ Capture existing findings and then fail only on new ones:
 ./plumb /path/to/repo
 ```
 
-A `.plumb-baseline.json` at the repo root applies automatically. `--baseline <file>` uses another file instead, and `--no-baseline` reports every finding. The summary line always shows how many findings the baseline absorbed.
+A `.plumb-baseline.json` at the checked repository root applies automatically. `--baseline <file>` uses another file instead, and `--no-baseline` reports every finding. The summary line, or a line on stderr under `--json`, always names the baseline and shows how many findings it absorbed.
 
 ## Fidelity Boundaries
 

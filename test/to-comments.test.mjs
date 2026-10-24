@@ -103,6 +103,13 @@ test("TO-015 skips a C# .editorconfig with an empty header, which ini-parser can
   assert.deepEqual(widths(findings(root)), ["api/Wide.cs:3 120"]);
 });
 
+test("TO-012 still reads an .editorconfig with an empty header, which only CSharpier's ini-parser rejects", () => {
+  const root = repo({ ".editorconfig": "root = true\n\n[ ]\n\n[*.cs]\nindent_style = space\n", "App.csproj": "<Project/>\n" });
+  const out = spawnSync(path.join(HOME, "plumb"), [root, "--rule", "MER-TO-012", "--json", "--ci"], { encoding: "utf8" });
+  assert.ok([0, 1].includes(out.status), out.stderr);
+  assert.ok(JSON.parse(out.stdout).some((finding) => /\.editorconfig/.test(finding.location) && !/no \.editorconfig/.test(finding.message)), out.stdout);
+});
+
 test("TO-015 expands CSharpier brace sets into alternatives, numeric ranges into whole numbers", () => {
   const root = repo({
     ".editorconfig": "root = true\n\n[*.cs]\nmax_line_length = 120\n\n[src/{**,x}/*.cs]\nmax_line_length = 80\n\n[V{1..12}.cs]\nmax_line_length = 80\n\n[W{01..03}.cs]\nmax_line_length = 80\n\n[X{a..c}.cs]\nmax_line_length = 80\n",
@@ -154,13 +161,16 @@ test("TO-015 reads only the .editorconfig nearest the package root for TypeScrip
 
 test("TO-015 reads oxfmt's .editorconfig sections in file order, its key case-sensitively, and an ignored value as the default", () => {
   const root = repo({
-    ".editorconfig": "root = true\n[*.ts]\nmax_line_length = 70\n[*]\nmax_line_length = 120\n[*.ts]\nmax_line_length = 80\n[*.mts]\nMax_Line_Length = 60\n[off.ts]\nmax_line_length = off\n[big.ts]\nmax_line_length = 400\n",
+    ".editorconfig": "root = true\n[*.ts]\nmax_line_length = 70\n[*]\nmax_line_length = 120\n[*.ts]\nmax_line_length = 80\n[*.mts]\nMax_Line_Length = 60\n[off.ts]\nmax_line_length = off\n[big.ts]\nmax_line_length = 400\n" +
+      // A value oxfmt can't parse sets nothing, so the earlier [*.ts] width stands.
+      "[bad.ts]\nmax_line_length = 12O\n",
     "a.ts": typescript(90),
+    "bad.ts": typescript(90),
     "b.mts": typescript(110),
     "off.ts": typescript(110),
     "big.ts": typescript(110),
   });
-  assert.deepEqual(widths(findings(root)).sort(), ["a.ts:1 80", "big.ts:1 100", "off.ts:1 100"]);
+  assert.deepEqual(widths(findings(root)).sort(), ["a.ts:1 80", "bad.ts:1 80", "big.ts:1 100", "off.ts:1 100"]);
 });
 
 test("TO-015 matches oxfmt .editorconfig sections with * crossing directories and a bare name only beside the file", () => {

@@ -203,3 +203,22 @@ test("tsconfig failures and negative results are cached with one diagnostic per 
     assert.equal(repository.diagnostics().length, 1);
   } finally { f.cleanup(); }
 });
+
+test("Vue scripts and template share one SFC parse, keep template comments, and a script-only file has no template", async () => {
+  const f = fixture({
+    "Row.vue": '<script setup lang="ts">const a = 1;</script>\n<template><!-- note --><div/></template>',
+    "Logic.vue": '<script setup lang="ts">const b = 2;</script>',
+  });
+  try {
+    const repository = contextFor(f.snapshot);
+    const service = repository.context.typescript;
+    const row = repository.context.file("Row.vue");
+    assert.equal(service.vueScripts(row).length, 1);
+    const template = service.vueTemplate(row);
+    assert.ok(template);
+    assert.equal(f.snapshot.counters.vueExtractions, 1);
+    assert.ok(template.children.some((node) => node.type === 3 && node.content.trim() === "note"));
+    assert.equal(service.vueTemplate(repository.context.file("Logic.vue")), null);
+    assert.equal(f.snapshot.counters.vueExtractions, 2);
+  } finally { f.cleanup(); }
+});

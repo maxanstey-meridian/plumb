@@ -1,0 +1,4 @@
+overrides:
+- files: "*.cs"
+  printWidth: 80
+printWidth: 120

@@ -1,7 +1,9 @@
 <script setup lang="ts">
-import AcmeCrmPanel from "~/components/acme-crm/AcmeCrmPanel.vue";
+import AcmeCrmPanel from "./crm/components/acme-crm/AcmeCrmPanel.vue";
+import { useCrmDestination } from "./crm/composables/useCrmDestination";
 
-const { data: destination } = await useFetch<{ integrationId: string | null }>("/api/crm/destination");
+const { destination, load } = useCrmDestination();
+await load();
 const settings = computed(() =>
   destination.value?.integrationId ? `/settings/integrations/${destination.value.integrationId}` : null,
 );

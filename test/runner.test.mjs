@@ -960,3 +960,28 @@ test("baseline identity and suppression are unchanged for migrated findings", ()
   assert.deepEqual(JSON.parse(out.stdout), []);
   assert.deepEqual(JSON.parse(fs.readFileSync(baseline, "utf8")).entries, { "MER-TO-001\tpackage.json": 1 });
 });
+
+test("MER-CP-001 names each copied id's qualified owner at its exact location", () => {
+  const findings = JSON.parse(plumb(path.join(FIX, "MER-CP-001", "bad"), "--rule", "MER-CP-001", "--json").stdout);
+  const owner = (finding) => finding.message.match(/ is (\S+) on the server/)?.[1];
+  assert.deepEqual(findings.map((finding) => [finding.location, owner(finding)]), [
+    ["ui/app/pages/crm.vue:14", "CrmIntegration.IntegrationId"],
+    ["ui/app/pages/crm.vue:15", "CrmIntegration.IntegrationId"],
+    ["ui/app/pages/crm.vue:6", "CrmIntegration.IntegrationId"],
+    ["ui/app/pages/crm.vue:7", "CrmIntegration.IntegrationId"],
+    ["ui/app/pages/crm.vue:8", "CrmConnector.ConnectorId"],
+    ["ui/app/pages/crm.vue:9", "CrmIntegration.Webhooks.HandlerId"],
+  ]);
+});
+
+test("MER-CP-001 skips frontend tests but not a tests/ route folder inside the app tree", () => {
+  const r = repo([], {
+    "api/Modules/Crm/Contracts/CrmIntegration.cs": 'public static class CrmIntegration\n{\n    public const string IntegrationId = "acme-crm";\n}\n',
+    "nuxt.config.ts": "export default defineNuxtConfig({ ssr: false });\n",
+    "app/components/X.spec.ts": 'export const id = "acme-crm";\n',
+    "app/components/__tests__/X.ts": 'export const id = "acme-crm";\n',
+    "app/pages/tests/index.vue": '<script setup lang="ts">\nconst id = "acme-crm";\n</script>\n',
+  });
+  const findings = JSON.parse(plumb(r, "--rule", "MER-CP-001", "--json").stdout);
+  assert.deepEqual(findings.map((finding) => finding.location), ["app/pages/tests/index.vue:2"]);
+});

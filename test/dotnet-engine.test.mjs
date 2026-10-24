@@ -4,7 +4,7 @@ import path from "node:path";
 import { Capability, planCapabilities, createRuleDescriptor, defineRepositoryRule } from "../lib/engine/contracts.mjs";
 import { createRepositoryContext } from "../lib/engine/repository-context.mjs";
 import { createRepositorySnapshot } from "../lib/engine/repository-snapshot.mjs";
-import { maskCSharpText, matchingCSharpDelimiter } from "../lib/engine/dotnet-analysis.mjs";
+import { isTestDirectory, isTestFileName, maskCSharpText, matchingCSharpDelimiter } from "../lib/engine/dotnet-analysis.mjs";
 
 function fixture(source, requirements) {
   const inventory = { root: "/repo", mode: "test", files: [...source.keys()] };
@@ -133,4 +133,21 @@ test("project references follow host case semantics", { skip: process.platform !
     ["src/Data/Data.csproj", "<Project />"],
   ]), [Capability.DOTNET_PROJECTS]);
   assert.deepEqual(f.context.dotnetProjects.referencedProjects("src/App/App.csproj").map((project) => project.path), ["src/Data/Data.csproj"]);
+});
+
+test("test directories are whole tests/test segments or a .-_ suffix; test file names end Test(s).cs", () => {
+  const testDirectories = ["tests", "Tests", "test", "Orders.Tests", "integration-tests", "unit_tests"];
+  // IntegrationTests is deliberately not a test directory: test projects are sibling *.Tests projects.
+  const otherDirectories = ["Contests", "Latest", "LabTests", "IntegrationTests"];
+  const f = fixture(new Map([...testDirectories, ...otherDirectories].map((segment) => [`api/${segment}/Orders.cs`, "class Orders {}"])), [Capability.CSHARP]);
+  for (const [segments, expected] of [[testDirectories, true], [otherDirectories, false]]) {
+    for (const segment of segments) {
+      assert.equal(isTestDirectory(segment), expected, segment);
+      const classification = f.context.csharp.classify(f.context.file(`api/${segment}/Orders.cs`));
+      assert.equal(classification.testPath, expected, segment);
+      assert.equal(classification.testFileName, false, segment);
+    }
+  }
+  for (const name of ["OrdersTests.cs", "OrderTest.cs", "IntegrationTests.cs", "LabTests.cs"]) assert.equal(isTestFileName(name), true, name);
+  for (const name of ["Contests.cs", "Latest.cs", "tests.cs", "OrdersTests.cs.bak", "Testing.cs"]) assert.equal(isTestFileName(name), false, name);
 });

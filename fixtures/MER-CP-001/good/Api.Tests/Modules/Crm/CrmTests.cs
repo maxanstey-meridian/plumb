@@ -1,4 +1,4 @@
-namespace App.Modules.Crm.Tests;
+namespace Api.Tests.Modules.Crm;
 
 public class CrmTests
 {

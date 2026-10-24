@@ -161,3 +161,46 @@ test("MER-TE-007 follows transitive ProjectReference paths to the production Npg
     assert.equal(run("MER-TE-007", "good"), "");
     assert.match(run("MER-TE-007", "bad"), /PostgresSqliteTests\.cs:4\tSQLite test database/);
 });
+
+// Every finding a rule's fixture reports: exact location, a message fragment, and nothing else.
+function assertFindings(rule, fixture, expected) {
+    const lines = run(rule, fixture).split("\n").filter(Boolean).map((line) => line.split("\t"));
+    assert.equal(lines.length, expected.length, lines.map((line) => line.join("\t")).join("\n"));
+    for (const [location, fragment] of expected) {
+        assert.ok(lines.some(([id, , at, message]) => id === rule && at === location && message.includes(fragment)),
+            `${rule} missing ${location} containing "${fragment}"`);
+    }
+}
+
+test("MER-RV-003 bad reports exactly the four unbound handlers, including a terminal only in a comment", () => {
+    const unbound = "but the following handler block has no .Bind or terminal";
+    assertFindings("MER-RV-003", "bad", [
+        ["Modules/Orders/OrdersController.cs:3", `references OrdersContract.Create ${unbound}`],
+        ["Modules/Orders/OrdersController.cs:13", `references OrdersContract.List ${unbound}`],
+        ["Modules/Orders/OrdersController.cs:20", `references MembersContract.List ${unbound}`],
+        ["Modules/Orders/OrdersEndpoints.cs:4", `references OrdersContract.Create ${unbound}`],
+    ]);
+});
+
+test("MER-BE-018 tells a module file declared in the transport namespace to move, and other uses to map at the edge", () => {
+    assert.equal(run("MER-BE-018", "good"), "");
+    assertFindings("MER-BE-018", "bad", [
+        ["api/Modules/Orders/Application/OrderDtoExtensions.cs:1",
+            "module Orders Application declares itself in the transport namespace App.Contracts.Orders — move it to Contracts/<Feature>/ or use the module's namespace"],
+        ["api/Modules/Orders/Application/PlaceOrder/PlaceOrderUseCase.cs:1", "module Orders Application uses App.Contracts.Orders, the API's transport contract — map at the edge"],
+        ["api/Modules/Orders/Domain/Order.cs:5", "module Orders Domain uses App.Contracts.Orders.OrderDto, the API's transport contract — map at the edge"],
+    ]);
+});
+
+test("MER-RV-027 follows transport namesakes, checks PaginatedResponse, and asks to remove both default and attribute", () => {
+    assert.equal(run("MER-RV-027", "good"), "");
+    const contract = "api/Contracts/Orders/OrdersContract.cs";
+    assertFindings("MER-RV-027", "bad", [
+        // OrderDto is also declared in Modules/Orders/Application; the transport one is still checked.
+        [`${contract}:28`, "OrderDto.Note has a default on a response"],
+        [`${contract}:30`, "OrderLineDto.Quantity is [RivetOptional] on a response"],
+        [`${contract}:30`, "OrderLineDto.Warehouse has a default and is [RivetOptional] on a response, so a builder can leave it out and the client type marks it optional though the server always sends it — remove both"],
+        [`${contract}:32`, "OrderSettingsDto.ReminderDays has a default on a response, so a builder can leave it out and still compile — remove the default (it's a request type too)"],
+        [`${contract}:35`, "PaginatedResponse.Total has a default on a response"],
+    ]);
+});

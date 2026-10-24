@@ -2,6 +2,8 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
+import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -167,4 +169,55 @@ test("FE-040 accepts a function exported under the matching alias", () => {
   const good = runProducer("MER-FE-040", "good");
   assert.equal(good.status, 0, good.stderr);
   assert.equal(good.stdout, "");
+});
+
+const locations = (stdout) => stdout.split("\n").filter(Boolean).map((line) => line.split("\t")[2]).sort();
+
+test("FE-045 reports each unlabelled control once, including a tests folder inside the app tree", () => {
+  const bad = runProducer("MER-FE-045", "bad");
+  assert.equal(bad.status, 0, bad.stderr);
+  assert.deepEqual(locations(bad.stdout), [
+    "app/components/NameField.vue:7",
+    "app/components/NameField.vue:8",
+    "app/components/OrderRow.vue:14",
+    "app/components/OrderRow.vue:21",
+    "app/components/OrderRow.vue:7",
+    "app/components/OrderRow.vue:8",
+    "app/pages/tests/index.vue:6",
+  ]);
+});
+
+test("TE-009 flags hand-written stand-ins, including json/body that replaces a fetched response", () => {
+  const bad = runProducer("MER-TE-009", "bad");
+  assert.equal(bad.status, 0, bad.stderr);
+  assert.deepEqual(locations(bad.stdout), [
+    "ui/e2e/orders.spec.ts:10",
+    "ui/e2e/orders.spec.ts:11",
+    "ui/e2e/orders.spec.ts:12",
+    "ui/e2e/orders.spec.ts:15",
+    "ui/e2e/orders.spec.ts:8",
+  ]);
+
+  const good = runProducer("MER-TE-009", "good");
+  assert.equal(good.status, 0, good.stderr);
+  assert.equal(good.stdout, "");
+});
+
+test("TE-009 reads test folders relative to a nested frontend root", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "plumb-te009-root-"));
+  try {
+    const support = path.join(root, "src", "web", "e2e", "support");
+    fs.mkdirSync(support, { recursive: true });
+    fs.writeFileSync(path.join(support, "orders.ts"), 'import type { Route } from "@playwright/test";\nexport const stubOrders = (route: Route) => route.fulfill({ json: [{ id: "1" }] });\n');
+    assert.equal(spawnSync("git", ["init", "-q"], { cwd: root }).status, 0);
+    const run = () => {
+      const out = spawnSync(path.join(HOME, "plumb"), [root, "--rule", "MER-TE-009", "--json", "--ci"], { encoding: "utf8" });
+      assert.ok([0, 1].includes(out.status), out.stderr);
+      return JSON.parse(out.stdout || "[]").map((finding) => finding.location);
+    };
+    // Without a frontend root, `src` is an app tree, so e2e/ beneath it isn't a test folder.
+    assert.deepEqual(run(), []);
+    fs.writeFileSync(path.join(root, "src", "web", "nuxt.config.ts"), "export default defineNuxtConfig({});\n");
+    assert.deepEqual(run(), ["src/web/e2e/support/orders.ts:2"]);
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });

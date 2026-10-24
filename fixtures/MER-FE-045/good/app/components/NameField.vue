@@ -7,5 +7,6 @@ const sizes = ["s", "m"] as const;
 <template>
   <input v-model="name" />
   <p v-if="hint">{{ hint.trim() }}</p>
-  <span v-for="size in ([...sizes] as const)" :key="size">{{ size }}</span>
+  <span v-for="size in sizes" :key="size">{{ size }}</span>
+  <SizePicker :options="['s', 'm'] as const satisfies readonly string[]" />
 </template>

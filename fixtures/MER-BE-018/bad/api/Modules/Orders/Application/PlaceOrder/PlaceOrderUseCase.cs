@@ -1,11 +1,10 @@
 using App.Contracts.Orders;
+using App.Modules.Orders.Contracts;
 
 namespace App.Modules.Orders.Application.PlaceOrder;
 
-public sealed record PlaceOrderCommand(string Reference);
-
 public sealed class PlaceOrderUseCase
 {
-    public Task<OrderDto> ExecuteAsync(PlaceOrderCommand command, CancellationToken ct) =>
-        Task.FromResult(new OrderDto(Guid.NewGuid(), command.Reference));
+    public Task<OrderSummary> ExecuteAsync(OrderDto draft, CancellationToken ct) =>
+        Task.FromResult(new OrderSummary(Guid.NewGuid(), draft.Reference));
 }

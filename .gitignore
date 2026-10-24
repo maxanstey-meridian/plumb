@@ -2,3 +2,4 @@ node_modules/
 dotnet/**/bin/
 dotnet/**/obj/
 drafts/
+.plans/

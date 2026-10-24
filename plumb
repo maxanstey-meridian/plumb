@@ -387,4 +387,5 @@ if (json) {
 }
 timings.rendering += elapsed(renderStarted);
 emitProfile();
-process.exit(findings.some((f) => SEV[f.sev] >= SEV[failOn]) ? 1 : 0);
+// exitCode, not exit(): a piped stdout is written asynchronously and exit() would cut large --json output short.
+process.exitCode = findings.some((f) => SEV[f.sev] >= SEV[failOn]) ? 1 : 0;

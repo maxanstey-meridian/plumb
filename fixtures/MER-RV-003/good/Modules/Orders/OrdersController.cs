@@ -1,22 +1,33 @@
-public sealed class OrdersController
+public sealed class OrdersController(CreateOrderUseCase useCase) : ControllerBase
 {
     [HttpPost(OrdersContract.Create.Route)]
-    public Task<CreateOrderResponse> Create(CreateOrderRequest request) =>
-        OrdersContract.Create.Invoke(() => useCase.ExecuteAsync(request));
+    public async Task<IActionResult> Create(CreateOrderRequest request, CancellationToken ct)
+    {
+        var endpoint = OrdersContract.Create.Bind(request);
+        var result = await useCase.ExecuteAsync(new CreateOrderCommand(request.Name), ct);
+        return endpoint.Success(new CreateOrderResponse(result.Id)).ToActionResult();
+    }
 }
 
 [Route(OrdersContract.BaseRoute)]
-public sealed class OrderListController
+public sealed class OrderListController(ListOrdersUseCase useCase) : ControllerBase
 {
     [HttpGet(OrdersContract.List.Route)]
-    public Task<ListOrdersResponse> List() =>
-        OrdersContract.List.Invoke(() => useCase.ExecuteAsync());
+    public async Task<IActionResult> List(CancellationToken ct)
+    {
+        var orders = await useCase.ExecuteAsync(ct);
+        return OrdersContract.List.Success(new ListOrdersResponse(orders)).ToActionResult();
+    }
 }
 
-[Route(MembersContract.BaseRoute)]
-public sealed class MembersController
+[Route(OrdersContract.BaseRoute)]
+public sealed class OrderCancellationController(CancelOrderUseCase useCase) : ControllerBase
 {
-    [HttpGet]
-    public Task<ListMembersResponse> List() =>
-        MembersContract.List.Invoke(() => useCase.ExecuteAsync());
+    [HttpPost]
+    public async Task<IActionResult> Cancel(CancelOrderRequest request, CancellationToken ct)
+    {
+        var endpoint = OrdersContract.Cancel.Bind(request);
+        await useCase.ExecuteAsync(new CancelOrderCommand(request.OrderId), ct);
+        return endpoint.Success().ToActionResult();
+    }
 }

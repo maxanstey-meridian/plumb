@@ -86,6 +86,7 @@ test("test evidence keeps project metadata, project name, path, and filename sig
     ["src/NamedTests.cs", "class A {}"],
     ["production/Testament.csproj", "<Project />"],
     ["production/A.cs", "class A {}"],
+    ...["Attestation", "Latest", "Contest", "ArchitectureTesting", "api.tests", "orders-test", "Orders_test"].flatMap((name) => [[`names/${name}/${name}.csproj`, "<Project />"], [`names/${name}/A.cs`, "class A {}"]]),
   ]), [Capability.DOTNET_PROJECTS]);
   const evidence = (file) => f.context.dotnetProjects.testEvidence(f.context.file(file));
   assert.equal(evidence("meta/A.cs").projectMetadata, true);
@@ -94,6 +95,89 @@ test("test evidence keeps project metadata, project name, path, and filename sig
   assert.equal(evidence("src/NamedTests.cs").fileName, true);
   assert.equal(evidence("production/A.cs").projectName, false);
   assert.equal(evidence("production/A.cs").projectNameContainsTest, true);
+  // A capitalised `Test`, or `test` after `.`, `-` or `_`; never `test` inside a word.
+  for (const name of ["Attestation", "Latest", "Contest"]) assert.equal(evidence(`names/${name}/A.cs`).projectNameContainsTest, false, name);
+  for (const name of ["ArchitectureTesting", "api.tests", "orders-test", "Orders_test"]) assert.equal(evidence(`names/${name}/A.cs`).projectNameContainsTest, true, name);
+});
+
+test("one using parse with offsets serves the resolver and MER-BE-018: every C# directive form and every <Using> item form", () => {
+  const props = '<Project>\n  <!-- <ItemGroup><Using Include="Commented.Out" /></ItemGroup> -->\n  <ItemGroup />\n' +
+    "  <ItemGroup Label=\"a > b\">\n    <Using\n      Include=\"App.One; global::App.Two\" Alias='Two' />\n    <Using Include=\"App.Statics\" Static=\"true\" />\n" +
+    "    <Using Include=\"App.ItemTest\" Condition=\" 'TRUE' == '$(IsTestProject)' \" />\n    <Using Include=\"App.NotTest\" Condition=\"'$(IsTestProject)' != 'true'\" />\n  </ItemGroup>\n" +
+    "  <ItemGroup Condition=\"'$(IsTestProject)'=='true'\">\n    <Using Include=\"App.GroupTest\" />\n  </ItemGroup>\n</Project>\n";
+  const usings = "global using System; global using static App.Statics.Clock;\nglobal using Wire =\n    global::App.Wire.Page<App.Wire.Item>;\n" +
+    "using App.One; // using App.Commented;\nnamespace App.Code { using App.Inner; }\nclass Run { void M() { using var stream = Open(); using (Open()) { } } }\n";
+  const f = fixture(new Map([
+    ["Directory.Build.props", props],
+    ["api/Api.csproj", "<Project />"],
+    ["api/Usings.cs", usings],
+    ["api/Item.cs", "namespace App.Wire;\npublic sealed record Page<T>(T Item);\npublic sealed record Item(int A);\n"],
+    ["api/ItemTest.cs", "namespace App.ItemTest;\npublic sealed record OnlyTests(int A);\n"],
+    ["api/GroupTest.cs", "namespace App.GroupTest;\npublic sealed record GroupOnly(int A);\n"],
+    ["api/NotTest.cs", "namespace App.NotTest;\npublic sealed record Production(int A);\n"],
+    ["tests/Api.Tests/Api.Tests.csproj", '<Project><PropertyGroup><IsTestProject>true</IsTestProject></PropertyGroup></Project>'],
+    ["tests/Api.Tests/Uses.cs", "namespace Tests;\npublic sealed record Uses(int A);\n"],
+  ]), [Capability.CSHARP, Capability.DOTNET_PROJECTS]);
+  const { csharp } = f.context;
+  const file = (name) => csharp.csharpFiles.find((value) => value.path === name) ?? f.context.file(name);
+  const source = file("api/Usings.cs");
+  assert.deepEqual(csharp.usings(source).map(({ global, static: isStatic, alias, target, text }) => [global, isStatic, alias, target, text]), [
+    [true, false, null, "System", "global using System"],
+    [true, true, null, "App.Statics.Clock", "global using static App.Statics.Clock"],
+    [true, false, "Wire", "App.Wire.Page<App.Wire.Item>", "global using Wire = global::App.Wire.Page<App.Wire.Item>"],
+    [false, false, null, "App.One", "using App.One"],
+    [false, false, null, "App.Inner", "using App.Inner"],
+  ]);
+  const split = csharp.usings(source)[2];
+  assert.deepEqual([source.lineMap().lineAt(split.offset), source.lineMap().lineAt(split.end - 1)], [2, 3]);
+
+  const items = csharp.projectUsings(file("Directory.Build.props"));
+  assert.deepEqual(items.map(({ include, target, alias, static: isStatic, testOnly }) => [include, target, alias, isStatic, testOnly]), [
+    ["App.One", "App.One", "Two", false, false],
+    ["global::App.Two", "App.Two", "Two", false, false],
+    ["App.Statics", "App.Statics", null, true, false],
+    ["App.ItemTest", "App.ItemTest", null, false, true],
+    ["App.NotTest", "App.NotTest", null, false, false],
+    ["App.GroupTest", "App.GroupTest", null, false, true],
+  ]);
+  // A multi-line item is located at its `<Using`.
+  assert.deepEqual(items.map((item) => file("Directory.Build.props").lineMap().lineAt(item.offset)), [5, 5, 7, 8, 9, 12]);
+
+  // The resolver reads the same parse: a generic alias names the generic type, and test-only <Using> items reach
+  // test projects only.
+  const at = (from, name) => csharp.resolveType(name, from, from.text().length - 1)?.fullName ?? null;
+  assert.equal(at(source, "Wire"), "App.Wire.Page");
+  assert.equal(at(file("api/Item.cs"), "Production"), "App.NotTest.Production");
+  for (const name of ["OnlyTests", "GroupOnly"]) assert.equal(at(file("api/Item.cs"), name), null, name);
+  const tests = file("tests/Api.Tests/Uses.cs");
+  for (const name of ["OnlyTests", "GroupOnly", "Production"]) assert.notEqual(at(tests, name), null, name);
+});
+
+test("enclosing types and type references come from the resolver's scan", () => {
+  const f = fixture(new Map([
+    ["api/Ids.cs", "namespace App.Ids\n{\n    public static class Outer<T> where T : class\n    {\n        public sealed record Done(int A);\n" +
+      "        public static class Inner\n        {\n            public const string AId = \"a\";\n        }\n        public const string BId = \"b\";\n    }\n}\n"],
+    ["api/Refs.cs", "using App.Ids;\nnamespace App.Refs;\npublic sealed record Refs(global::App.Ids.Outer<Refs>.Inner Value, List<Outer<Refs>> Items)\n{\n" +
+      "    public int Count => Items?.Count ?? this.Value.ToString().Length; // Outer in a comment\n}\n"],
+  ]), [Capability.CSHARP]);
+  const { csharp } = f.context;
+  const ids = f.context.file("api/Ids.cs"), text = ids.text();
+  assert.deepEqual(csharp.enclosingTypes(ids, text.indexOf("AId")), ["Outer", "Inner"]);
+  assert.deepEqual(csharp.enclosingTypes(ids, text.indexOf("BId")), ["Outer"]);
+  // A type's own parameter list is outside its body.
+  assert.deepEqual(csharp.enclosingTypes(ids, text.indexOf("int A")), ["Outer"]);
+  assert.deepEqual(csharp.enclosingTypes(ids, 0), []);
+
+  const refs = f.context.file("api/Refs.cs");
+  const written = csharp.typeReferences(refs).map((reference) => reference.written);
+  // Each segment of a dotted name, no declared names (the namespace, the record), no member accesses, no comments.
+  for (const name of ["App", "App.Ids", "global::App.Ids.Outer", "Refs", "List", "Outer", "Items", "Value"]) assert.ok(written.includes(name), name);
+  for (const name of ["App.Refs", "ToString", "Length"]) assert.ok(!written.includes(name), name);
+  assert.equal(written.filter((name) => name === "Refs").length, 2);
+  assert.equal(written.filter((name) => name === "Outer").length, 1);
+  const reference = csharp.typeReferences(refs).find((value) => value.written === "global::App.Ids.Outer");
+  assert.equal(refs.text().slice(reference.offset, reference.offset + 5), "Outer");
+  assert.equal(csharp.resolveType(reference.written, refs, reference.offset)?.fullName, "App.Ids.Outer");
 });
 
 test("project ownership, test evidence, references, cycles, and providers share one parse", () => {

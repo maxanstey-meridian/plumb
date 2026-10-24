@@ -1,6 +1,6 @@
 public sealed class OrdersController
 {
-    [HttpPost(OrdersContract.Create.Route)]
+    [HttpPost(OrdersContract.CreateRoute)]
     public Task<CreateOrderResponse> Create(CreateOrderRequest request) => useCase.ExecuteAsync(request);
 
     private object BindForDiagnostics(CreateOrderRequest request) =>
@@ -10,7 +10,7 @@ public sealed class OrdersController
 [Route(OrdersContract.BaseRoute)]
 public sealed class OrderListController
 {
-    [HttpGet(OrdersContract.List.Route)]
+    [HttpGet(OrdersContract.ListRoute)]
     public Task<ListOrdersResponse> List() => useCase.ExecuteAsync(); // OrdersContract.List.Success(...) is a comment
 }
 
@@ -35,4 +35,11 @@ public sealed class MembersInviteController
 {
     [HttpPost(MembersContract.InviteRoute)]
     public Task<InviteMemberResponse> Invite(InviteMemberRequest request) => useCase.ExecuteAsync(request);
+}
+
+// DraftRoute backs only GET and PUT fields: a DELETE on it is a verb mismatch.
+public sealed class OrderDraftRemovalController
+{
+    [HttpDelete(OrdersContract.DraftRoute)]
+    public IActionResult RemoveDraft(Guid id) => OrdersContract.GetDraft.Success(useCase.Remove(id)).ToActionResult();
 }

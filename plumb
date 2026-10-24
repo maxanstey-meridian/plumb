@@ -37,7 +37,7 @@ if (args[0] === "init") {
   process.exit(0);
 }
 
-const usage = "usage: plumb <repo-root> [--json] [--profile] [--fail-on error|warn|info] [--rule MER-XX-NNN] [--pack FE,BE,...] [--exclude pattern] [--ci] [--baseline file | --write-baseline file] | plumb --self-test";
+const usage = "usage: plumb <repo-root> [--json] [--profile] [--fail-on error|warn|info] [--rule MER-XX-NNN] [--pack FE,BE,...] [--exclude pattern] [--ci] [--baseline file | --no-baseline | --write-baseline file] | plumb --self-test";
 let parsed;
 try {
   parsed = parseArgs({
@@ -54,6 +54,7 @@ try {
       pack: { type: "string" },
       exclude: { type: "string", multiple: true },
       baseline: { type: "string" },
+      "no-baseline": { type: "boolean" },
       "write-baseline": { type: "string" },
     },
   });
@@ -77,7 +78,8 @@ const failOn = parsed.values["fail-on"] ?? "error";
 const ruleFilter = parsed.values.rule ?? null;
 const packFilter = parsed.values.pack ? new Set(parsed.values.pack.split(",")) : null;
 const excludePatterns = parsed.values.exclude ?? [];
-const baselineFile = parsed.values.baseline ?? null;
+let baselineFile = parsed.values.baseline ?? null;
+const noBaseline = parsed.values["no-baseline"] ?? false;
 const writeBaselineFile = parsed.values["write-baseline"] ?? null;
 if (!Object.hasOwn(SEV, failOn)) {
   console.error(`plumb: invalid --fail-on value ${failOn}\n${usage}`);
@@ -91,8 +93,8 @@ if (packFilter && ([...packFilter].some((pack) => !PACKS.has(pack)) || packFilte
   console.error(`plumb: invalid --pack value ${[...packFilter].join(",")}\n${usage}`);
   process.exit(2);
 }
-if (baselineFile && writeBaselineFile) {
-  console.error(`plumb: --baseline and --write-baseline cannot be used together\n${usage}`);
+if ([baselineFile, noBaseline, writeBaselineFile].filter(Boolean).length > 1) {
+  console.error(`plumb: --baseline, --no-baseline and --write-baseline cannot be used together\n${usage}`);
   process.exit(2);
 }
 if (!selfTest && !root) {
@@ -341,6 +343,10 @@ if (selfTest) {
 
 const abs = path.resolve(root);
 if (!fs.existsSync(abs)) { console.error(`plumb: no such directory ${abs}`); process.exit(2); }
+// A repo's own .plumb-baseline.json applies without --baseline; --no-baseline shows every finding, and
+// --write-baseline never reads one.
+const DEFAULT_BASELINE = path.join(abs, ".plumb-baseline.json");
+if (!baselineFile && !noBaseline && !writeBaselineFile && fs.existsSync(DEFAULT_BASELINE)) baselineFile = DEFAULT_BASELINE;
 let findings;
 try { findings = await scan(abs); }
 catch (error) { console.error(`plumb: scan failed: ${error.message}`); process.exit(2); }

@@ -31,6 +31,7 @@ function repo(files) {
 
 // A C# file whose only comment line is `length` characters of short words, so rewrapping can fix it.
 const csharp = (length) => `namespace App;\n\n// ${"word ".repeat(length).slice(0, length - 4)}.\npublic static class Report;\n`;
+const widths = (reported) => reported.map((finding) => `${finding.location} ${finding.message.match(/past the (\d+)-character/)[1]}`);
 
 test("TO-015 flags exactly the comment-only lines past the width in bad, as info", () => {
   const reported = findings(path.join(HOME, "fixtures", RULE, "bad"));
@@ -52,15 +53,14 @@ test("TO-015 leaves good alone: wrapped, unbreakable, trailing, generated, code 
   assert.deepEqual(findings(path.join(HOME, "fixtures", RULE, "good")), []);
 });
 
-test("TO-015 applies .editorconfig sections in file order, a repeated header overriding what came between", () => {
+// CSharpier's ini-parser merges a repeated header into the first one's place, so [*] still comes last.
+test("TO-015 merges a repeated .editorconfig header into its first place for C#, as CSharpier does", () => {
   const root = repo({
     ".editorconfig": "root = true\n\n[*.cs]\nindent_style = space\n\n[*]\nmax_line_length = 80\n\n[*.cs]\nmax_line_length = 120\n",
     "api/Report.cs": csharp(110),
     "api/Wide.cs": csharp(125),
   });
-  const reported = findings(root);
-  assert.deepEqual(reported.map((finding) => finding.location), ["api/Wide.cs:3"]);
-  assert.match(reported[0].message, /past the 120-character line width/);
+  assert.deepEqual(widths(findings(root)), ["api/Report.cs:3 80", "api/Wide.cs:3 80"]);
 });
 
 test("TO-015 ignores a max_line_length that isn't a positive integer and keeps the default width", () => {
@@ -74,17 +74,106 @@ test("TO-015 ignores a max_line_length that isn't a positive integer and keeps t
   assert.match(reported[0].message, /past the 100-character line width/);
 });
 
-test("MER-TO-015 reads .editorconfig keys case-insensitively", () => {
+test("TO-015 reads C# .editorconfig keys case-sensitively, as CSharpier does", () => {
   const root = repo({
     ".editorconfig": "ROOT = true\n\n[*.cs]\nMax_Line_Length = 80\n",
     "api/Note.cs": `${"// a few short words ".repeat(5).trimEnd()}\npublic static class Note;\n`,
   });
-  assert.deepEqual(findings(root).map((finding) => finding.location), ["api/Note.cs:1"]);
+  assert.deepEqual(widths(findings(root)), ["api/Note.cs:1 100"]);
+});
+
+test("TO-015 lets only an exact root = true end CSharpier's .editorconfig search", () => {
+  const root = repo({
+    ".editorconfig": "root = true\n\n[*.cs]\nmax_line_length = 120\n",
+    "api/.editorconfig": "ROOT = true\n\n[*.md]\nmax_line_length = 80\n",
+    "web/.editorconfig": "root = TRUE\n\n[*.md]\nmax_line_length = 80\n",
+    "api/Report.cs": csharp(110),
+    "web/Wide.cs": csharp(125),
+  });
+  assert.deepEqual(widths(findings(root)), ["web/Wide.cs:3 120"]);
+});
+
+test("TO-015 skips a C# .editorconfig with an empty header, which ini-parser can't read, and takes a +-signed width", () => {
+  const root = repo({
+    ".editorconfig": "root = true\n\n[*.cs]\nmax_line_length = +120\n",
+    "api/.editorconfig": "[ ]\n\n[*.cs]\nmax_line_length = 80\n",
+    "api/Report.cs": csharp(110),
+    "api/Wide.cs": csharp(125),
+  });
+  assert.deepEqual(widths(findings(root)), ["api/Wide.cs:3 120"]);
+});
+
+test("TO-015 expands CSharpier brace sets into alternatives, numeric ranges into whole numbers", () => {
+  const root = repo({
+    ".editorconfig": "root = true\n\n[*.cs]\nmax_line_length = 120\n\n[src/{**,x}/*.cs]\nmax_line_length = 80\n\n[V{1..12}.cs]\nmax_line_length = 80\n\n[W{01..03}.cs]\nmax_line_length = 80\n\n[X{a..c}.cs]\nmax_line_length = 80\n",
+    "src/A.cs": csharp(90),
+    "src/q/r/A.cs": csharp(90),
+    "V12.cs": csharp(90),
+    "V13.cs": csharp(90),
+    "W1.cs": csharp(90),
+    "W01.cs": csharp(90),
+    "Xb.cs": csharp(90),
+    "Xa..c.cs": csharp(90),
+  });
+  assert.deepEqual(widths(findings(root)).sort(), ["V12.cs:3 80", "W1.cs:3 80", "Xa..c.cs:3 80", "src/A.cs:3 80", "src/q/r/A.cs:3 80"]);
 });
 
 // A TypeScript file whose only comment line is `length` characters of short words.
 const typescript = (length) => `// ${"word ".repeat(length).slice(0, length - 4)}.\nexport const wide = 1;\n`;
-const widths = (reported) => reported.map((finding) => `${finding.location} ${finding.message.match(/past the (\d+)-character/)[1]}`);
+
+// oxfmt 0.62 falls back to .editorconfig when its config sets no printWidth for the file.
+test("TO-015 falls back to .editorconfig for TypeScript when oxfmt's config sets no printWidth", () => {
+  const root = repo({
+    ".editorconfig": "[*]\nmax_line_length = 80\n",
+    "a/.oxfmtrc.json": `{ "printWidth": 120 }\n`,
+    "a/x.ts": typescript(110),
+    "b/.oxfmtrc.json": JSON.stringify({ overrides: [{ files: ["*.ts"], options: { semi: false } }] }),
+    "b/x.ts": typescript(90),
+    "c/x.ts": typescript(90),
+    "d/.oxfmtrc.json": JSON.stringify({ overrides: [{ files: ["*.ts"], options: { printWidth: 70 } }] }),
+    "d/x.ts": typescript(75),
+  });
+  assert.deepEqual(widths(findings(root)).sort(), ["b/x.ts:1 80", "c/x.ts:1 80", "d/x.ts:1 70"]);
+});
+
+// oxfmt reads the one .editorconfig nearest its working directory, taken as the package root.
+test("TO-015 reads only the .editorconfig nearest the package root for TypeScript, without cascading", () => {
+  const root = repo({
+    "package.json": "{}\n",
+    ".editorconfig": "[*]\nmax_line_length = 80\n",
+    "src/.editorconfig": "[*]\nmax_line_length = 120\n",
+    "src/a.ts": typescript(110),
+    "pkg/package.json": "{}\n",
+    "pkg/.editorconfig": "[*.md]\nmax_line_length = 120\n",
+    "pkg/b.ts": typescript(90),
+    "lib/package.json": "{}\n",
+    "lib/c.ts": typescript(90),
+  });
+  assert.deepEqual(widths(findings(root)).sort(), ["lib/c.ts:1 80", "src/a.ts:1 80"]);
+});
+
+test("TO-015 reads oxfmt's .editorconfig sections in file order, its key case-sensitively, and an ignored value as the default", () => {
+  const root = repo({
+    ".editorconfig": "root = true\n[*.ts]\nmax_line_length = 70\n[*]\nmax_line_length = 120\n[*.ts]\nmax_line_length = 80\n[*.mts]\nMax_Line_Length = 60\n[off.ts]\nmax_line_length = off\n[big.ts]\nmax_line_length = 400\n",
+    "a.ts": typescript(90),
+    "b.mts": typescript(110),
+    "off.ts": typescript(110),
+    "big.ts": typescript(110),
+  });
+  assert.deepEqual(widths(findings(root)).sort(), ["a.ts:1 80", "big.ts:1 100", "off.ts:1 100"]);
+});
+
+test("TO-015 matches oxfmt .editorconfig sections with * crossing directories and a bare name only beside the file", () => {
+  const root = repo({
+    ".editorconfig": "[*]\nmax_line_length = 120\n[a.ts]\nmax_line_length = 80\n[src/*.ts]\nmax_line_length = 70\n[V{1..12}.ts]\nmax_line_length = 60\n",
+    "a.ts": typescript(90),
+    "deep/a.ts": typescript(90),
+    "src/deep/b.ts": typescript(75),
+    "V12.ts": typescript(90),
+    "V1..12.ts": typescript(65),
+  });
+  assert.deepEqual(widths(findings(root)).sort(), ["V1..12.ts:1 60", "a.ts:1 80", "src/deep/b.ts:1 70"]);
+});
 
 test("TO-015 reads the nearest oxfmt config's top-level printWidth when no override matches the file", () => {
   const root = repo({
@@ -178,6 +267,24 @@ test("TO-015 lets ** after a comma in a brace set match zero or more directories
     "src/New.cs": csharp(110),
   });
   assert.deepEqual(widths(findings(root)).sort(), ["Legacy/Old.cs:3 80", "src/Legacy/Old.cs:3 80"]);
+});
+
+// oxfmt 0.62 reads a `**` that ends a brace member as `*`, but one that opens a member's path as `**/`.
+test("TO-015 reads an oxfmt ** ending a brace member as * and one opening a member as any directories", () => {
+  const root = repo({
+    ".oxfmtrc.json": JSON.stringify({ printWidth: 120, overrides: [
+      { files: ["src/{**,x}/a.ts"], options: { printWidth: 80 } },
+      { files: ["lib/{**}"], options: { printWidth: 80 } },
+      { files: ["{x,**/d/*.ts}"], options: { printWidth: 80 } },
+    ] }),
+    "src/q/a.ts": typescript(90),
+    "src/q/r/a.ts": typescript(90),
+    "lib/a.ts": typescript(90),
+    "lib/q/r/a.ts": typescript(90),
+    "d/a.ts": typescript(90),
+    "e/f/d/a.ts": typescript(90),
+  });
+  assert.deepEqual(widths(findings(root)).sort(), ["d/a.ts:1 80", "e/f/d/a.ts:1 80", "lib/a.ts:1 80", "src/q/a.ts:1 80"]);
 });
 
 test("TO-015 anchors an oxfmt override glob with a leading ./ at the config's directory", () => {

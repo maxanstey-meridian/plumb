@@ -45,8 +45,9 @@ The installed runtime dependencies have explicit jobs:
 - `ignore`: `.plumbignore` and command-line exclusion semantics
 - `yaml`: CSharpier YAML config parsing for comment widths
 - `picomatch`: CSharpier override and `.editorconfig` section globs
+- `braces`: brace expansion for CSharpier override and `.editorconfig` section globs
 
-If TypeScript, the Vue compiler, or dependency-cruiser is unavailable, only the affected rules are skipped and Plumb emits a diagnostic. `fast-xml-parser`, `ignore`, `yaml` and `picomatch` are required runtime dependencies. If ast-grep is unavailable, YAML rules are skipped with a diagnostic.
+If TypeScript, the Vue compiler, or dependency-cruiser is unavailable, only the affected rules are skipped and Plumb emits a diagnostic. `fast-xml-parser`, `ignore`, `yaml`, `picomatch` and `braces` are required runtime dependencies. If ast-grep is unavailable, YAML rules are skipped with a diagnostic.
 
 ## Run
 
@@ -83,9 +84,11 @@ All rule engines and executable producers receive the same canonical inventory. 
 Capture existing findings and then fail only on new ones:
 
 ```sh
-./plumb /path/to/repo --write-baseline .plumb-baseline.json
-./plumb /path/to/repo --baseline .plumb-baseline.json
+./plumb /path/to/repo --write-baseline /path/to/repo/.plumb-baseline.json
+./plumb /path/to/repo
 ```
+
+A `.plumb-baseline.json` at the repo root applies automatically. `--baseline <file>` uses another file instead, and `--no-baseline` reports every finding. The summary line always shows how many findings the baseline absorbed.
 
 ## Fidelity Boundaries
 

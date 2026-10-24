@@ -76,7 +76,7 @@ function isolatedPlumb(producers) {
   fs.cpSync(path.join(HOME, "configs"), path.join(home, "configs"), { recursive: true });
   fs.copyFileSync(path.join(HOME, "lib", "rivet-context.mjs"), path.join(home, "lib", "rivet-context.mjs"));
   fs.mkdirSync(path.join(home, "node_modules", "@vue"), { recursive: true });
-  for (const dependency of ["ignore", "fast-xml-parser", "yaml", "picomatch", "@vue/compiler-sfc"]) {
+  for (const dependency of ["ignore", "fast-xml-parser", "yaml", "picomatch", "braces", "@vue/compiler-sfc"]) {
     const target = path.join(home, "node_modules", ...dependency.split("/"));
     fs.symlinkSync(fs.realpathSync(path.join(HOME, "node_modules", ...dependency.split("/"))), target, "dir");
   }
@@ -163,7 +163,9 @@ test("conflicting baseline flags are rejected with exit 2", () => {
   const r = repo();
   const out = plumb(r, "--baseline", path.join(r, "old.json"), "--write-baseline", path.join(r, "new.json"));
   assert.equal(out.status, 2);
-  assert.match(out.stderr, /--baseline and --write-baseline cannot be used together/);
+  assert.match(out.stderr, /--baseline, --no-baseline and --write-baseline cannot be used together/);
+  const both = plumb(r, "--no-baseline", "--baseline", path.join(r, "old.json"));
+  assert.equal(both.status, 2);
 });
 
 test("clean repo → zero findings, exit 0", () => {
@@ -745,9 +747,10 @@ test("selected C# owners share source masks and parse each visible project once"
 test("focused syntax-light C# work does not construct the project graph", () => {
   const r = repo([], {
     "App.csproj": "<Project />\n",
-    "Modules/Auth/Domain/Clock.cs": "public sealed class Clock { public static DateTime Now => DateTime.UtcNow; }\n",
+    "Modules/Auth/Domain/Clock.cs": "using Microsoft.EntityFrameworkCore;\npublic sealed class Clock { }\n",
   });
-  const out = plumb(r, "--rule", "MER-BE-024", "--json", "--profile");
+  // BE-001 reads only C# source; rules that judge test code by its project (BE-024 and others) build the graph.
+  const out = plumb(r, "--rule", "MER-BE-001", "--json", "--profile");
   assert.equal(out.status, 1, out.stderr);
   assert.match(out.stderr, /analysis-counters .*csharp-read=1 csharp-mask=1 csharp-classification=1 dotnet-project-parse=0 dotnet-project-graph-build=0 /);
 });
@@ -930,6 +933,22 @@ test("baseline: write → rerun clean exit 0 with visible suppressed count; new 
   assert.ok(withNew.ids.includes("MER-BE-005"));
 });
 
+test("baseline: the repo's own .plumb-baseline.json applies without --baseline; --no-baseline shows everything", () => {
+  const r = repo(["MER-BE-005"], { "App.csproj": "<Project/>\n" });
+  const flagged = plumb(r).ids.length;
+  assert.ok(flagged > 0);
+  assert.equal(plumb(r, "--write-baseline", path.join(r, ".plumb-baseline.json")).status, 0);
+  const discovered = plumb(r);
+  assert.equal(discovered.status, 0);
+  assert.deepEqual(discovered.ids, []);
+  assert.match(discovered.stdout, /\+\d+ baselined, baseline holds \d+/);
+  const everything = plumb(r, "--no-baseline");
+  assert.equal(everything.ids.length, flagged);
+  // --write-baseline captures every finding, not just those the existing baseline leaves.
+  const rewrite = plumb(r, "--write-baseline", path.join(r, "again.json"));
+  assert.match(rewrite.stdout, new RegExp(`baseline written — ${flagged} findings`));
+});
+
 test("baseline: shrinking is reported and suggests ratcheting down", () => {
   const r = repo(["MER-BE-005"], { "App.csproj": "<Project/>\n" });
   const bl = path.join(r, ".plumb-baseline.json");
@@ -1008,4 +1027,19 @@ test("MER-CP-001 reads constrained generics and `new` consts, and test paths rel
     ["src/web/pages/index.vue:2", "Handlers.AId"],
     ["src/web/pages/index.vue:2", "Handlers.BId"],
   ]);
+});
+
+// A test project's consts are test fixtures wherever its folders sit: ArchitectureTesting/ is known by its metadata.
+test("MER-CP-001 takes no server ids from a test project, known by metadata, and names nested owners outermost first", () => {
+  const r = repo([], {
+    "ArchitectureTesting/ArchitectureTesting.csproj": '<Project Sdk="Microsoft.NET.Sdk"><ItemGroup><PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.0.0" /></ItemGroup></Project>\n',
+    "ArchitectureTesting/Modules/Crm/Contracts/CrmFixture.cs": 'public static class CrmFixture\n{\n    public const string FixtureId = "fixture-id";\n}\n',
+    "api/Api.csproj": '<Project Sdk="Microsoft.NET.Sdk.Web" />\n',
+    "api/Modules/Crm/Contracts/Crm.cs": "public static class Crm\n{\n    public sealed record Done(int A);\n    public static class Hooks\n    {\n" +
+      '        public const string HookId = "hook-id";\n    }\n    public const string CrmId = "crm-id";\n}\n',
+    "nuxt.config.ts": "export default defineNuxtConfig({ ssr: false });\n",
+    "app/pages/index.vue": '<script setup lang="ts">\nconst ids = ["fixture-id", "hook-id", "crm-id"];\n</script>\n',
+  });
+  const findings = JSON.parse(plumb(r, "--rule", "MER-CP-001", "--json").stdout);
+  assert.deepEqual(findings.map((finding) => finding.message.match(/ is (\S+) on the server/)?.[1]), ["Crm.Hooks.HookId", "Crm.CrmId"]);
 });

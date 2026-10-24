@@ -48,6 +48,56 @@ test("MER-BE-006 propagates consumers through real nested declaration bodies", (
     }
 });
 
+test("MER-BE-006 counts a module only where a name it writes resolves to the Common type", () => {
+    // Users declares its own Paging: a namesake, not a consumer of Acme.Common.Paging.
+    assertFindings("MER-BE-006", "bad", [
+        ["Common/Paging.cs:0", "Common type Paging is referenced only by module Forms"],
+        ["Common/SlugRules.cs:0", "Common type SlugRules is referenced only by module Forms"],
+    ]);
+    const findings = scan("MER-BE-006", {
+        "Common/Money.cs": "namespace Acme.Common;\npublic sealed record Money(decimal Amount);\npublic sealed record Rate(Money PerHour);\n",
+        "Common/Clock.cs": "namespace Acme.Common;\npublic static class Clock { public static int Now => 0; }\n",
+        // A using, an alias and a `using static` each make a consumer; a comment and a string do not.
+        "Modules/Billing/Invoice.cs": "using Acme.Common;\nnamespace Acme.Modules.Billing;\npublic sealed record Invoice(Money Total);\n",
+        "Modules/Payroll/Payslip.cs": "using Cash = Acme.Common.Money;\nusing static Acme.Common.Clock;\nnamespace Acme.Modules.Payroll;\npublic sealed record Payslip(Cash Net);\n",
+        "Modules/Rota/Shift.cs": "namespace Acme.Modules.Rota;\n// Rate and Clock live in Common.\npublic sealed record Shift(string Note = \"Rate\");\n",
+        // Rate's only consumer is Rota, through a qualified name; Rate names Money, so Rota consumes Money too.
+        "Modules/Rota/Pay.cs": "namespace Acme.Modules.Rota;\npublic sealed record Pay(Acme.Common.Rate Rate);\n",
+    });
+    assert.deepEqual(findings.map((finding) => finding.replace(/ — review.*/, "")).sort(), [
+        "Common/Clock.cs:0\tCommon type Clock is referenced only by module Payroll",
+        "Common/Money.cs:0\tCommon type Rate is referenced only by module Rota",
+    ]);
+});
+
+test("MER-BE-007 reports the domain type a port's name resolves to, not a namesake", () => {
+    // good: IFormLister's FormSnapshot is the Ports namespace's own record, despite the Forms.Domain using.
+    assert.equal(run("MER-BE-007", "good"), "");
+    assertFindings("MER-BE-007", "bad", [["api/Common/Ports/IConfirmReader.cs:5", "Common port exposes module-owned domain type FormSnapshot"]]);
+    const findings = scan("MER-BE-007", {
+        "api/Modules/Forms/Domain/FormSnapshot.cs": "namespace App.Modules.Forms.Domain;\npublic sealed record FormSnapshot(string Id);\npublic enum Status { Draft }\n",
+        "api/Common/Status.cs": "namespace App.Common;\npublic enum Status { Open }\n",
+        // The parent namespace's Status is Common's; the qualified FormSnapshot is the domain's, past a comment naming it.
+        "api/Common/Ports/IFormReader.cs": "namespace App.Common.Ports;\n// FormSnapshot is a domain type.\npublic interface IFormReader\n{\n    Status Status();\n" +
+            "    App.Modules.Forms.Domain.FormSnapshot Read();\n}\n",
+    });
+    assert.deepEqual(findings.map((finding) => finding.replace(/ — inline.*/, "")), [
+        "api/Common/Ports/IFormReader.cs:6\tCommon port exposes module-owned domain type FormSnapshot",
+    ]);
+});
+
+// A test project's files are test code wherever its folders sit (ArchitectureTesting/Modules/…), by its metadata.
+test("MER-BE-016, -024, -032, -042 and -055 exempt a test project's files by project metadata, not only by test folder or file names", () => {
+    for (const rule of ["MER-BE-016", "MER-BE-024", "MER-BE-032", "MER-BE-042", "MER-BE-055"]) {
+        const files = (project) => Object.fromEntries(fs.readdirSync(path.join(FIXTURES, rule, "bad"), { recursive: true })
+            .filter((file) => fs.statSync(path.join(FIXTURES, rule, "bad", file)).isFile() && !file.endsWith(".csproj"))
+            .map((file) => [`ArchitectureTesting/${file}`, fs.readFileSync(path.join(FIXTURES, rule, "bad", file), "utf8")])
+            .concat([["ArchitectureTesting/ArchitectureTesting.csproj", project]]));
+        assert.notDeepEqual(scan(rule, files('<Project Sdk="Microsoft.NET.Sdk" />\n')), [], rule);
+        assert.deepEqual(scan(rule, files('<Project Sdk="Microsoft.NET.Sdk"><PropertyGroup><IsTestProject>true</IsTestProject></PropertyGroup></Project>\n')), [], rule);
+    }
+});
+
 test("MER-BE-009 detects each System IServiceProvider spelling after masking comments and strings", () => {
     assert.equal(run("MER-BE-009", "good"), "");
     const output = run("MER-BE-009", "bad");
@@ -118,16 +168,20 @@ test("MER-RV-006 finds multiline implicit-private behavior only in the attribute
     assert.match(output, /OrdersContract\.cs:4\t.*may contain only/);
 });
 
-test("MER-RV-007 flags every app-written RivetResult bridge, one alone included, and leaves Rivet's own adapters", () => {
+test("MER-RV-007 flags every app-written RivetResult extension returning an HTTP result, whatever its name, and leaves Rivet's own adapters", () => {
     assert.equal(run("MER-RV-007", "good"), "");
-    const locations = [...run("MER-RV-007", "bad").matchAll(/^MER-RV-007\twarn\t(\S+)/gm)].map((match) => match[1]).sort();
+    const output = run("MER-RV-007", "bad");
+    const locations = [...output.matchAll(/^MER-RV-007\twarn\t(\S+)/gm)].map((match) => match[1]).sort();
     assert.deepEqual(locations, [
+        // ToHttpResult returning IResult, and Respond returning ValueTask<HttpResults.Ok<T>>.
+        "Modules/Common/HttpResultExtensions.cs:1",
         "Modules/Common/ResultExtensions.Actions.cs:1",
         "Modules/Common/ResultExtensions.cs:1",
         "Modules/Orders/OrderResultExtensions.cs:1",
         // A typed Results<…> union, spaces in its generics.
         "Modules/Orders/TypedResultExtensions.cs:1",
     ]);
+    assert.match(output, /HttpResultExtensions\.cs:1\tHttpResultExtensions hand-writes an HTTP-result bridge off RivetResult \(ToHttpResult, Respond\) — delete it and use Rivet's first-party \.ToResult\(\)\/\.ToActionResult\(\) adapters\t/);
 });
 
 test("MER-RV-008 ignores MapGroup, reports handlers, and does not accept commented composition", () => {
@@ -178,14 +232,16 @@ function assertFindings(rule, fixture, expected) {
 test("MER-RV-003 bad reports exactly the unbound handlers, including a terminal only in a comment", () => {
     const unbound = "but the following handler block has no .Bind or terminal";
     assertFindings("MER-RV-003", "bad", [
-        ["Modules/Orders/OrdersController.cs:3", `references OrdersContract.Create ${unbound}`],
-        ["Modules/Orders/OrdersController.cs:13", `references OrdersContract.List ${unbound}`],
         ["Modules/Orders/OrdersController.cs:20", `references MembersContract.List ${unbound}`],
+        // A Map* call may take a field's runtime .Route.
         ["Modules/Orders/OrdersEndpoints.cs:4", `references OrdersContract.Create ${unbound}`],
         // Const-route handlers; test/rv003-const-routes.test.mjs pins their messages.
+        ["Modules/Orders/OrdersController.cs:3", `references OrdersContract.CreateRoute ${unbound}`],
+        ["Modules/Orders/OrdersController.cs:13", `references OrdersContract.ListRoute ${unbound}`],
         ["Modules/Orders/OrdersController.cs:26", `references OrdersContract.DraftRoute ${unbound}`],
         ["Modules/Orders/OrdersController.cs:29", `references OrdersContract.DraftRoute ${unbound}`],
         ["Modules/Orders/OrdersController.cs:36", `references MembersContract.InviteRoute ${unbound}`],
+        ["Modules/Orders/OrdersController.cs:43", "handler is HttpDelete but OrdersContract.DraftRoute backs only Get and Put fields"],
         ["Modules/Orders/OrdersEndpoints.cs:9", `references OrdersContract.DraftRoute ${unbound}`],
     ]);
 });
@@ -200,7 +256,7 @@ test("MER-BE-018 tells a module file declared in the transport namespace to move
         // Infrastructure returning transport DTOs: no legal caller can use them.
         ["api/Modules/Orders/Infrastructure/OrderReader.cs:1", "module Orders Infrastructure uses App.Contracts.Orders, the API's transport contract — map at the edge"],
         // Global usings (C# and MSBuild) put the transport contract in scope everywhere; System.* and comments are ignored.
-        ["api/GlobalUsings.cs:2", "global using App.Contracts.Orders puts the API's transport contract in scope in every file of the project, modules included — remove it and add a file-level using in the controllers and Contracts transport mappers that need it"],
+        ["api/GlobalUsings.cs:2", "global using App.Contracts.Orders puts the API's transport contract in scope in every file of the project, modules included — remove it and add a file-level using in a controller, endpoint, request validator or transport mapper at the module root or under Contracts/ that needs it"],
         ["api/GlobalUsings.cs:3", "global using Wire = App.Contracts.Orders.OrderDto puts the API's transport contract in scope"],
         ["api/Api.csproj:5", "<Using Include=\"App.Contracts.Orders\"> puts the API's transport contract in scope"],
     ]);
@@ -224,6 +280,25 @@ test("MER-RV-027 follows transport namesakes and .Returns<T> payloads, checks Pa
         // a using), so they're checked; the transport records of the same names aren't what it carries.
         ["api/Modules/Connectors/Contracts/ConnectorManifest.cs:4", "ConnectorManifest.Returns has a default on a response"],
         ["api/Modules/Connectors/Contracts/ConnectorManifest.cs:6", "ConnectorStep.Order has a default on a response"],
+        // Responses whose fields are properties, and the attributes and defaults on those properties.
+        ["api/Contracts/Orders/OrderSummaryContract.cs:17", "OrderSummaryView is a class with properties on a response"],
+        ["api/Contracts/Orders/OrderSummaryContract.cs:21", "OrderSummaryView.Note is [JsonIgnore(Condition = WhenWritingNull)] on a response"],
+        ["api/Contracts/Orders/OrderSummaryContract.cs:24", "OrderSummaryView.Priority is [RivetOptional] on a response"],
+        ["api/Contracts/Orders/OrderSummaryContract.cs:41", "OrderTotalsView.Currency has a default on a response"],
+        ["api/Contracts/Orders/OrderSummaryContract.cs:46", "OrderHistoryDto is a record whose fields are properties on a response"],
+        ["api/Contracts/Orders/OrderSummaryContract.cs:50", "Entry.By has a default on a response"],
+        ["api/Contracts/Orders/OrderSummaryContract.cs:54", "OrderTagsView is a class with properties on a response"],
+        ["api/Contracts/Orders/OrderSummaryContract.cs:61", "OrderTagsView.Colour is [RivetOptional] on a response"],
+        // A global DefaultIgnoreCondition drops fields from every response.
+        ["api/Program.cs:5", "DefaultIgnoreCondition = WhenWritingNull drops every null field from every response"],
+        ["api/Program.cs:8", "DefaultIgnoreCondition = WhenWritingDefault drops every field holding its type's default"],
+        ["api/Program.cs:18", "DefaultIgnoreCondition = WhenWritingNull drops every null field from every response"],
+        // Settable body properties on positional records, and union cases reached through [JsonDerivedType].
+        ["api/Contracts/Orders/OrderEventsContract.cs:15", "OrderEventDto.Actor is a body property on a response record"],
+        ["api/Contracts/Orders/OrderEventsContract.cs:17", "OrderEventDto.Sequence is a body property on a response record"],
+        ["api/Contracts/Orders/OrderEventsContract.cs:17", "OrderEventDto.Sequence is [RivetOptional] on a response"],
+        ["api/Contracts/Orders/OrderEventsContract.cs:35", "Placed.Channel has a default and is [RivetOptional] on a response"],
+        ["api/Contracts/Orders/OrderEventsContract.cs:42", "OrderCancelled.Reason has a default on a response"],
     ]);
 });
 
@@ -333,7 +408,7 @@ test("MER-BE-018 reads every <Using> form and global using statement, and exempt
         "api/GlobalUsings.cs:1\tglobal using static App.Contracts.Orders.OrderDto",
         "api/GlobalUsings.cs:2\tglobal using Wire = App.Contracts.Orders.Page<App.Contracts.Orders.OrderDto>",
         "api/Modules/Orders/Application/Usings.cs:1\tglobal using Wire = App.Contracts.Orders.OrderDto",
-        "api/Modules/Payments/Infrastructure/GovUkPayConnectionTest.cs:1\tmodule Payments Infrastructure uses App.Contracts.Orders, the API's transport contract — map at the edge (a controller or a Contracts transport mapper) and keep the module on its own types",
+        "api/Modules/Payments/Infrastructure/GovUkPayConnectionTest.cs:1\tmodule Payments Infrastructure uses App.Contracts.Orders, the API's transport contract — map at the edge (a controller, endpoint, request validator or transport mapper at the module root or under Contracts/) and keep the module on its own types",
     ]);
 });
 

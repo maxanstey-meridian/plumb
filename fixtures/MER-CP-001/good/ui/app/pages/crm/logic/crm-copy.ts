@@ -15,17 +15,23 @@ export class ExportDialog {
     this.title = "export";
   }
 }
-// Labels, colours, icons and orderings keyed on a server id are presentation (string values only).
+// String labels, colours and icons keyed on a server id are presentation; a numeric value, an ordering or a limit,
+// is flagged (the bad fixture's crm-positions.ts:36).
 export const integrationLabels = { "acme-crm": "Acme CRM" };
 export const integrationColours = { ["acme-crm"]: "primary" } as const;
 export const integrationIcons = new Map([["acme-crm", "i-lucide-plug"]]);
 export const integrationTitles = new Map([["acme-crm", "Acme CRM"] as const]);
 export const integrationNames = (name: string) => ({ "acme-crm": `${name} CRM` });
-export const integrationOrder = { "acme-crm": "first" as const } satisfies Record<string, string>;
-export const integrationRank = { "acme-crm": <const>"first" };
+export const integrationTones = { "acme-crm": "neutral" as const } satisfies Record<string, string>;
+export const integrationBadges = { "acme-crm": <const>"Beta" };
 export const integrationShortNames = new Map([["acme-crm", <string>"Acme"]]);
 export const formatNames = { "csv": "Spreadsheet" };
 export const formatHints = new Map([["csv", "Opens in a spreadsheet"]]);
+// A `/` in wording isn't a route: only a value starting with `/` (or `${…}/`) maps an id to one.
+export const integrationAccess = { "acme-crm": "Read/Write" };
+export const integrationAccessLabels = new Map([["acme-crm", "Read/Write"]]);
+// A component's name as a string is a label; dispatch on the imported component is flagged (crm-positions.ts:56).
+export const integrationPanelNames = { "acme-crm": "AcmeCrmPanel" };
 // Wording across a whole template literal, and MIME types whose subtype equals the server's "csv" id.
 export const exportPrompt = (mode: string) => `Choose ${mode}/export`;
 export const csvType = "text/csv";

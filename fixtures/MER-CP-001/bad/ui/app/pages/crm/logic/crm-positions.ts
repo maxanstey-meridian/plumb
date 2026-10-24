@@ -59,3 +59,4 @@ export const settingsRouteMap = new Map([["acme-connector", "/settings/connector
 export const tabRoutes = (tab: string) => ({ ["acme-webhook"]: `/settings/${tab}` });
 // A label that equals a server id ("export") reads as an id-to-id map: the accepted trade-off, since route tables are the real harm.
 export const formatLabels = new Map([["csv", "export"]]);
+export const baseRoutes = (base: string) => ({ "acme-crm": `${base}/crm` });

@@ -71,6 +71,8 @@ Useful options:
 
 `--ci` enables checks that execute the target repository's own toolchain. `--profile` writes phase timings, selected owners, shared-analysis counters, external execution timings, and capability initialization to stderr without changing finding output.
 
+A run is degraded when an engine it needed failed or was missing: ast-grep, a check script, or an analysis dependency such as TypeScript. The rules it serves report nothing, so stderr names each failure and the summary line ends `— degraded: N engines failed`. Under `--json` the stderr lines alone say so. A degraded run still exits by its findings locally, and exits 2 under `--ci`.
+
 ### Repository Inventory
 
 In a Git repository, Plumb scans tracked files and visible untracked files from `git ls-files`; Git-ignored paths are excluded. Outside Git, it falls back to one filesystem traversal with standard build and dependency directories excluded.

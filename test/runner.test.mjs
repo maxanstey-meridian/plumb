@@ -912,13 +912,22 @@ for (const id of MIGRATED) {
 
 // ---- §4 degradation: AST-tier check without its optional dep ----
 
-test("AST check with unresolvable typescript → stderr diagnostic, no findings, exit 0", () => {
+test("AST check with unresolvable typescript → stderr diagnostic, no findings, exit 0; a --ci run exits 2", () => {
   const isolated = isolatedPlumb({});
   fs.cpSync(path.join(FIX, "MER-BT-001", "bad"), isolated.target, { recursive: true });
   const out = isolated.run("--rule", "MER-BT-001", "--json");
   assert.equal(out.status, 0);
   assert.deepEqual(JSON.parse(out.stdout), []);
   assert.match(out.stderr, /TypeScript not installed/);
+  // The summary doesn't read as clean: it says the run is degraded, and why is on stderr.
+  const text = isolated.run("--rule", "MER-BT-001");
+  assert.equal(text.status, 0, text.stderr);
+  assert.match(text.stdout, /^plumb: 0 error, 0 warn, 0 info — degraded: 1 engine failed \(see above\)$/m);
+  for (const args of [["--ci"], ["--ci", "--json"]]) {
+    const ci = isolated.run("--rule", "MER-BT-001", ...args);
+    assert.equal(ci.status, 2, `${args}: ${ci.stderr}`);
+    assert.match(ci.stderr, /TypeScript not installed/, `${args}`);
+  }
 });
 
 test("graph check without dependency-cruiser degrades while TypeScript remains available", () => {
@@ -996,9 +1005,20 @@ test("baseline: a run whose check failed can't tell a shrink, and says nothing o
     const out = failing.run("--rule", "MER-TO-909", "--baseline", baselineOf(failing));
     assert.match(out.stderr, /check .*MER-TO-909-failure\.mjs failed/, body);
     assert.match(out.stderr, reason, body);
-    assert.match(out.stdout, /baseline holds 1/, body);
+    assert.match(out.stdout, /baseline holds 1\) — degraded: 1 engine failed \(see above\)$/m, body);
     assert.doesNotMatch(out.stdout, /shrunk/, body);
+    assert.equal(out.status, 0, body);
+    assert.equal(failing.run("--rule", "MER-TO-909", "--baseline", baselineOf(failing), "--ci").status, 2, body);
   }
+  // Each failed engine counts. TypeScript is there, so only the two producers fail.
+  const both = isolatedPlumb({
+    "MER-TO-908-failure.mjs": "#!/usr/bin/env node\nprocess.exit(2);\n",
+    "MER-TO-909-failure.mjs": "#!/usr/bin/env node\nprocess.exit(2);\n",
+  });
+  fs.symlinkSync(fs.realpathSync(path.join(HOME, "node_modules", "typescript")), path.join(both.home, "node_modules", "typescript"), "dir");
+  const out = both.run("--pack", "TO", "--no-baseline");
+  assert.equal(out.status, 0, out.stderr);
+  assert.match(out.stdout, /^plumb: 0 error, 0 warn, 0 info — degraded: 2 engines failed \(see above\)$/m, out.stderr);
 });
 
 test("baseline: a run whose in-process rule lacked its engine can't tell a shrink", () => {
@@ -1022,8 +1042,10 @@ test("baseline: a run whose ast-grep failed can't tell a shrink", () => {
   fs.writeFileSync(bl, JSON.stringify({ version: 1, entries: { "MER-TO-908\ta.ts": 1 } }));
   const out = isolated.run("--rule", "MER-TO-908", "--baseline", bl);
   assert.match(out.stderr, /plumb: ast-grep failed, YAML rules skipped: exit 8: .*Cannot parse rule/s);
-  assert.match(out.stdout, /baseline holds 1/);
+  assert.match(out.stdout, /baseline holds 1\) — degraded: 1 engine failed \(see above\)$/m);
   assert.doesNotMatch(out.stdout, /shrunk/);
+  assert.equal(out.status, 0, out.stderr);
+  assert.equal(isolated.run("--rule", "MER-TO-908", "--baseline", bl, "--ci").status, 2);
 });
 
 test("baseline: a degraded run refuses --write-baseline and leaves the file untouched", () => {
@@ -1094,7 +1116,7 @@ if (process.argv[2].endsWith("bad")) console.log("MER-TO-910\\twarn\\tresult.txt
   assert.equal(out.status, 1, out.stdout + out.stderr);
   assert.match(out.stdout, /^FAIL MER-TO-909 {2}bad:hit {2}good:ERROR \(check MER-TO-909-flaky\.mjs failed \(exit 3\)\)$/m);
   assert.match(out.stdout, /^ok {3}MER-TO-910$/m);
-  assert.match(out.stdout, /^self-test: 1\/2 failing$/m);
+  assert.match(out.stdout, /^self-test: 1\/2 failing — degraded: 1 engine failed \(see above\)$/m);
 });
 
 test("MER-RV-024: a convention it can't check exits 2 with a reason, so a --ci baseline can't read it as a shrink", () => {
@@ -1157,22 +1179,23 @@ test("baseline: shrinking is reported and suggests ratcheting down", () => {
   const out = plumb(r, "--baseline", bl);
   assert.equal(out.status, 0);
   assert.match(out.stdout, /shrunk; re-run --write-baseline/);
-  // A narrowed run compares only the entries of the rules it ran, and says to ratchet down from a full run, since
-  // --write-baseline on it would drop every other rule's entries.
+  // A narrowed run compares only the entries of the rules it ran, and the same hint holds: a narrowed
+  // --write-baseline keeps every other rule's entries.
+  const hint = /shrunk; re-run --write-baseline to ratchet down\)$/m;
   const focused = plumb(r, "--baseline", bl, "--rule", "MER-BE-001");
   assert.equal(focused.status, 0, focused.stderr);
   assert.match(focused.stdout, /baselined by \.plumb-baseline\.json/);
   assert.doesNotMatch(focused.stdout, /shrunk/);
-  assert.match(plumb(r, "--baseline", bl, "--rule", "MER-BE-005").stdout, /shrunk; ratchet down with --write-baseline on a run of every rule\)/);
-  assert.match(plumb(r, "--baseline", bl, "--pack", "BE").stdout, /shrunk; ratchet down with --write-baseline on a run of every rule\)/);
+  assert.match(plumb(r, "--baseline", bl, "--rule", "MER-BE-005").stdout, hint);
+  assert.match(plumb(r, "--baseline", bl, "--pack", "BE").stdout, hint);
   assert.doesNotMatch(plumb(r, "--baseline", bl, "--pack", "FE").stdout, /shrunk/);
   // --exclude hides files from every rule, so it can't tell.
   assert.doesNotMatch(plumb(r, "--baseline", bl, "--exclude", "docs/**").stdout, /shrunk/);
-  // A CI-only rule's entries don't hide a real shrink in a run without --ci, and the hint says to add --ci…
+  // A CI-only rule's entries don't hide a real shrink in a run without --ci…
   const withCiOnly = JSON.parse(fs.readFileSync(bl, "utf8"));
   fs.writeFileSync(bl, JSON.stringify({ ...withCiOnly, entries: { ...withCiOnly.entries, "MER-RV-024\tweb/package.json": 1 } }));
-  assert.match(plumb(r, "--baseline", bl).stdout, /shrunk; ratchet down with --write-baseline on a run of every rule with --ci/);
-  assert.match(plumb(r, "--baseline", bl, "--rule", "MER-BE-005", "--ci").stdout, /on a run of every rule with --ci\)/);
+  assert.match(plumb(r, "--baseline", bl).stdout, hint);
+  assert.match(plumb(r, "--baseline", bl, "--rule", "MER-BE-005", "--ci").stdout, hint);
   // …nor count as one when they're the only entries that run couldn't produce.
   const kept = repo(["MER-BE-005"], { "App.csproj": "<Project/>\n" });
   const keptBaseline = path.join(kept, ".plumb-baseline.json");
@@ -1211,8 +1234,9 @@ test("baseline identity and suppression are unchanged for migrated findings", ()
 // positions never count. Line 16's route argument is the generated client's, but the id in its query is a copy.
 // Each crm-positions.ts and CrmLinks.vue line shows one kind of id position, some with several ids in it
 // (crm-positions.ts:15, 16 and 20, CrmLinks.vue:3 and 4); crm-positions.ts:55 only declares the component line 56
-// maps to. A key mapped to another server id (31 and 51-53) or to a path (57-59) is a route table, not a label, and
-// both ids of an id-to-id map are copies. Line 61's "export" is meant as a label, but a value is judged by whether it
+// maps to. A key mapped to another server id (31 and 51-53) or to a route (57-59 and 62: a value starting with `/`,
+// or a template starting with `/` or `${…}/`) is a route table, not a label, and both ids of an id-to-id map are
+// copies. A key mapped to a number (36) is flagged, an ordering or a limit alike, since a limit is a rule. Line 61's "export" is meant as a label, but a value is judged by whether it
 // equals an id, so "csv" mapped to it is flagged too: the accepted trade-off, as route tables are the real harm. A
 // link's MIME-shaped value (CrmLinks.vue:12-14) is a relative path, and a nested object in a `v-bind` (11) is data,
 // not attributes. The good fixture's server declares ExportId = "export", and its crm-copy.ts and CrmConflict.vue use
@@ -1222,9 +1246,11 @@ test("baseline identity and suppression are unchanged for migrated findings", ()
 // argument-less `v-bind` or `v-on` object (attribute and event names), test hooks (`data-test-id=`, `:data-qa-id=`), a
 // route name (`:to="{ name: 'export' }"`), `:class` object keys, a `new Map` entry's value, a class field and
 // `this.title =` under wording names, an interpolation, a returned value, a call argument, and the whitespace paths
-// "Choose import/export" and `Choose ${mode}/export`. Its labels, colours, icons and orderings keyed on "acme-crm" or
+// "Choose import/export" and `Choose ${mode}/export`. Its string labels, colours and icons keyed on "acme-crm" or
 // "csv" (quoted, computed, `new Map` entries, through `as const`, `<const>`, `<string>` and `satisfies`) are
-// presentation, and "text/csv" is a MIME type, not a path to the "csv" id.
+// presentation, including "Read/Write", whose `/` doesn't make it a route, and a component's name as a string
+// ("AcmeCrmPanel"): the accepted reading, as Nuxt dispatches on the imported component, which is flagged (56). And
+// "text/csv" is a MIME type, not a path to the "csv" id.
 test("MER-CP-001 names each copied id's qualified owner at its exact location", () => {
   const findings = JSON.parse(plumb(path.join(FIX, "MER-CP-001", "bad"), "--rule", "MER-CP-001", "--json").stdout);
   const owner = (finding) => finding.message.match(/ is (\S+) on the server/)?.[1];
@@ -1282,7 +1308,7 @@ test("MER-CP-001 names each copied id's qualified owner at its exact location", 
     ["ui/app/pages/crm/logic/crm-positions.ts:33", "CrmIntegration.Webhooks.HandlerId"], // array under an id-named property
     ["ui/app/pages/crm/logic/crm-positions.ts:34", "CrmIntegration.Webhooks.HandlerId"], // right side of =
     ["ui/app/pages/crm/logic/crm-positions.ts:35", "CrmIntegration.IntegrationId"], // element access
-    ["ui/app/pages/crm/logic/crm-positions.ts:36", "CrmConnector.ConnectorId"], // computed key
+    ["ui/app/pages/crm/logic/crm-positions.ts:36", "CrmConnector.ConnectorId"], // computed key mapped to a number
     ["ui/app/pages/crm/logic/crm-positions.ts:37", "CrmIntegration.Webhooks.HandlerId"], // under a computed id-named key
     ["ui/app/pages/crm/logic/crm-positions.ts:38", "CrmIntegration.IntegrationId"], // `in`
     ["ui/app/pages/crm/logic/crm-positions.ts:39", "CrmIntegration.Webhooks.HandlerId"], // default parameter
@@ -1312,6 +1338,7 @@ test("MER-CP-001 names each copied id's qualified owner at its exact location", 
     ["ui/app/pages/crm/logic/crm-positions.ts:59", "CrmIntegration.Webhooks.HandlerId"], // computed key mapped to a template path
     ["ui/app/pages/crm/logic/crm-positions.ts:61", "CrmIntegration.CsvFormatId"], // a label equal to an id: the accepted trade-off
     ["ui/app/pages/crm/logic/crm-positions.ts:61", "CrmIntegration.ExportId"],
+    ["ui/app/pages/crm/logic/crm-positions.ts:62", "CrmIntegration.IntegrationId"], // key mapped to a `${…}/` template route
     ["ui/app/pages/crm/logic/crm-positions.ts:8", "CrmIntegration.Webhooks.HandlerId"], // case label
   ]);
   const good = JSON.parse(plumb(path.join(FIX, "MER-CP-001", "good"), "--rule", "MER-CP-001", "--json").stdout);

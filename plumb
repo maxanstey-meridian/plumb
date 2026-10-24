@@ -185,8 +185,10 @@ function detectPacks(snapshot) {
 
 // Why the run is degraded, if it is: an engine it needed was missing or failed (ast-grep, a check script, or an
 // in-process capability that reported a diagnostic), so some rules found nothing for want of running. A shrink can't
-// then be judged, a baseline can't be written, and a self-test fixture can't pass.
+// then be judged, a baseline can't be written, a self-test fixture can't pass, and a --ci run exits 2. The summary
+// line says so, since "0 error" from a run that didn't check reads as clean.
 const degraded = [];
+const degradedNote = (count) => ` — degraded: ${count} engine${count === 1 ? "" : "s"} failed (see above)`;
 
 function runAstGrep(r, selected, allYaml) {
   if (!selected.length) return [];
@@ -346,11 +348,12 @@ function visibleFinding(root, visibility, finding) {
 if (selfTest) {
   let dirs = [];
   try { dirs = fs.readdirSync(FIXTURES).filter((d) => d.startsWith("MER-")); } catch {}
-  let fail = 0;
+  let fail = 0, engineFailures = 0;
   // A fixture scan whose engine failed proves nothing either way: "clean" on good or a miss on bad would be the
   // failure talking, so it fails with its reason.
   const fixtureScan = async (kind, id) => {
     const hit = (await scan(path.join(FIXTURES, id, kind), { allPacks: true, selectedRule: id })).some((f) => f.id === id);
+    engineFailures += degraded.length;
     return { hit, error: degraded.length ? degraded.join("; ") : null };
   };
   for (const id of dirs.sort()) {
@@ -366,7 +369,8 @@ if (selfTest) {
     timings.rendering += elapsed(renderStarted);
   }
   const renderStarted = performance.now();
-  console.log(fail ? `self-test: ${fail}/${dirs.length} failing` : `self-test: all ${dirs.length} fixtures pass`);
+  console.log((fail ? `self-test: ${fail}/${dirs.length} failing` : `self-test: all ${dirs.length} fixtures pass`) +
+    (engineFailures ? degradedNote(engineFailures) : ""));
   timings.rendering += elapsed(renderStarted);
   emitProfile();
   process.exit(fail ? 1 : 0);
@@ -416,16 +420,13 @@ if (writeBaselineFile) {
   emitProfile();
   process.exit(0);
 }
-let baselined = 0, baselineTotal = 0, ranTotal = 0, narrowed = false, ciOnlyHeld = false;
+let baselined = 0, baselineTotal = 0, ranTotal = 0;
 if (baselineFile) {
   let bl;
   try { bl = JSON.parse(fs.readFileSync(baselineFile, "utf8")); }
   catch (e) { console.error(`plumb: cannot read baseline ${baselineFile}: ${e.message}`); process.exit(2); }
   const allowance = { ...(bl.entries || {}) };
   ranTotal = Object.entries(allowance).filter(([key]) => ran(key.split("\t")[0])).reduce((sum, [, count]) => sum + count, 0);
-  ciOnlyHeld = Object.keys(allowance).some((key) => ciOnly(key.split("\t")[0]));
-  // A run that left rules out compared only their entries, and its hint says so.
-  narrowed = !!ruleFilter || !!packFilter || (ciOnlyHeld && !ci);
   baselineTotal = Object.values(allowance).reduce((a, b) => a + b, 0);
   findings = findings.filter((f) => {
     if (allowance[bKey(f)] > 0) { allowance[bKey(f)]--; baselined++; return false; }
@@ -436,13 +437,11 @@ if (baselineFile) {
 // The baseline by its path inside the checked root (`.plumb-baseline.json`), or as given when it's elsewhere.
 const baselineName = baselineFile && (/^\.\.(?:[\\/]|$)/.test(path.relative(abs, path.resolve(baselineFile))) ? baselineFile : path.relative(abs, path.resolve(baselineFile)));
 // The baseline shrank when fewer of the findings it holds for the rules that ran came back. --exclude hides files
-// from every rule, and a degraded run skipped some, so neither can tell. A narrowed run says to ratchet down from a
-// run of every rule.
-const shrunkHint = !narrowed ? " — shrunk; re-run --write-baseline to ratchet down"
-  : ` — shrunk; ratchet down with --write-baseline on a run of every rule${ciOnlyHeld ? " with --ci" : ""}`;
+// from every rule, and a degraded run skipped some, so neither can tell. The same run with --write-baseline ratchets
+// down, narrowed or not, since a write keeps the entries of the rules it didn't run.
 const baselineNote = baselineFile
   ? `+${baselined} baselined by ${baselineName}, baseline holds ${baselineTotal}` +
-    (baselined < ranTotal && !excludePatterns.length && !degraded.length ? shrunkHint : "")
+    (baselined < ranTotal && !excludePatterns.length && !degraded.length ? " — shrunk; re-run --write-baseline to ratchet down" : "")
   : null;
 const renderStarted = performance.now();
 if (json) {
@@ -455,9 +454,11 @@ if (json) {
   for (const f of findings) c[f.sev] = (c[f.sev] || 0) + 1;
   let summary = `\nplumb: ${c.error} error, ${c.warn} warn, ${c.info} info`;
   if (baselineNote) summary += ` (${baselineNote})`;
+  if (degraded.length) summary += degradedNote(degraded.length);
   console.log(summary);
 }
 timings.rendering += elapsed(renderStarted);
 emitProfile();
 // exitCode, not exit(): a piped stdout is written asynchronously and exit() would cut large --json output short.
-process.exitCode = findings.some((f) => SEV[f.sev] >= SEV[failOn]) ? 1 : 0;
+// Locally a missing optional engine only narrows the run; under --ci a run that didn't check everything fails.
+process.exitCode = ci && degraded.length ? 2 : findings.some((f) => SEV[f.sev] >= SEV[failOn]) ? 1 : 0;

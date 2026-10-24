@@ -152,7 +152,7 @@ function detectPacks(snapshot) {
     if (f.includes("generated/rivet") || /contracts\/generated/.test(f)) rivet = true;
     if (f.includes("/Modules/") || f.startsWith("Modules/")) modules = true;
     if (/\.(spec|test)\.(ts|mjs|js)$/.test(b) || /Tests?\.csproj$/.test(b) ||
-        f.includes("/tests/") || f.startsWith("tests/") || f.includes("__tests__") ||
+        /(?:^|\/)(?:tests?|e2e|__tests__)\//.test(f) ||
         f.includes("/TestSupport/") || f.startsWith("TestSupport/")) tests = true;
     if (b.endsWith(".port.ts") || f.includes("application/ports/")) bts = true;
     // layer-shaped TS tree (lowercase domain/ + application|app/ under src/ or

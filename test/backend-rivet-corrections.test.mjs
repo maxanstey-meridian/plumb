@@ -104,14 +104,6 @@ test("each recognized FluentValidation validator owns an error code", () => {
     assert.equal((output.match(/^MER-BE-055\t/gm) || []).length, 3);
 });
 
-test("MER-RV-003 supports class base routes while retaining route-specific and minimal handlers", () => {
-    assert.equal(run("MER-RV-003", "good"), "");
-    const output = run("MER-RV-003", "bad");
-    assert.match(output, /OrdersController\.cs:3\t.*OrdersContract\.Create/);
-    assert.match(output, /OrdersController\.cs:20\t.*MembersContract\.List/);
-    assert.match(output, /OrdersEndpoints\.cs:4\t.*OrdersContract\.Create/);
-});
-
 test("Rivet authoring rules ignore comments, strings, and compiler fixtures", () => {
     for (const rule of ["MER-RV-001", "MER-RV-002", "MER-RV-006", "MER-RV-010"]) {
         assert.equal(run(rule, "good"), "", `${rule} reported fixture text as application code`);
@@ -133,7 +125,8 @@ test("MER-RV-007 flags every app-written RivetResult bridge, one alone included,
         "Modules/Common/ResultExtensions.Actions.cs:1",
         "Modules/Common/ResultExtensions.cs:1",
         "Modules/Orders/OrderResultExtensions.cs:1",
-        "Worker/Modules/Common/WorkerResultExtensions.cs:1",
+        // A typed Results<…> union, spaces in its generics.
+        "Modules/Orders/TypedResultExtensions.cs:1",
     ]);
 });
 
@@ -234,17 +227,17 @@ test("MER-RV-027 follows transport namesakes and .Returns<T> payloads, checks Pa
     ]);
 });
 
-// A throwaway repo holding only `files`, scanned for one rule.
-function scan(rule, files) {
+// A throwaway repo holding only `files`, scanned for one rule (or with `args`).
+function scan(rule, files, args = ["--rule", rule]) {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "plumb-backend-"));
     try {
         for (const [file, content] of Object.entries(files)) {
             fs.mkdirSync(path.dirname(path.join(root, file)), { recursive: true });
             fs.writeFileSync(path.join(root, file), content);
         }
-        const result = spawnSync(PLUMB, [root, "--rule", rule, "--ci", "--json"], { encoding: "utf8" });
+        const result = spawnSync(PLUMB, [root, ...args, "--ci", "--json"], { encoding: "utf8" });
         assert.ok([0, 1].includes(result.status), result.stderr);
-        return JSON.parse(result.stdout).map((finding) => `${finding.location}\t${finding.message}`);
+        return JSON.parse(result.stdout).filter((finding) => !rule || finding.rule === rule).map((finding) => `${finding.location}\t${finding.message}`);
     } finally {
         fs.rmSync(root, { recursive: true, force: true });
     }
@@ -296,6 +289,30 @@ test("MER-BE-018 reports a global using inside a module file once, as a global u
     assert.match(findings[0], /^api\/Modules\/Orders\/Application\/GlobalUsings\.cs:1\tglobal using global::App\.Contracts\.Orders puts the API's transport contract in scope/);
 });
 
+test("MER-BE-018 reads every <Using> form and global using statement, and exempts test projects by metadata, test-only props and build output", () => {
+    const findings = scan("MER-BE-018", {
+        "api/Api.csproj": '<Project Sdk="Microsoft.NET.Sdk.Web">\n  <ItemGroup>\n    <Using\n      Include="System.Text.Json;App.Contracts.Orders" />\n  </ItemGroup>\n</Project>\n',
+        "Directory.Build.props": '<Project>\n  <ItemGroup>\n    <Using Include="App.Contracts.Orders" />\n  </ItemGroup>\n' +
+            "  <ItemGroup Condition=\"'$(IsTestProject)' == 'true'\">\n    <Using Include=\"App.Contracts.Orders\" />\n  </ItemGroup>\n</Project>\n",
+        "api/Contracts/Orders/OrderModels.cs": "namespace App.Contracts.Orders;\npublic sealed record OrderDto(Guid Id);\npublic sealed record Page<T>(T Item);\n",
+        "api/GlobalUsings.cs": "global using System; global using static App.Contracts.Orders.OrderDto;\nglobal using Wire = App.Contracts.Orders.Page<App.Contracts.Orders.OrderDto>;\n",
+        // SDK-generated build output repeats the project's usings.
+        "api/obj/Debug/net10.0/Api.GlobalUsings.g.cs": "global using global::App.Contracts.Orders;\n",
+        // A test project known only by its test SDK, not by its folder or file names.
+        "src/Api.Specs/Api.Specs.csproj": '<Project Sdk="Microsoft.NET.Sdk"><ItemGroup><PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.0.0" /></ItemGroup></Project>\n',
+        "src/Api.Specs/Modules/Orders/Application/PlaceOrderSpec.cs": "global using App.Contracts.Orders;\n",
+        // A production *Test.cs file inside a module is production code.
+        "api/Modules/Payments/Infrastructure/GovUkPayConnectionTest.cs": "using App.Contracts.Orders;\n",
+    });
+    assert.deepEqual(findings.map((finding) => finding.replace(/ puts the API's.*/, "")).sort(), [
+        "Directory.Build.props:3\t<Using Include=\"App.Contracts.Orders\">",
+        "api/Api.csproj:3\t<Using Include=\"App.Contracts.Orders\">",
+        "api/GlobalUsings.cs:1\tglobal using static App.Contracts.Orders.OrderDto",
+        "api/GlobalUsings.cs:2\tglobal using Wire = App.Contracts.Orders.Page<App.Contracts.Orders.OrderDto>",
+        "api/Modules/Payments/Infrastructure/GovUkPayConnectionTest.cs:1\tmodule Payments Infrastructure uses App.Contracts.Orders, the API's transport contract — map at the edge (a controller or a Contracts transport mapper) and keep the module on its own types",
+    ]);
+});
+
 test("MER-RV-027 reads .Returns<T> only in a [RivetContract], and a conditional [JsonIgnore] beside [RivetOptional] is its own finding", () => {
     const findings = scan("MER-RV-027", {
         "api/Api.csproj": '<Project Sdk="Microsoft.NET.Sdk.Web" />\n',
@@ -316,7 +333,7 @@ test("MER-RV-027 reads .Returns<T> only in a [RivetContract], and a conditional 
 test("MER-TE-008 checks a TypeScript API's test/ tree and accepts doubles in its support/ folder", () => {
     assertFindings("MER-TE-008", "bad", [
         ["Tests/FakeClock.cs:3", "top-level test double FakeClock lives outside TestSupport/<Module>"],
-        ["api/test/orders/fake-quote-store.ts:2", "top-level test double FakeQuoteStore lives outside the test tree's support/ folder — move reusable doubles there"],
+        ["api/test/orders/fake-quote-store.ts:2", "exported test double FakeQuoteStore is outside the test tree's support/ folder — move reusable doubles to tests/support/"],
     ]);
     const findings = scan("MER-TE-008", {
         "api/test/orders/support/fake-clock.ts": "export class FakeClock {}\n",
@@ -325,4 +342,23 @@ test("MER-TE-008 checks a TypeScript API's test/ tree and accepts doubles in its
         "api/src/test/fake-seed.ts": "export class FakeSeed {}\n",
     });
     assert.deepEqual(findings.map((finding) => finding.split("\t")[0]), ["api/tests/fake-mailer.ts:1"]);
+});
+
+test("a repo whose only tests sit in a TypeScript test/ tree gets the TE pack in a full run", () => {
+    const findings = scan("MER-TE-008", {
+        "api/package.json": "{}\n",
+        "api/test/orders/fake-quote-store.ts": "export class FakeQuoteStore {}\n",
+    }, []);
+    assert.deepEqual(findings.map((finding) => finding.split("\t")[0]), ["api/test/orders/fake-quote-store.ts:1"]);
+});
+
+test("MER-FE-030 leaves a test support barrel alone and still flags an app re-export", () => {
+    const findings = scan("MER-FE-030", {
+        "ui/nuxt.config.ts": "export default defineNuxtConfig({ ssr: false });\n",
+        "ui/tests/support/index.ts": 'export * from "./fake-auth";\n',
+        "ui/tests/support/fake-auth.ts": "export class FakeAuth {}\n",
+        "ui/app/utils/index.ts": 'export * from "./money";\n',
+        "ui/app/utils/money.ts": "export const money = 1;\n",
+    });
+    assert.deepEqual(findings.map((finding) => finding.split("\t")[0]), ["ui/app/utils/index.ts:1"]);
 });

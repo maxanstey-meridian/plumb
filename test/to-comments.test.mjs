@@ -86,7 +86,7 @@ test("MER-TO-015 reads .editorconfig keys case-insensitively", () => {
 const typescript = (length) => `// ${"word ".repeat(length).slice(0, length - 4)}.\nexport const wide = 1;\n`;
 const widths = (reported) => reported.map((finding) => `${finding.location} ${finding.message.match(/past the (\d+)-character/)[1]}`);
 
-test("TO-015 reads the nearest oxfmt config's top-level printWidth, not an override's", () => {
+test("TO-015 reads the nearest oxfmt config's top-level printWidth when no override matches the file", () => {
   const root = repo({
     ".oxfmtrc.json": `{ "printWidth": 100 }\n`,
     "src/wide/.oxfmtrc.json": `{ "overrides": [{ "files": ["*.md"], "options": { "printWidth": 80 } }], "printWidth": 120 }\n`,
@@ -129,5 +129,84 @@ test("TO-015 matches a brace-list .editorconfig section and skips one that lists
     "api/Report.cs": csharp(110),
     "api/Wide.cs": csharp(125),
   });
+  assert.deepEqual(widths(findings(root)), ["api/Wide.cs:3 120"]);
+});
+
+test("TO-015 layers every matching oxfmt override over the top level, honouring excludeFiles", () => {
+  const root = repo({
+    ".oxfmtrc.json": JSON.stringify({ printWidth: 120, overrides: [
+      { files: ["legacy/**"], excludeFiles: ["*.spec.ts"], options: { printWidth: 80 } },
+      { files: ["legacy/keep.ts"], options: { semi: false } },
+      { files: ["/legacy/never.ts"], options: { printWidth: 60 } },
+    ] }),
+    "src/fits.ts": typescript(110),
+    "legacy/old.ts": typescript(90),
+    "legacy/old.spec.ts": typescript(90),
+    "legacy/keep.ts": typescript(90),
+    "legacy/never.ts": typescript(70),
+  });
+  assert.deepEqual(widths(findings(root)).sort(), ["legacy/keep.ts:1 80", "legacy/old.ts:1 80"]);
+});
+
+test("TO-015 reads a one-item brace set as its item in a CSharpier override and an .editorconfig section", () => {
+  const root = repo({
+    "a/.csharpierrc.yaml": "overrides:\n  - files: \"*.{cs}\"\n    printWidth: 80\n",
+    "a/Report.cs": csharp(90),
+    ".editorconfig": "root = true\n\n[*.{cs}]\nmax_line_length = 120\n\n[V{1..3}.cs]\nmax_line_length = 80\n",
+    "b/Report.cs": csharp(110),
+    "b/V2.cs": csharp(90),
+    "b/V4.cs": csharp(90),
+  });
+  assert.deepEqual(widths(findings(root)).sort(), ["a/Report.cs:3 80", "b/V2.cs:3 80"]);
+});
+
+test("TO-015 lets ** right inside a brace set match zero or more directories", () => {
+  const root = repo({
+    ".editorconfig": "root = true\n\n[*.cs]\nmax_line_length = 120\n\n[{**/Legacy/*.cs,x}]\nmax_line_length = 80\n",
+    "Legacy/Old.cs": csharp(90),
+    "src/Legacy/Old.cs": csharp(90),
+    "src/New.cs": csharp(110),
+  });
+  assert.deepEqual(widths(findings(root)).sort(), ["Legacy/Old.cs:3 80", "src/Legacy/Old.cs:3 80"]);
+});
+
+test("TO-015 trims the spaces inside an .editorconfig section header", () => {
+  const root = repo({ ".editorconfig": "root = true\n\n[ *.cs ]\nmax_line_length = 120\n", "Report.cs": csharp(110), "Wide.cs": csharp(125) });
+  assert.deepEqual(widths(findings(root)), ["Wide.cs:3 120"]);
+});
+
+test("TO-015 reads a JSON CSharpier config's keys case-insensitively", () => {
+  const root = repo({
+    "api/.csharpierrc.json": `{ "PrintWidth": 120, "Overrides": [{ "Files": "Legacy/*.cs", "PrintWidth": 80 }] }\n`,
+    "api/Report.cs": csharp(110),
+    "api/Legacy/Old.cs": csharp(90),
+  });
+  assert.deepEqual(widths(findings(root)), ["api/Legacy/Old.cs:3 80"]);
+});
+
+test("TO-015 gives a matching CSharpier override without printWidth the default width", () => {
+  const root = repo({ "api/.csharpierrc.yaml": "printWidth: 120\noverrides:\n  - files: \"*.cs\"\n    formatter: csharp\n", "api/Report.cs": csharp(110) });
+  assert.deepEqual(widths(findings(root)), ["api/Report.cs:3 100"]);
+});
+
+test("TO-015 anchors a CSharpier override or .editorconfig section glob with a leading / at its directory", () => {
+  const root = repo({
+    "api/.csharpierrc.yaml": "overrides:\n  - files: \"/Report.cs\"\n    printWidth: 80\n",
+    "api/Report.cs": csharp(90),
+    "api/sub/Report.cs": csharp(90),
+    ".editorconfig": "root = true\n\n[/Top.cs]\nmax_line_length = 80\n",
+    "Top.cs": csharp(90),
+    "lib/Top.cs": csharp(90),
+  });
+  assert.deepEqual(widths(findings(root)).sort(), ["Top.cs:3 80", "api/Report.cs:3 80"]);
+});
+
+test("TO-015 stops the .editorconfig search at a child marked root", () => {
+  const root = repo({ ".editorconfig": "[*.cs]\nmax_line_length = 80\n", "api/.editorconfig": "root = true\n\n[*.md]\nmax_line_length = 120\n", "api/Report.cs": csharp(105) });
+  assert.deepEqual(widths(findings(root)), ["api/Report.cs:3 100"]);
+});
+
+test("TO-015 falls through a child .editorconfig with no matching section to its parent", () => {
+  const root = repo({ ".editorconfig": "root = true\n\n[*.cs]\nmax_line_length = 120\n", "api/.editorconfig": "[*.md]\nmax_line_length = 80\n", "api/Report.cs": csharp(110), "api/Wide.cs": csharp(125) });
   assert.deepEqual(widths(findings(root)), ["api/Wide.cs:3 120"]);
 });

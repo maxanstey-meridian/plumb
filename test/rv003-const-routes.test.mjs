@@ -18,8 +18,10 @@ function findings(root) {
     return JSON.parse(result.stdout).map((finding) => `${finding.location}\t${finding.message}`).sort();
 }
 
-function repo(files) {
+// A throwaway repo holding `files`, deleted when test `t` ends.
+function repo(t, files) {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "plumb-rv003-"));
+    t.after(() => fs.rmSync(root, { recursive: true, force: true }));
     for (const [file, text] of Object.entries(files)) {
         fs.mkdirSync(path.dirname(path.join(root, file)), { recursive: true });
         fs.writeFileSync(path.join(root, file), text);
@@ -51,8 +53,8 @@ test("MER-RV-003 bad names the contract field each const-route handler must bind
     ]);
 });
 
-test("MER-RV-003 reports a const-route handler in a base-routed controller once, under its const", () => {
-    const root = repo({
+test("MER-RV-003 reports a const-route handler in a base-routed controller once, under its const", (t) => {
+    const root = repo(t, {
         "Contracts/Orders/OrdersContract.cs": contract,
         "Modules/Orders/OrdersController.cs": `[Route(OrdersContract.BaseRoute)]
 public sealed class OrdersController : ControllerBase
@@ -67,8 +69,8 @@ public sealed class OrdersController : ControllerBase
     ]);
 });
 
-test("MER-RV-003 accepts a local holding the field only when a terminal is called on that local", () => {
-    const controller = (body) => repo({
+test("MER-RV-003 accepts a local holding the field only when a terminal is called on that local", (t) => {
+    const controller = (body) => repo(t, {
         "Contracts/Orders/OrdersContract.cs": contract,
         "Modules/Orders/OrdersController.cs": `public sealed class OrdersController : ControllerBase
 {
@@ -83,4 +85,36 @@ test("MER-RV-003 accepts a local holding the field only when a terminal is calle
     assert.deepEqual(findings(controller("var endpoint = OrdersContract.Get;\n        return endpoint.Success(useCase.Execute(id)).ToActionResult();")), []);
     assert.equal(findings(controller("var endpoint = OrdersContract.Get;\n        return Ok(useCase.Execute(id)); // endpoint.Success(...)")).length, 1);
     assert.equal(findings(controller("var other = OrdersContract.Get;\n        return endpoint.Success(useCase.Execute(id)).ToActionResult();")).length, 1);
+});
+
+test("MER-RV-003 reads only a bare const route, narrowed by verb, including a named route: argument", (t) => {
+    const root = repo(t, {
+        "Contracts/Orders/OrdersContract.cs": `[RivetContract]
+public static class OrdersContract
+{
+    public const string BaseRoute = "/api/orders";
+    public const string ItemRoute = "/api/orders/{id}";
+
+    public static readonly RouteDefinition<OrderDto[]> List = Define.Get<OrderDto[]>(BaseRoute);
+    public static readonly RouteDefinition Remove = Define.Delete(route: OrdersContract.ItemRoute);
+}
+`,
+        "Modules/Orders/OrdersController.cs": `public sealed class OrdersController : ControllerBase
+{
+    // BaseRoute plus a suffix names no single field.
+    [HttpGet(OrdersContract.BaseRoute + "/{id}")]
+    public IActionResult Get(Guid id) => OrdersContract.Get.Success(useCase.Execute(id)).ToActionResult();
+
+    // No DELETE field on BaseRoute: a plain ASP.NET route, not a Rivet handler.
+    [HttpDelete(OrdersContract.BaseRoute)]
+    public IActionResult Clear() => NoContent();
+
+    [HttpDelete(OrdersContract.ItemRoute)]
+    public IActionResult Remove(Guid id) => NoContent();
+}
+`,
+    });
+    assert.deepEqual(findings(root), [
+        `Modules/Orders/OrdersController.cs:11\thandler route references OrdersContract.ItemRoute ${unbound} OrdersContract.Remove`,
+    ]);
 });

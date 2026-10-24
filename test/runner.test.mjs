@@ -76,7 +76,7 @@ function isolatedPlumb(producers) {
   fs.cpSync(path.join(HOME, "configs"), path.join(home, "configs"), { recursive: true });
   fs.copyFileSync(path.join(HOME, "lib", "rivet-context.mjs"), path.join(home, "lib", "rivet-context.mjs"));
   fs.mkdirSync(path.join(home, "node_modules", "@vue"), { recursive: true });
-  for (const dependency of ["ignore", "fast-xml-parser", "@vue/compiler-sfc"]) {
+  for (const dependency of ["ignore", "fast-xml-parser", "yaml", "picomatch", "@vue/compiler-sfc"]) {
     const target = path.join(home, "node_modules", ...dependency.split("/"));
     fs.symlinkSync(fs.realpathSync(path.join(HOME, "node_modules", ...dependency.split("/"))), target, "dir");
   }
@@ -961,12 +961,17 @@ test("baseline identity and suppression are unchanged for migrated findings", ()
   assert.deepEqual(JSON.parse(fs.readFileSync(baseline, "utf8")).entries, { "MER-TO-001\tpackage.json": 1 });
 });
 
+// Lines 10, 11 and 15 are the literal and template literal types: type positions never count.
 test("MER-CP-001 names each copied id's qualified owner at its exact location", () => {
   const findings = JSON.parse(plumb(path.join(FIX, "MER-CP-001", "bad"), "--rule", "MER-CP-001", "--json").stdout);
   const owner = (finding) => finding.message.match(/ is (\S+) on the server/)?.[1];
   assert.deepEqual(findings.map((finding) => [finding.location, owner(finding)]), [
-    ["ui/app/pages/crm/index.vue:14", "CrmIntegration.IntegrationId"],
-    ["ui/app/pages/crm/index.vue:15", "CrmIntegration.IntegrationId"],
+    ["ui/app/pages/crm/index.vue:12", "CrmIntegration.IntegrationId"], // compared against a literal-typed value
+    ["ui/app/pages/crm/index.vue:13", "CrmIntegration.IntegrationId"], // hand-built /api/ URL
+    ["ui/app/pages/crm/index.vue:14", "TestCrmConnectionUseCase.ProbeId"], // production type named Test…
+    ["ui/app/pages/crm/index.vue:16", "CrmIntegration.PanelId"], // dispatch-map key
+    ["ui/app/pages/crm/index.vue:22", "CrmIntegration.IntegrationId"],
+    ["ui/app/pages/crm/index.vue:23", "CrmIntegration.IntegrationId"],
     ["ui/app/pages/crm/index.vue:6", "CrmIntegration.IntegrationId"],
     ["ui/app/pages/crm/index.vue:7", "CrmIntegration.IntegrationId"],
     ["ui/app/pages/crm/index.vue:8", "CrmConnector.ConnectorId"],

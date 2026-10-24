@@ -224,7 +224,7 @@ test("TE-009 reads test folders relative to a nested frontend root", () => {
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
 
-test("FE-006/007/010/015 skip a Nuxt fixture app under tests/ by the shared frontend test-source definition", () => {
+test("FE-010 skips a Nuxt fixture app under tests/ by the shared TypeScript test-source definition", () => {
   const good = runProducer("MER-FE-010", "good");
   assert.equal(good.status, 0, good.stderr);
   assert.equal(good.stdout, "");

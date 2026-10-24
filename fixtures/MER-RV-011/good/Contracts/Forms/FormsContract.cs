@@ -1,3 +1,4 @@
+using App.Common;
 using App.Modules.Forms.Application;
 namespace App.Contracts.Forms;
 [RivetContract]

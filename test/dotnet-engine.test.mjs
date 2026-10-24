@@ -212,8 +212,9 @@ test("C# type names resolve the way the compiler looks them up: nested types, na
     ["api/Wire/Envelope.cs", "namespace App.Wire;\npublic sealed record Envelope(int A);\n"],
     ["api/Outer.cs", "namespace App.Contracts.Orders;\npublic static class Outer\n{\n    public sealed record Inner(int A);\n    public sealed record UsesInner(Inner Value);\n}\npublic sealed record Inner(int B);\n"],
     ["api/Noise.cs", "namespace App.Noise;\npublic static class Noise\n{\n    static void Run<T>(List<OrderDto> records) where T : class\n    {\n        foreach (var record in records) { }\n    }\n}\n"],
-    ["api/Nested.cs", "namespace App.Contracts.Orders;\npublic sealed record Shipment(IReadOnlyList<Parcel> Parcels)\n{\n    public sealed record Parcel(int Weight);\n}\n"],
-    ["api/Pragma.cs", "#nullable enable\nrecord Loose(int A);\n"],
+    ["api/Nested.cs", "namespace App.Contracts.Orders;\npublic sealed record Shipment(IReadOnlyList<Parcel> Parcels)\n{\n    public sealed record Parcel(int Weight);\n}\n" +
+      "public sealed record Crate(IReadOnlyList<Box> Boxes)\n{\n    public sealed record Box(int Size);\n}\npublic sealed record Box(int Size = 0);\n"],
+    ["api/Pragma.cs", "#nullable enable\nrecord Loose(int A);\n#region Response record types\n#endregion\n"],
     ["api/Usings.cs", "global using App.Globals;\n"],
     ["api/Globals/Flag.cs", "namespace App.Globals;\npublic sealed record Flag(bool On);\n"],
     ["Directory.Build.props", '<Project><ItemGroup><Using Include="App.Props" /></ItemGroup></Project>'],
@@ -240,8 +241,10 @@ test("C# type names resolve the way the compiler looks them up: nested types, na
   assert.equal(resolved("Wire.Envelope"), "App.Wire.Envelope");
   assert.equal(resolved("Flag"), "App.Globals.Flag");
   assert.equal(resolved("Setting"), "App.Props.Setting");
-  // A declaration after a preprocessor line, with no modifier, is still a declaration.
+  // A declaration after a preprocessor line, with no modifier, is still a declaration; a keyword on the
+  // preprocessor line itself declares nothing.
   assert.equal(resolved("Loose"), "Loose");
+  assert.equal(resolved("types"), null);
   // Two usings bring the same name in: CS0104, so ambiguous.
   assert.equal(resolved("OnlyHere"), null);
   assert.equal(resolved("Guid"), null);
@@ -249,9 +252,11 @@ test("C# type names resolve the way the compiler looks them up: nested types, na
   const outer = file("api/Outer.cs");
   assert.equal(resolved("Inner", outer, outer.text().indexOf("UsesInner")), "App.Contracts.Orders.Outer.Inner");
   assert.equal(resolved("Inner", outer, outer.text().lastIndexOf("record Inner")), "App.Contracts.Orders.Inner");
-  // A positional record's parameters are inside its scope, so they see its nested types unqualified.
+  // A positional record's parameter list is outside its body, so it doesn't see its nested types (CS0246): an
+  // unqualified Parcel there finds nothing, and Box finds the namespace's own Box.
   const nested = file("api/Nested.cs");
-  assert.equal(resolved("Parcel", nested, nested.text().indexOf("record Shipment")), "App.Contracts.Orders.Shipment.Parcel");
+  assert.equal(resolved("Parcel", nested, nested.text().indexOf("record Shipment")), null);
+  assert.equal(resolved("Box", nested, nested.text().indexOf("record Crate")), "App.Contracts.Orders.Box");
   // `where T : class` and `var record in` declare nothing.
   assert.equal(resolved("App.Noise.Noise.where"), null);
   assert.equal(resolved("App.Noise.Noise.in"), null);
@@ -268,6 +273,13 @@ test("C# type names prefer the declaration in the referrer's project closure", (
     ["one/Shared/Manifest.cs", "namespace App.Shared;\npublic sealed record Manifest(string? Returns = null);\n"],
     ["one/UsesManifest.cs", "using App.Shared;\nnamespace App.Contracts;\npublic sealed record UsesManifest(Manifest M);\n"],
     ["two/Manifest.cs", "namespace App;\npublic sealed record Manifest(int X);\n"],
+    // Only an unreferenced project declares Remote: the whole scan is the fallback.
+    ["two/Remote.cs", "namespace App.Contracts;\npublic sealed record Remote(int X);\n"],
+    // Two of one/'s usings bring Clash in (CS0104); two/'s App.Clash must not win through the fallback.
+    ["one/Left/Clash.cs", "namespace App.Left;\npublic sealed record Clash(int A);\n"],
+    ["one/Right/Clash.cs", "namespace App.Right;\npublic sealed record Clash(int B);\n"],
+    ["one/UsesClash.cs", "using App.Left;\nusing App.Right;\nnamespace App.Contracts;\npublic sealed record UsesClash(Clash C);\n"],
+    ["two/Clash.cs", "namespace App;\npublic sealed record Clash(int C);\n"],
   ]), [Capability.CSHARP, Capability.DOTNET_PROJECTS]);
   const { csharp } = f.context;
   const file = (name) => csharp.csharpFiles.find((value) => value.path === name);
@@ -276,4 +288,7 @@ test("C# type names prefer the declaration in the referrer's project closure", (
   assert.deepEqual(result.declarations.map((declaration) => declaration.file.path), ["one/OrderDto.cs"]);
   const manifest = file("one/UsesManifest.cs");
   assert.equal(csharp.resolveType("Manifest", manifest, manifest.text().indexOf("record UsesManifest"))?.fullName, "App.Shared.Manifest");
+  assert.equal(csharp.resolveType("Remote", uses, uses.text().indexOf("record Uses"))?.fullName, "App.Contracts.Remote");
+  const clash = file("one/UsesClash.cs");
+  assert.equal(csharp.resolveType("Clash", clash, clash.text().indexOf("record UsesClash")), null);
 });

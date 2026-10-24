@@ -87,7 +87,7 @@ test("MER-RV-003 accepts a local holding the field only when a terminal is calle
     assert.equal(findings(controller("var other = OrdersContract.Get;\n        return endpoint.Success(useCase.Execute(id)).ToActionResult();")).length, 1);
 });
 
-test("MER-RV-003 reads only a bare const route, narrowed by verb, including a named route: argument", (t) => {
+test("MER-RV-003 narrows a bare const route by verb, takes template:, route: and qualified names, and accepts any field for the verb on a composed route", (t) => {
     const root = repo(t, {
         "Contracts/Orders/OrdersContract.cs": `[RivetContract]
 public static class OrdersContract
@@ -96,14 +96,31 @@ public static class OrdersContract
     public const string ItemRoute = "/api/orders/{id}";
 
     public static readonly RouteDefinition<OrderDto[]> List = Define.Get<OrderDto[]>(BaseRoute);
+    public static readonly RouteDefinition<OrderDto> Get = Define.Get<OrderDto>(BaseRoute + "/{id}");
     public static readonly RouteDefinition Remove = Define.Delete(route: OrdersContract.ItemRoute);
+}
+`,
+        // No POST field: a composed POST route on it is a plain ASP.NET handler.
+        "Modules/Orders/AuthController.cs": `public sealed class AuthController : ControllerBase
+{
+    [HttpPost(OrdersContract.BaseRoute + "/logout")]
+    public IActionResult Logout() => SignOut();
 }
 `,
         "Modules/Orders/OrdersController.cs": `public sealed class OrdersController : ControllerBase
 {
-    // BaseRoute plus a suffix names no single field.
+    // BaseRoute plus a suffix names no single field, so any OrdersContract GET field answers it.
     [HttpGet(OrdersContract.BaseRoute + "/{id}")]
     public IActionResult Get(Guid id) => OrdersContract.Get.Success(useCase.Execute(id)).ToActionResult();
+
+    [HttpGet(OrdersContract.BaseRoute + "/{id}/lines")]
+    public IActionResult Lines(Guid id) => Ok(useCase.Lines(id));
+
+    [HttpGet(template: OrdersContract.BaseRoute)]
+    public IActionResult List() => Ok(useCase.List());
+
+    [HttpGet(App.Contracts.Orders.OrdersContract.BaseRoute)]
+    public IActionResult ListAgain() => Ok(useCase.List());
 
     // No DELETE field on BaseRoute: a plain ASP.NET route, not a Rivet handler.
     [HttpDelete(OrdersContract.BaseRoute)]
@@ -115,6 +132,9 @@ public static class OrdersContract
 `,
     });
     assert.deepEqual(findings(root), [
-        `Modules/Orders/OrdersController.cs:11\thandler route references OrdersContract.ItemRoute ${unbound} OrdersContract.Remove`,
+        `Modules/Orders/OrdersController.cs:10\thandler route references OrdersContract.BaseRoute ${unbound} OrdersContract.List`,
+        `Modules/Orders/OrdersController.cs:13\thandler route references OrdersContract.BaseRoute ${unbound} OrdersContract.List`,
+        `Modules/Orders/OrdersController.cs:20\thandler route references OrdersContract.ItemRoute ${unbound} OrdersContract.Remove`,
+        `Modules/Orders/OrdersController.cs:7\thandler route references OrdersContract.BaseRoute ${unbound} OrdersContract.List or OrdersContract.Get`,
     ]);
 });

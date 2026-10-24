@@ -12,8 +12,8 @@ type Route = `acme-crm/${string}`;
 const isKind = (kind: Kind | null) => kind === "acme-crm";
 const status = await $fetch("/api/integrations/acme-crm/status");
 const probe = "acme-probe";
-type Panel = "acmepanel";
-const panels: Record<Panel, string> = { acmepanel: "Panel" };
+interface Panels { "acme-crm": string }
+const items = await api.GET("/api/integrations", { params: { query: { id: "acme-crm" } } });
 const route: Route | null = null;
 </script>
 
@@ -23,5 +23,5 @@ const route: Route | null = null;
   <span v-if="destination?.integrationId === 'acme-crm'">CRM</span>
   <span v-if="isConnector()">Connector</span>
   <span v-if="isWebhook()">Webhook</span>
-  <span :data-kind="isKind(null)" :data-status="status" :data-probe="probe" :data-panels="panels.acmepanel" :data-route="route" />
+  <span :data-kind="isKind(null)" :data-status="status" :data-probe="probe" :data-items="items" :data-route="route" />
 </template>

@@ -8,7 +8,6 @@ public static class CrmIntegration
     }
 
     public const string IntegrationId = "acme-crm";
-    public const string PanelId = "acmepanel";
 }
 
 public readonly record struct CrmConnector(string Name)

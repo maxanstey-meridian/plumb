@@ -961,7 +961,8 @@ test("baseline identity and suppression are unchanged for migrated findings", ()
   assert.deepEqual(JSON.parse(fs.readFileSync(baseline, "utf8")).entries, { "MER-TO-001\tpackage.json": 1 });
 });
 
-// Lines 10, 11 and 15 are the literal and template literal types: type positions never count.
+// Lines 10, 11 and 15 are a literal type, a template literal type and an interface member: type positions
+// never count. Line 16's route argument is the generated client's, but the id in its query is a copy.
 test("MER-CP-001 names each copied id's qualified owner at its exact location", () => {
   const findings = JSON.parse(plumb(path.join(FIX, "MER-CP-001", "bad"), "--rule", "MER-CP-001", "--json").stdout);
   const owner = (finding) => finding.message.match(/ is (\S+) on the server/)?.[1];
@@ -969,7 +970,7 @@ test("MER-CP-001 names each copied id's qualified owner at its exact location", 
     ["ui/app/pages/crm/index.vue:12", "CrmIntegration.IntegrationId"], // compared against a literal-typed value
     ["ui/app/pages/crm/index.vue:13", "CrmIntegration.IntegrationId"], // hand-built /api/ URL
     ["ui/app/pages/crm/index.vue:14", "TestCrmConnectionUseCase.ProbeId"], // production type named Test…
-    ["ui/app/pages/crm/index.vue:16", "CrmIntegration.PanelId"], // dispatch-map key
+    ["ui/app/pages/crm/index.vue:16", "CrmIntegration.IntegrationId"], // an id in the client call's options
     ["ui/app/pages/crm/index.vue:22", "CrmIntegration.IntegrationId"],
     ["ui/app/pages/crm/index.vue:23", "CrmIntegration.IntegrationId"],
     ["ui/app/pages/crm/index.vue:6", "CrmIntegration.IntegrationId"],

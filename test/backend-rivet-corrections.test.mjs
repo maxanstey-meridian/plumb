@@ -266,6 +266,18 @@ test("MER-RV-027 resolves a shared name by namespace, skips one two usings make 
     assert.match(findings[0], /^api\/Contracts\/Orders\/OrdersContract\.cs:10\tOrderDto\.Note has a default on a response/);
 });
 
+test("MER-RV-027 follows a positional record's parameter to the namespace's type, not its own nested namesake", () => {
+    const findings = scan("MER-RV-027", {
+        "api/Api.csproj": '<Project Sdk="Microsoft.NET.Sdk.Web" />\n',
+        "api/Contracts/Orders/OrdersContract.cs":
+            "namespace App.Contracts.Orders;\n[RivetContract]\npublic static class OrdersContract\n{\n" +
+            '    public static readonly RouteDefinition<Shipment> Get = Define.Get<Shipment>("/api/shipments/{id}");\n}\n' +
+            "public sealed record Shipment(IReadOnlyList<Parcel> Parcels)\n{\n    public sealed record Parcel(int Weight);\n}\n" +
+            "public sealed record Parcel(int Weight = 0);\n",
+    });
+    assert.deepEqual(findings.map((finding) => finding.split(" on a response")[0]), ["api/Contracts/Orders/OrdersContract.cs:11\tParcel.Weight has a default"]);
+});
+
 test("MER-BE-018 says 'declares itself' only for the namespace name, not a using on the same line", () => {
     const findings = scan("MER-BE-018", {
         "api/Api.csproj": '<Project Sdk="Microsoft.NET.Sdk.Web" />\n',
@@ -293,7 +305,14 @@ test("MER-BE-018 reads every <Using> form and global using statement, and exempt
     const findings = scan("MER-BE-018", {
         "api/Api.csproj": '<Project Sdk="Microsoft.NET.Sdk.Web">\n  <ItemGroup>\n    <Using\n      Include="System.Text.Json;App.Contracts.Orders" />\n  </ItemGroup>\n</Project>\n',
         "Directory.Build.props": '<Project>\n  <ItemGroup>\n    <Using Include="App.Contracts.Orders" />\n  </ItemGroup>\n' +
-            "  <ItemGroup Condition=\"'$(IsTestProject)' == 'true'\">\n    <Using Include=\"App.Contracts.Orders\" />\n  </ItemGroup>\n</Project>\n",
+            "  <ItemGroup Condition=\"'$(IsTestProject)' == 'true'\">\n    <Using Include=\"App.Contracts.Orders\" />\n  </ItemGroup>\n" +
+            // Only production projects take these.
+            "  <ItemGroup Condition=\"'$(IsTestProject)' != 'true'\">\n    <Using Include=\"App.Contracts.Orders\" />\n  </ItemGroup>\n" +
+            "  <ItemGroup>\n    <Using Include=\"App.Contracts.Orders\" Condition=\"'$(IsTestProject)' == 'false'\" />\n" +
+            "    <Using Include=\"App.Contracts.Orders\" Condition=\" 'true' == '$(IsTestProject)' \" />\n" +
+            "    <Using Include=\"App.Contracts.Orders\" Condition=\"'$(IsTestProject)' == true\" />\n  </ItemGroup>\n" +
+            // A self-closing group has no body; the test-only group after it keeps its Condition.
+            "  <ItemGroup />\n  <ItemGroup Condition=\"'$(IsTestProject)' == 'true' \">\n    <Using Include=\"App.Contracts.Orders\" />\n  </ItemGroup>\n</Project>\n",
         "api/Contracts/Orders/OrderModels.cs": "namespace App.Contracts.Orders;\npublic sealed record OrderDto(Guid Id);\npublic sealed record Page<T>(T Item);\n",
         "api/GlobalUsings.cs": "global using System; global using static App.Contracts.Orders.OrderDto;\nglobal using Wire = App.Contracts.Orders.Page<App.Contracts.Orders.OrderDto>;\n",
         // SDK-generated build output repeats the project's usings.
@@ -303,12 +322,17 @@ test("MER-BE-018 reads every <Using> form and global using statement, and exempt
         "src/Api.Specs/Modules/Orders/Application/PlaceOrderSpec.cs": "global using App.Contracts.Orders;\n",
         // A production *Test.cs file inside a module is production code.
         "api/Modules/Payments/Infrastructure/GovUkPayConnectionTest.cs": "using App.Contracts.Orders;\n",
+        // A global using split over lines is reported once, as a global using.
+        "api/Modules/Orders/Application/Usings.cs": "global using Wire =\n    App.Contracts.Orders.OrderDto;\n",
     });
     assert.deepEqual(findings.map((finding) => finding.replace(/ puts the API's.*/, "")).sort(), [
+        "Directory.Build.props:12\t<Using Include=\"App.Contracts.Orders\">",
         "Directory.Build.props:3\t<Using Include=\"App.Contracts.Orders\">",
+        "Directory.Build.props:9\t<Using Include=\"App.Contracts.Orders\">",
         "api/Api.csproj:3\t<Using Include=\"App.Contracts.Orders\">",
         "api/GlobalUsings.cs:1\tglobal using static App.Contracts.Orders.OrderDto",
         "api/GlobalUsings.cs:2\tglobal using Wire = App.Contracts.Orders.Page<App.Contracts.Orders.OrderDto>",
+        "api/Modules/Orders/Application/Usings.cs:1\tglobal using Wire = App.Contracts.Orders.OrderDto",
         "api/Modules/Payments/Infrastructure/GovUkPayConnectionTest.cs:1\tmodule Payments Infrastructure uses App.Contracts.Orders, the API's transport contract — map at the edge (a controller or a Contracts transport mapper) and keep the module on its own types",
     ]);
 });
@@ -333,9 +357,11 @@ test("MER-RV-027 reads .Returns<T> only in a [RivetContract], and a conditional 
 test("MER-TE-008 checks a TypeScript API's test/ tree and accepts doubles in its support/ folder", () => {
     assertFindings("MER-TE-008", "bad", [
         ["Tests/FakeClock.cs:3", "top-level test double FakeClock lives outside TestSupport/<Module>"],
-        ["api/test/orders/fake-quote-store.ts:2", "exported test double FakeQuoteStore is outside the test tree's support/ folder — move reusable doubles to tests/support/"],
+        ["api/test/orders/fake-quote-store.ts:2", "exported test double FakeQuoteStore is outside the test tree's support/ folder — move reusable doubles into that support/ folder"],
     ]);
     const findings = scan("MER-TE-008", {
+        // A workspace root is not the package these tests belong to.
+        "package.json": '{ "workspaces": ["api"] }\n',
         "api/test/orders/support/fake-clock.ts": "export class FakeClock {}\n",
         "api/tests/fake-mailer.ts": "export class FakeMailer {}\n",
         // src/test/ is app code, not a test tree.
@@ -352,13 +378,26 @@ test("a repo whose only tests sit in a TypeScript test/ tree gets the TE pack in
     assert.deepEqual(findings.map((finding) => finding.split("\t")[0]), ["api/test/orders/fake-quote-store.ts:1"]);
 });
 
-test("MER-FE-030 leaves a test support barrel alone and still flags an app re-export", () => {
+test("MER-FE-030 leaves a test support barrel alone and still flags an app re-export and a .d.ts shim", () => {
     const findings = scan("MER-FE-030", {
         "ui/nuxt.config.ts": "export default defineNuxtConfig({ ssr: false });\n",
         "ui/tests/support/index.ts": 'export * from "./fake-auth";\n',
         "ui/tests/support/fake-auth.ts": "export class FakeAuth {}\n",
         "ui/app/utils/index.ts": 'export * from "./money";\n',
         "ui/app/utils/money.ts": "export const money = 1;\n",
+        // A hand-written declaration file is not test code.
+        "ui/app/types/legacy.d.ts": 'export * from "../utils/money";\n',
     });
-    assert.deepEqual(findings.map((finding) => finding.split("\t")[0]), ["ui/app/utils/index.ts:1"]);
+    assert.deepEqual(findings.map((finding) => finding.split("\t")[0]).sort(), ["ui/app/types/legacy.d.ts:1", "ui/app/utils/index.ts:1"]);
+});
+
+test("MER-TE-008 judges a single-package repo by its root package.json: only the top-level test tree is tests", () => {
+    const findings = scan("MER-TE-008", {
+        "package.json": "{}\n",
+        "test/fake-clock.ts": "export class FakeClock {}\n",
+        // lib/test/ and server/tests/ are app folders of the root package.
+        "lib/test/fake-seed.ts": "export class FakeSeed {}\n",
+        "server/tests/fake-mailer.ts": "export class FakeMailer {}\n",
+    });
+    assert.deepEqual(findings.map((finding) => finding.split("\t")[0]), ["test/fake-clock.ts:1"]);
 });

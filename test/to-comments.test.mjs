@@ -170,6 +170,51 @@ test("TO-015 lets ** right inside a brace set match zero or more directories", (
   assert.deepEqual(widths(findings(root)).sort(), ["Legacy/Old.cs:3 80", "src/Legacy/Old.cs:3 80"]);
 });
 
+test("TO-015 lets ** after a comma in a brace set match zero or more directories", () => {
+  const root = repo({
+    ".editorconfig": "root = true\n\n[*.cs]\nmax_line_length = 120\n\n[{x,**/Legacy/*.cs}]\nmax_line_length = 80\n",
+    "Legacy/Old.cs": csharp(90),
+    "src/Legacy/Old.cs": csharp(90),
+    "src/New.cs": csharp(110),
+  });
+  assert.deepEqual(widths(findings(root)).sort(), ["Legacy/Old.cs:3 80", "src/Legacy/Old.cs:3 80"]);
+});
+
+test("TO-015 anchors an oxfmt override glob with a leading ./ at the config's directory", () => {
+  const root = repo({
+    "pkg/.oxfmtrc.json": JSON.stringify({ printWidth: 120, overrides: [{ files: ["./a.ts"], options: { printWidth: 80 } }] }),
+    "pkg/a.ts": typescript(90),
+    "pkg/sub/a.ts": typescript(90),
+  });
+  assert.deepEqual(widths(findings(root)), ["pkg/a.ts:1 80"]);
+});
+
+test("TO-015 takes the width from the last of several matching oxfmt overrides that set it", () => {
+  const root = repo({
+    ".oxfmtrc.json": JSON.stringify({ overrides: [
+      { files: ["*.ts"], options: { printWidth: 80 } },
+      { files: ["src/**"], options: { printWidth: 70 } },
+    ] }),
+    "src/a.ts": typescript(75),
+  });
+  assert.deepEqual(widths(findings(root)), ["src/a.ts:1 70"]);
+});
+
+// oxfmt 0.62 reads `**` inside a segment as `*` and `{1..3}` as the literal text `1..3`.
+test("TO-015 reads an oxfmt ** inside a segment as * and a {n..m} range as literal text", () => {
+  const root = repo({
+    ".oxfmtrc.json": JSON.stringify({ printWidth: 120, overrides: [
+      { files: ["src/**.ts"], options: { printWidth: 80 } },
+      { files: ["V{1..3}.ts"], options: { printWidth: 80 } },
+    ] }),
+    "src/a.ts": typescript(90),
+    "src/b/a.ts": typescript(90),
+    "V1.ts": typescript(90),
+    "V2.ts": typescript(90),
+  });
+  assert.deepEqual(widths(findings(root)), ["src/a.ts:1 80"]);
+});
+
 test("TO-015 trims the spaces inside an .editorconfig section header", () => {
   const root = repo({ ".editorconfig": "root = true\n\n[ *.cs ]\nmax_line_length = 120\n", "Report.cs": csharp(110), "Wide.cs": csharp(125) });
   assert.deepEqual(widths(findings(root)), ["Wide.cs:3 120"]);

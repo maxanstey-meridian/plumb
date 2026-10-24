@@ -7,7 +7,7 @@
 // whose command matches `rivet ... --output <dir>` is the generator, and the
 // resolved output path comes from `task --dry`. No Taskfile/no rivet task →
 // no convention → silence. A convention it can't check (no `task` binary, no
-// resolvable --output, a missing output dir, a failed generation) exits 2, so
+// resolvable --output, a missing output dir, a failed generation or diff) exits 2, so
 // the runner knows the rule didn't run rather than reading "no drift". The
 // output dir is snapshotted before regeneration and restored byte-for-byte
 // afterward, so the working tree is never changed.
@@ -43,7 +43,7 @@ if (spawnSync("task", ["--version"], { encoding: "utf8" }).error) {
 }
 
 const dry = spawnSync("task", ["--dry", genTask], { cwd: root, encoding: "utf8" });
-const om = `${dry.stdout || ""}\n${dry.stderr || ""}`.match(/--output\s+(\S+)/);
+const om = `${dry.stdout || ""}\n${dry.stderr || ""}`.match(/--output[^\S\n]+(\S+)/);
 if (!om) { process.stderr.write(`MER-RV-024: could not resolve --output for task ${genTask} — cannot check\n`); process.exit(2); }
 const outDir = path.resolve(root, om[1]);
 const outRel = path.relative(root, outDir);
@@ -59,7 +59,12 @@ try {
     process.exitCode = 2;
   } else {
     const diff = spawnSync("diff", ["-rq", snap, outDir], { encoding: "utf8", maxBuffer: 16 * 1024 * 1024 });
-    if (diff.status === 1) {
+    // diff exits 1 on a difference and 2 on trouble; Apple's diff also exits 0 after an error it only prints (a
+    // dangling symlink), so anything on stderr is trouble too — none of it is "no drift".
+    if (diff.error || diff.signal || diff.status > 1 || diff.stderr?.trim()) {
+      process.stderr.write(`MER-RV-024: diff failed (${diff.error?.message || diff.signal || `exit ${diff.status}`}) — cannot check\n${(diff.stderr || "").slice(-500)}\n`);
+      process.exitCode = 2;
+    } else if (diff.status === 1) {
       const n = (diff.stdout || "").split("\n").filter(Boolean).length;
       console.log(
         `MER-RV-024\tinfo\t${outRel}:0\tgenerated Rivet output is stale (${n} file(s) differ after re-running task ${genTask}) — regenerate and commit\trivet.md#practical-rules`

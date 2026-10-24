@@ -22,5 +22,10 @@ defineProps<{ active: boolean }>();
     <span v-bind="{ id: 'export' }" />
     <UInput v-bind="{ id: 'export', type: 'email' }" />
     <span v-bind="{ type: 'export' }" />
+    <span v-bind="active ? { id: 'export' } : {}" />
+    <span v-bind="$attrs ?? { id: 'export' }" />
+    <input v-bind="active ? { type: 'email' } : {}">
+    <AcmeCrmPanel v-on="{ 'export': () => {} }" />
+    <AcmeCrmPanel v-bind="{ 'export': true, ['csv']: active }" />
   </section>
 </template>

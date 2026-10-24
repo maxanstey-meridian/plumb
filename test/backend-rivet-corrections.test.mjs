@@ -210,7 +210,10 @@ test("MER-RV-007 flags every app-written RivetResult extension named like an ada
     // controller that calls Problem() elsewhere; another project's own `record Adapted` beside App's global alias
     // of that name; a Verification/ project whose <IsTestProject> alone makes it test code; a pattern's `{ }` that
     // ends no member, a named argument's label, a reassigned local and a lambda parameter that shadows one; and
-    // helpers and a nested reader handing back the adapter's output only to a log.
+    // helpers and a nested reader handing back the adapter's output only to a log. Also: the `new` modifier on an
+    // indexer, which constructs nothing; a call that picks the overload returning no read; a block- or
+    // expression-bodied local function, a typed lambda, one of several lambda parameters and a lambda's own local
+    // that shadow the local; and a local whose block ends before another block or a loop declares its name again.
     assert.equal(run("MER-RV-007", "good"), "");
     const output = run("MER-RV-007", "bad");
     const locations = [...output.matchAll(/^MER-RV-007\twarn\t(\S+)/gm)].map((match) => match[1]).sort();
@@ -240,6 +243,8 @@ test("MER-RV-007 flags every app-written RivetResult extension named like an ada
         "Modules/Common/Shims.cs:12",
         // A record after a class, its reference in the record's parameter list.
         "Modules/Common/WrapperRecord.cs:9",
+        // A property's `get =>` that returns a read, called into a result.
+        "Modules/Orders/AccessorStatus.cs:4",
         // The adapter's output under a using alias; the alias line itself builds no result.
         "Modules/Orders/AliasedRelay.cs:6",
         // An anonymous object's braces inside the arguments end no member.
@@ -251,11 +256,17 @@ test("MER-RV-007 flags every app-written RivetResult extension named like an ada
         // A bridge class, then a struct that copies the adapter's output: one finding each.
         "Modules/Orders/BridgeThenStruct.cs:1",
         "Modules/Orders/BridgeThenStruct.cs:7",
+        // A local bound to `new RivetActionResult(…)`.
+        "Modules/Orders/ConstructedAdapter.cs:4",
         // A controller deriving from the app's own base; the app's own result set on `ctx.Result`; a response
         // held in a local.
         "Modules/Orders/DerivedRelays.cs:21",
         "Modules/Orders/DerivedRelays.cs:33",
         "Modules/Orders/DerivedRelays.cs:6",
+        // A pattern on a generic type, whose braces end no member.
+        "Modules/Orders/GenericPattern.cs:4",
+        // A switch arm's `when Allowed(status) =>`, which is no lambda taking status.
+        "Modules/Orders/GuardedArm.cs:4",
         // A field that binds the adapter's output for every member.
         "Modules/Orders/HeldRelay.cs:4",
         // Copied through a local, then built into a result.
@@ -264,25 +275,46 @@ test("MER-RV-007 flags every app-written RivetResult extension named like an ada
         // in a local.
         "Modules/Orders/NestedReader.cs:15",
         "Modules/Orders/NestedReader.cs:4",
+        // Nested readers reached through a cast, a field, a grandchild's `new Mid.Leaf(a)` and a static call.
+        "Modules/Orders/NestedReaders.cs:15",
+        "Modules/Orders/NestedReaders.cs:26",
+        "Modules/Orders/NestedReaders.cs:39",
+        "Modules/Orders/NestedReaders.cs:4",
+        // A shadowing lambda that ends at its argument's `,`, before the local is used.
+        "Modules/Orders/NonLastLambda.cs:6",
         "Modules/Orders/OrderResultExtensions.cs:1",
         // The outer class's method, after a nested class.
         "Modules/Orders/OuterRelay.cs:3",
         // A property pattern's braces end no member.
         "Modules/Orders/PatternRelay.cs:4",
+        // A property of the same type that returns a read, as an expression body or an auto-property's initializer.
+        "Modules/Orders/PropertyHelper.cs:12",
+        "Modules/Orders/PropertyHelper.cs:4",
         // A controller's `return Ok(a.Value);`.
         "Modules/Orders/RelayController.cs:4",
         // A result filter that sets Response.StatusCode and writes the value with WriteAsJsonAsync.
         "Modules/Orders/ResponseWritingFilter.cs:4",
         // An endpoint filter's `is global::Rivet.RivetActionResult` pattern rebuilt as Results.Json.
         "Modules/Orders/ResultStatusFilter.cs:4",
+        // A sibling type's static helper that returns a read.
+        "Modules/Orders/SiblingReader.cs:9",
         // A struct-only file: once, at the struct.
         "Modules/Orders/StatusCopy.cs:4",
         // An expression-bodied helper that returns a read.
         "Modules/Orders/StatusHelper.cs:4",
+        // A target-typed `new(…)` declared as an ObjectResult, and one returned by a method declared to return one.
+        "Modules/Orders/TargetTypedRelay.cs:14",
+        "Modules/Orders/TargetTypedRelay.cs:4",
         // A typed Results<…> union, spaces in its generics.
         "Modules/Orders/TypedResultExtensions.cs:1",
-        // A top-level statement in Program.cs, at its own line.
+        // A local reassigned from itself, assigned only on a condition, and redeclared only inside a lambda.
+        "Modules/Orders/WindowEnds.cs:18",
+        "Modules/Orders/WindowEnds.cs:34",
+        "Modules/Orders/WindowEnds.cs:4",
+        // A top-level statement in Program.cs, at its own line, and one calling a top-level local function that
+        // returns a read.
         "Program.cs:3",
+        "Program.cs:4",
         // The adapter's output under an alias only its own project's .csproj <Using> declares.
         "Relay/WrappedRelay.cs:4",
     ]);
@@ -297,26 +329,44 @@ test("MER-RV-007 flags every app-written RivetResult extension named like an ada
         "Modules/Common/RivetNamedShim.cs:4 Adapted",
         "Modules/Common/Shims.cs:12 Leak",
         "Modules/Common/WrapperRecord.cs:9 Wrapper",
+        "Modules/Orders/AccessorStatus.cs:4 AccessorStatus",
         "Modules/Orders/AliasedRelay.cs:6 AliasedRelay",
         "Modules/Orders/AnonymousRelay.cs:4 AnonymousRelay",
         "Modules/Orders/AssignedStatus.cs:4 AssignedStatus",
         "Modules/Orders/BodyHelper.cs:4 BodyHelper",
         "Modules/Orders/BridgeThenStruct.cs:7 Relay",
+        "Modules/Orders/ConstructedAdapter.cs:4 ConstructedAdapter",
         "Modules/Orders/DerivedRelays.cs:21 EnvelopeFilter",
         "Modules/Orders/DerivedRelays.cs:33 LocalResponseFilter",
         "Modules/Orders/DerivedRelays.cs:6 DerivedRelayController",
+        "Modules/Orders/GenericPattern.cs:4 GenericPattern",
+        "Modules/Orders/GuardedArm.cs:4 GuardedArm",
         "Modules/Orders/HeldRelay.cs:4 HeldRelay",
         "Modules/Orders/LocalCopyFilter.cs:4 LocalCopyFilter",
         "Modules/Orders/NestedReader.cs:15 NestedLocalReader",
         "Modules/Orders/NestedReader.cs:4 NestedReader",
+        "Modules/Orders/NestedReaders.cs:15 CastNestedReader",
+        "Modules/Orders/NestedReaders.cs:26 FieldNestedReader",
+        "Modules/Orders/NestedReaders.cs:39 GrandchildReader",
+        "Modules/Orders/NestedReaders.cs:4 StaticNestedReader",
+        "Modules/Orders/NonLastLambda.cs:6 NonLastLambda",
         "Modules/Orders/OuterRelay.cs:3 OuterRelay",
         "Modules/Orders/PatternRelay.cs:4 PatternRelay",
+        "Modules/Orders/PropertyHelper.cs:12 InitializedProperty",
+        "Modules/Orders/PropertyHelper.cs:4 PropertyHelper",
         "Modules/Orders/RelayController.cs:4 RelayController",
         "Modules/Orders/ResponseWritingFilter.cs:4 ResponseWritingFilter",
         "Modules/Orders/ResultStatusFilter.cs:4 ResultStatusFilter",
+        "Modules/Orders/SiblingReader.cs:9 SiblingReader",
         "Modules/Orders/StatusCopy.cs:4 StatusCopy",
         "Modules/Orders/StatusHelper.cs:4 StatusHelper",
+        "Modules/Orders/TargetTypedRelay.cs:14 TargetTypedReturn",
+        "Modules/Orders/TargetTypedRelay.cs:4 TargetTypedLocal",
+        "Modules/Orders/WindowEnds.cs:18 ConditionalStatus",
+        "Modules/Orders/WindowEnds.cs:34 LambdaLocalStatus",
+        "Modules/Orders/WindowEnds.cs:4 ClampedStatus",
         "Program.cs:3 This line",
+        "Program.cs:4 This line",
         "Relay/WrappedRelay.cs:4 WrappedRelay",
     ]);
     assert.match(output, /FunctionResultExtensions\.cs:1\tFunctionResultExtensions hand-writes an HTTP-result bridge off RivetResult \(ToResponse, Rebuild, ToHttp, OneArm\)/);

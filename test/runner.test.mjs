@@ -1026,6 +1026,77 @@ test("baseline: a run whose ast-grep failed can't tell a shrink", () => {
   assert.doesNotMatch(out.stdout, /shrunk/);
 });
 
+test("baseline: a degraded run refuses --write-baseline and leaves the file untouched", () => {
+  const held = `${JSON.stringify({ version: 1, entries: { "MER-TO-909\tresult.txt": 1 } }, null, 2)}\n`;
+  const quiet = isolatedPlumb({ "MER-TO-909-quiet.mjs": "#!/usr/bin/env node\n" });
+  const quietFile = path.join(quiet.target, ".plumb-baseline.json");
+  fs.writeFileSync(quietFile, held);
+  assert.equal(quiet.run("--rule", "MER-TO-909", "--write-baseline", quietFile).status, 0);
+  assert.notEqual(fs.readFileSync(quietFile, "utf8"), held);
+  const failing = isolatedPlumb({ "MER-TO-909-failure.mjs": "#!/usr/bin/env node\nprocess.exit(2);\n" });
+  const file = path.join(failing.target, ".plumb-baseline.json");
+  fs.writeFileSync(file, held);
+  const out = failing.run("--rule", "MER-TO-909", "--write-baseline", file);
+  assert.equal(out.status, 2, out.stderr);
+  assert.match(out.stderr, /check .*MER-TO-909-failure\.mjs failed \(exit 2\)/);
+  assert.match(out.stderr, /plumb: an engine failed — not writing .*\.plumb-baseline\.json/);
+  assert.doesNotMatch(out.stdout, /baseline written/);
+  assert.equal(fs.readFileSync(file, "utf8"), held);
+});
+
+test("baseline: a narrowed --write-baseline replaces only what the run checked and keeps the rest", () => {
+  const r = repo(["MER-BE-005"], { "App.csproj": "<Project/>\n", "package.json": "{}\n" });
+  const bl = path.join(r, ".plumb-baseline.json");
+  const entriesOf = () => JSON.parse(fs.readFileSync(bl, "utf8")).entries;
+  assert.equal(plumb(r, "--write-baseline", bl).status, 0);
+  const full = entriesOf();
+  const hold = (extra) => fs.writeFileSync(bl, JSON.stringify({ version: 1, entries: { ...full, ...extra } }));
+  const api = Object.keys(full).filter((key) => key.startsWith("MER-BE-005\tapi/"));
+  assert.ok(api.length, JSON.stringify(full));
+  // --rule: every other rule's entries stay, and the rule that ran holds exactly what it found.
+  hold({ "MER-TO-001\tgone.json": 1 });
+  const focused = plumb(r, "--rule", "MER-TO-001", "--write-baseline", bl);
+  assert.equal(focused.status, 0, focused.stderr);
+  assert.match(focused.stdout, /keeping \d+ held for rules or files this run left out/);
+  assert.deepEqual(entriesOf(), { ...full, "MER-TO-001\tpackage.json": 1 });
+  // --exclude: the excluded files' entries stay; a file the run checked holds what it found.
+  hold({ "MER-BE-005\tother/Gone.cs": 1 });
+  assert.equal(plumb(r, "--exclude", "api/**", "--write-baseline", bl).status, 0);
+  const excluded = entriesOf();
+  for (const key of api) assert.equal(excluded[key], full[key], key);
+  assert.equal(excluded["MER-BE-005\tother/Gone.cs"], undefined);
+  // Without --ci the CI-only rule didn't run, so its entry stays; a rule the catalogue no longer has ran and goes.
+  hold({ "MER-RV-024\tweb/package.json": 1, "MER-BE-999\tgone.cs": 3 });
+  assert.equal(plumb(r, "--write-baseline", bl).status, 0);
+  assert.deepEqual(entriesOf(), { ...full, "MER-RV-024\tweb/package.json": 1 });
+  // With --ci it ran, found nothing (no Taskfile) and its entry goes.
+  assert.equal(plumb(r, "--rule", "MER-RV-024", "--ci", "--write-baseline", bl).status, 0);
+  assert.deepEqual(entriesOf(), full);
+});
+
+test("self-test: a check that crashes on its good fixture is an ERROR, not clean", () => {
+  const isolated = isolatedPlumb({
+    "MER-TO-909-flaky.mjs": `#!/usr/bin/env node
+if (process.argv[2].endsWith("good")) { console.error("blew up on good"); process.exit(3); }
+console.log("MER-TO-909\\twarn\\tresult.txt:1\\tfinding\\ttools.md#default-stack-1");
+`,
+    "MER-TO-910-healthy.mjs": `#!/usr/bin/env node
+if (process.argv[2].endsWith("bad")) console.log("MER-TO-910\\twarn\\tresult.txt:1\\tfinding\\ttools.md#default-stack-1");
+`,
+  });
+  for (const id of ["MER-TO-909", "MER-TO-910"]) {
+    for (const kind of ["bad", "good"]) {
+      fs.mkdirSync(path.join(isolated.home, "fixtures", id, kind), { recursive: true });
+      fs.writeFileSync(path.join(isolated.home, "fixtures", id, kind, "a.txt"), "x\n");
+    }
+  }
+  const out = spawnSync(path.join(isolated.home, "plumb"), ["--self-test"], { encoding: "utf8" });
+  assert.equal(out.status, 1, out.stdout + out.stderr);
+  assert.match(out.stdout, /^FAIL MER-TO-909 {2}bad:hit {2}good:ERROR \(check MER-TO-909-flaky\.mjs failed \(exit 3\)\)$/m);
+  assert.match(out.stdout, /^ok {3}MER-TO-910$/m);
+  assert.match(out.stdout, /^self-test: 1\/2 failing$/m);
+});
+
 test("MER-RV-024: a convention it can't check exits 2 with a reason, so a --ci baseline can't read it as a shrink", () => {
   const check = path.join(CHECKS, "MER-RV-024-stale-generated.mjs");
   const run = (r, env = {}) => spawnProducer(check, r, { encoding: "utf8", env: { PLUMB_CI: "1", ...env } });
@@ -1036,21 +1107,44 @@ test("MER-RV-024: a convention it can't check exits 2 with a reason, so a --ci b
   // No task binary: PATH holds only node.
   const bin = repo([]);
   fs.symlinkSync(process.execPath, path.join(bin, "node"));
-  const noTask = run(repo([], { "Taskfile.yml": taskfile }), { PATH: `${bin}:/usr/bin:/bin` });
+  const noTask = run(repo([], { "Taskfile.yml": taskfile }), { PATH: bin });
   assert.equal(noTask.status, 2, noTask.stderr);
   assert.match(noTask.stderr, /task \(go-task\) not on PATH/);
-  const unresolved = run(repo([], { "Taskfile.yml": taskfile.replace("generated/rivet", "{{.OUT}}") }));
+  // An empty --output is unresolved, not the next line's first word.
+  const unresolved = run(repo([], { "Taskfile.yml": `${taskfile.replace("generated/rivet", "{{.OUT}}")}      - ./fake-rivet --check\n` }));
   assert.equal(unresolved.status, 2, unresolved.stderr);
   assert.match(unresolved.stderr, /could not resolve --output for task generate/);
   const missing = run(repo([], { "Taskfile.yml": taskfile }));
   assert.equal(missing.status, 2, missing.stderr);
   assert.match(missing.stderr, /output dir generated\/rivet does not exist/);
-  const failing = repo([], { "Taskfile.yml": taskfile, "fake-rivet": "#!/bin/sh\nexit 3\n", "generated/rivet/rivet.ts": "// checked in\n" });
-  fs.chmodSync(path.join(failing, "fake-rivet"), 0o755);
+  // A generator that fails, or whose output diff can't read, can't be checked; either way the checked-in output is
+  // restored over whatever it wrote.
+  const generating = (script) => {
+    const r = repo([], { "Taskfile.yml": taskfile, "fake-rivet": `#!/bin/sh\n${script}\n`, "generated/rivet/rivet.ts": "// checked in\n" });
+    fs.chmodSync(path.join(r, "fake-rivet"), 0o755);
+    return r;
+  };
+  const restored = (r) => fs.readFileSync(path.join(r, "generated", "rivet", "rivet.ts"), "utf8");
+  const failing = generating("printf 'changed\\n' > generated/rivet/rivet.ts\nexit 3");
   const failed = run(failing);
   assert.equal(failed.status, 2, failed.stderr);
   assert.match(failed.stderr, /task generate failed/);
-  assert.equal(fs.readFileSync(path.join(failing, "generated", "rivet", "rivet.ts"), "utf8"), "// checked in\n");
+  assert.equal(restored(failing), "// checked in\n");
+  const taskBin = repo([]);
+  fs.symlinkSync(process.execPath, path.join(taskBin, "node"));
+  fs.symlinkSync(process.env.PATH.split(path.delimiter).map((dir) => path.join(dir, "task")).find((file) => fs.existsSync(file)), path.join(taskBin, "task"));
+  for (const [script, env, reason] of [
+    ["printf 'changed\\n' > generated/rivet/rivet.ts\nchmod 000 generated/rivet/rivet.ts", {}, /diff failed \(exit 2\)/],
+    ["rm generated/rivet/rivet.ts\nln -s missing generated/rivet/rivet.ts", {}, /diff failed/],
+    ["exit 0", { PATH: taskBin }, /diff failed \(spawnSync diff ENOENT\)/],
+  ]) {
+    const unreadable = generating(script);
+    const out = run(unreadable, env);
+    assert.equal(out.status, 2, `${script}: ${out.stderr}`);
+    assert.match(out.stderr, reason, script);
+    assert.doesNotMatch(out.stdout, /MER-RV-024/, script);
+    assert.equal(restored(unreadable), "// checked in\n", script);
+  }
 });
 
 test("baseline: shrinking is reported and suggests ratcheting down", () => {
@@ -1117,19 +1211,29 @@ test("baseline identity and suppression are unchanged for migrated findings", ()
 // positions never count. Line 16's route argument is the generated client's, but the id in its query is a copy.
 // Each crm-positions.ts and CrmLinks.vue line shows one kind of id position, some with several ids in it
 // (crm-positions.ts:15, 16 and 20, CrmLinks.vue:3 and 4); crm-positions.ts:55 only declares the component line 56
-// maps to. A key mapped to another server id (51-53) is a route table, not a label. The good fixture's server declares
-// ExportId = "export", and its crm-copy.ts and CrmConflict.vue use "export" as wording and stay clean: `noun:`,
-// `title:`, `typeLabel:`, a native element's `class=`, `title=`, `data-testid=` and `id=`, a component's `id=`/`:id=`
-// and `noun=`/`:noun=`, the `id` and `type` keys of an argument-less `v-bind` object (attributes, like `:id`/`:type`),
-// test hooks (`data-test-id=`, `:data-qa-id=`), a route name (`:to="{ name: 'export' }"`), `:class` object keys, a
-// `new Map` entry's value, a class field and `this.title =` under wording names, an interpolation, a returned value,
-// a call argument, and the whitespace paths "Choose import/export" and `Choose ${mode}/export`. Its labels, colours,
-// icons and orderings keyed on "acme-crm" (quoted, computed, `new Map` entries, through `as const` and
-// `satisfies`) are presentation, and "text/csv" is a MIME type, not a path to the "csv" id.
+// maps to. A key mapped to another server id (31 and 51-53) or to a path (57-59) is a route table, not a label, and
+// both ids of an id-to-id map are copies. Line 61's "export" is meant as a label, but a value is judged by whether it
+// equals an id, so "csv" mapped to it is flagged too: the accepted trade-off, as route tables are the real harm. A
+// link's MIME-shaped value (CrmLinks.vue:12-14) is a relative path, and a nested object in a `v-bind` (11) is data,
+// not attributes. The good fixture's server declares ExportId = "export", and its crm-copy.ts and CrmConflict.vue use
+// "export" as wording and stay clean: `noun:`, `title:`, `typeLabel:`, a native element's `class=`, `title=`,
+// `data-testid=` and `id=`, a component's `id=`/`:id=` and `noun=`/`:noun=`, the `id` and `type` keys of an
+// argument-less `v-bind` object (attributes, like `:id`/`:type`), also through a branch or `??`, any key of an
+// argument-less `v-bind` or `v-on` object (attribute and event names), test hooks (`data-test-id=`, `:data-qa-id=`), a
+// route name (`:to="{ name: 'export' }"`), `:class` object keys, a `new Map` entry's value, a class field and
+// `this.title =` under wording names, an interpolation, a returned value, a call argument, and the whitespace paths
+// "Choose import/export" and `Choose ${mode}/export`. Its labels, colours, icons and orderings keyed on "acme-crm" or
+// "csv" (quoted, computed, `new Map` entries, through `as const`, `<const>`, `<string>` and `satisfies`) are
+// presentation, and "text/csv" is a MIME type, not a path to the "csv" id.
 test("MER-CP-001 names each copied id's qualified owner at its exact location", () => {
   const findings = JSON.parse(plumb(path.join(FIX, "MER-CP-001", "bad"), "--rule", "MER-CP-001", "--json").stdout);
   const owner = (finding) => finding.message.match(/ is (\S+) on the server/)?.[1];
   assert.deepEqual(findings.map((finding) => [finding.location, owner(finding)]), [
+    ["ui/app/pages/crm/components/CrmLinks.vue:10", "CrmIntegration.ExportId"], // v-bind object, a link's `to`
+    ["ui/app/pages/crm/components/CrmLinks.vue:11", "CrmIntegration.Webhooks.HandlerId"], // nested object in a v-bind, id-named key
+    ["ui/app/pages/crm/components/CrmLinks.vue:12", "CrmIntegration.IntegrationId"], // MIME-shaped static link
+    ["ui/app/pages/crm/components/CrmLinks.vue:13", "CrmConnector.ConnectorId"], // MIME-shaped bound link
+    ["ui/app/pages/crm/components/CrmLinks.vue:14", "CrmIntegration.Webhooks.HandlerId"], // MIME-shaped link in a branched v-bind object
     ["ui/app/pages/crm/components/CrmLinks.vue:2", "CrmIntegration.IntegrationId"], // static href
     ["ui/app/pages/crm/components/CrmLinks.vue:3", "CrmConnector.ConnectorId"], // id-named static attributes
     ["ui/app/pages/crm/components/CrmLinks.vue:3", "CrmIntegration.Webhooks.HandlerId"],
@@ -1173,6 +1277,7 @@ test("MER-CP-001 names each copied id's qualified owner at its exact location", 
     ["ui/app/pages/crm/logic/crm-positions.ts:3", "CrmIntegration.IntegrationId"], // !==
     ["ui/app/pages/crm/logic/crm-positions.ts:30", "CrmIntegration.IntegrationId"], // new Set([…])
     ["ui/app/pages/crm/logic/crm-positions.ts:31", "CrmConnector.ConnectorId"], // new Map([[…]]) key mapped to a list, not a label
+    ["ui/app/pages/crm/logic/crm-positions.ts:31", "CrmIntegration.ExportId"], // an id listed under an id key
     ["ui/app/pages/crm/logic/crm-positions.ts:32", "TestCrmConnectionUseCase.ProbeId"], // a Set tested with .has
     ["ui/app/pages/crm/logic/crm-positions.ts:33", "CrmIntegration.Webhooks.HandlerId"], // array under an id-named property
     ["ui/app/pages/crm/logic/crm-positions.ts:34", "CrmIntegration.Webhooks.HandlerId"], // right side of =
@@ -1195,10 +1300,18 @@ test("MER-CP-001 names each copied id's qualified owner at its exact location", 
     ["ui/app/pages/crm/logic/crm-positions.ts:5", "CrmConnector.ConnectorId"], // !=
     ["ui/app/pages/crm/logic/crm-positions.ts:50", "CrmIntegration.IntegrationId"], // static field, whatever its name
     ["ui/app/pages/crm/logic/crm-positions.ts:51", "CrmIntegration.IntegrationId"], // key mapped to another id, a route table
+    ["ui/app/pages/crm/logic/crm-positions.ts:51", "CrmIntegration.Webhooks.HandlerId"], // and the id it maps to
     ["ui/app/pages/crm/logic/crm-positions.ts:52", "CrmConnector.ConnectorId"], // new Map([[…]]) key mapped to another id
+    ["ui/app/pages/crm/logic/crm-positions.ts:52", "TestCrmConnectionUseCase.ProbeId"],
     ["ui/app/pages/crm/logic/crm-positions.ts:53", "CrmConnector.ConnectorId"], // computed key mapped to another id
+    ["ui/app/pages/crm/logic/crm-positions.ts:53", "CrmIntegration.Webhooks.HandlerId"],
     ["ui/app/pages/crm/logic/crm-positions.ts:54", "CrmIntegration.IntegrationId"], // MIME-shaped template tail of a path
     ["ui/app/pages/crm/logic/crm-positions.ts:56", "CrmIntegration.IntegrationId"], // key mapped to a component, a dispatch table
+    ["ui/app/pages/crm/logic/crm-positions.ts:57", "CrmIntegration.IntegrationId"], // key mapped to a path, a route table
+    ["ui/app/pages/crm/logic/crm-positions.ts:58", "CrmConnector.ConnectorId"], // new Map([[…]]) key mapped to a path
+    ["ui/app/pages/crm/logic/crm-positions.ts:59", "CrmIntegration.Webhooks.HandlerId"], // computed key mapped to a template path
+    ["ui/app/pages/crm/logic/crm-positions.ts:61", "CrmIntegration.CsvFormatId"], // a label equal to an id: the accepted trade-off
+    ["ui/app/pages/crm/logic/crm-positions.ts:61", "CrmIntegration.ExportId"],
     ["ui/app/pages/crm/logic/crm-positions.ts:8", "CrmIntegration.Webhooks.HandlerId"], // case label
   ]);
   const good = JSON.parse(plumb(path.join(FIX, "MER-CP-001", "good"), "--rule", "MER-CP-001", "--json").stdout);

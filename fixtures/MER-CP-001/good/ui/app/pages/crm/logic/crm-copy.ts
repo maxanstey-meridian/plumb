@@ -22,6 +22,10 @@ export const integrationIcons = new Map([["acme-crm", "i-lucide-plug"]]);
 export const integrationTitles = new Map([["acme-crm", "Acme CRM"] as const]);
 export const integrationNames = (name: string) => ({ "acme-crm": `${name} CRM` });
 export const integrationOrder = { "acme-crm": "first" as const } satisfies Record<string, string>;
+export const integrationRank = { "acme-crm": <const>"first" };
+export const integrationShortNames = new Map([["acme-crm", <string>"Acme"]]);
+export const formatNames = { "csv": "Spreadsheet" };
+export const formatHints = new Map([["csv", "Opens in a spreadsheet"]]);
 // Wording across a whole template literal, and MIME types whose subtype equals the server's "csv" id.
 export const exportPrompt = (mode: string) => `Choose ${mode}/export`;
 export const csvType = "text/csv";

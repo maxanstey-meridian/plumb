@@ -7,6 +7,7 @@ import path from "node:path";
 import { performance } from "node:perf_hooks";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
+import ignore from "ignore";
 import { createVisibility, shouldIncludeFile } from "./checks/_lib/fs-scan.mjs";
 import { planCapabilities } from "./lib/engine/contracts.mjs";
 import { isNuxtConfig } from "./lib/engine/frontend-analysis.mjs";
@@ -182,9 +183,10 @@ function detectPacks(snapshot) {
   return packs;
 }
 
-// Whether an engine this run needed was missing or failed (ast-grep, a check script, or an in-process capability
-// that reported a diagnostic): some rules then found nothing for want of running, so a shrink can't be judged.
-let degraded = false;
+// Why the run is degraded, if it is: an engine it needed was missing or failed (ast-grep, a check script, or an
+// in-process capability that reported a diagnostic), so some rules found nothing for want of running. A shrink can't
+// then be judged, a baseline can't be written, and a self-test fixture can't pass.
+const degraded = [];
 
 function runAstGrep(r, selected, allYaml) {
   if (!selected.length) return [];
@@ -196,7 +198,7 @@ function runAstGrep(r, selected, allYaml) {
   timings.astGrep.push({ ids: selected.flatMap((owner) => owner.ids), duration: elapsed(started) });
   // ast-grep exits 0 with no matches and 1 with error-severity ones; anything else (a bad rule exits 8, a bad
   // sgconfig 6, both with empty stdout) or a signal means it never scanned.
-  const skipped = (reason) => { degraded = true; console.error(`plumb: ast-grep failed, YAML rules skipped: ${reason}`); return []; };
+  const skipped = (reason) => { degraded.push(`ast-grep failed: ${reason}`); console.error(`plumb: ast-grep failed, YAML rules skipped: ${reason}`); return []; };
   if (out.error) return skipped(out.error.message);
   if (out.signal || out.status > 1) return skipped(`${out.signal ? `killed by ${out.signal}` : `exit ${out.status}`}: ${out.stderr.trim()}`);
   let arr = [];
@@ -222,8 +224,8 @@ function runChecks(r, selected, rivetVariant) {
     (owner.ciOnly ? timings.external : timings.producers).push({ owner, duration });
     // Producers exit 0 whether or not they find drift; any other exit, a signal or a spawn error is an internal failure.
     if (out.error || out.signal || out.status !== 0) {
-      degraded = true;
       const reason = out.error?.message || (out.signal ? `killed by ${out.signal}` : `exit ${out.status}`);
+      degraded.push(`check ${owner.source} failed (${reason})`);
       console.error(`plumb: check ${owner.source} failed (${reason})${out.stderr?.trim() ? `: ${out.stderr.trim()}` : ""}`);
       continue;
     }
@@ -276,6 +278,7 @@ async function scan(r, options = {}) {
 }
 
 async function scanAttempt(r, { allPacks = false, selectedRule = ruleFilter } = {}) {
+  degraded.length = 0;
   const inventoryStarted = performance.now();
   const inventory = createRepositoryInventory(r, { excludes: excludePatterns });
   r = inventory.root;
@@ -311,7 +314,7 @@ async function scanAttempt(r, { allPacks = false, selectedRule = ruleFilter } = 
     timings.rules.push({ owner, duration: entry.duration });
   }
   for (const diagnostic of inProcess.diagnostics) process.stderr.write(`${diagnostic}\n`);
-  if (inProcess.diagnostics.length) degraded = true;
+  degraded.push(...inProcess.diagnostics);
   timings.counters = snapshot.counters;
   let found = [...runAstGrep(r, selectedYaml, allYaml), ...inProcess.findings, ...runChecks(r, selectedScripts, rivet.variant)]
     .filter((f) => visibleFinding(r, visibility, f));
@@ -344,12 +347,22 @@ if (selfTest) {
   let dirs = [];
   try { dirs = fs.readdirSync(FIXTURES).filter((d) => d.startsWith("MER-")); } catch {}
   let fail = 0;
+  // A fixture scan whose engine failed proves nothing either way: "clean" on good or a miss on bad would be the
+  // failure talking, so it fails with its reason.
+  const fixtureScan = async (kind, id) => {
+    const hit = (await scan(path.join(FIXTURES, id, kind), { allPacks: true, selectedRule: id })).some((f) => f.id === id);
+    return { hit, error: degraded.length ? degraded.join("; ") : null };
+  };
   for (const id of dirs.sort()) {
-    const hitBad = (await scan(path.join(FIXTURES, id, "bad"), { allPacks: true, selectedRule: id })).some((f) => f.id === id);
-    const hitGood = (await scan(path.join(FIXTURES, id, "good"), { allPacks: true, selectedRule: id })).some((f) => f.id === id);
+    const bad = await fixtureScan("bad", id);
+    const good = await fixtureScan("good", id);
     const renderStarted = performance.now();
-    if (hitBad && !hitGood) console.log(`ok   ${id}`);
-    else { fail++; console.log(`FAIL ${id}  bad:${hitBad ? "hit" : "MISS"}  good:${hitGood ? "FALSE-POSITIVE" : "clean"}`); }
+    if (bad.hit && !good.hit && !bad.error && !good.error) console.log(`ok   ${id}`);
+    else {
+      fail++;
+      const verdict = (scanned, hitLabel, missLabel) => scanned.error ? `ERROR (${scanned.error})` : scanned.hit ? hitLabel : missLabel;
+      console.log(`FAIL ${id}  bad:${verdict(bad, "hit", "MISS")}  good:${verdict(good, "FALSE-POSITIVE", "clean")}`);
+    }
     timings.rendering += elapsed(renderStarted);
   }
   const renderStarted = performance.now();
@@ -372,12 +385,33 @@ catch (error) { console.error(`plumb: scan failed: ${error.message}`); process.e
 // --baseline ratchet (contract §5, 2026-06-11): count-per-(rule,path) allowance,
 // findings over allowance are NEW; suppressed count is reported, never hidden.
 const bKey = (f) => `${f.id}\t${f.loc.replace(/:\d+$/, "")}`;
+// The rules this run could have reported: all of them, less what --rule / --pack leave out and the CI-only ones a run
+// without --ci skips. A rule that doesn't apply to the repo (its pack isn't detected) ran and found nothing; so did a
+// rule the catalogue no longer has, whose entries can only go.
+const ciOnly = (id) => catalogue.byRule.get(id)?.ciOnly ?? false;
+const ran = (id) => ruleSelected(id) && (ci || !ciOnly(id));
 if (writeBaselineFile) {
-  const entries = {};
+  // A rule that didn't run found nothing, so writing would drop its entries from the baseline.
+  if (degraded.length) {
+    console.error(`plumb: an engine failed — not writing ${writeBaselineFile}, which would drop the entries of the rules that didn't run`);
+    process.exit(2);
+  }
+  // A write replaces only what the run checked: the existing entries of rules that didn't run, and of files --exclude
+  // left out, are kept.
+  let held = {};
+  if (fs.existsSync(writeBaselineFile)) {
+    try { held = JSON.parse(fs.readFileSync(writeBaselineFile, "utf8")).entries || {}; }
+    catch (e) { console.error(`plumb: cannot read baseline ${writeBaselineFile}: ${e.message}`); process.exit(2); }
+  }
+  const excluded = ignore().add(excludePatterns);
+  const checked = ([id, file]) => ran(id) && !(ignore.isPathValid(file) && excluded.ignores(file));
+  const entries = Object.fromEntries(Object.entries(held).filter(([key]) => !checked(key.split("\t"))));
+  const kept = Object.values(entries).reduce((a, b) => a + b, 0);
   for (const f of findings) entries[bKey(f)] = (entries[bKey(f)] || 0) + 1;
   fs.writeFileSync(writeBaselineFile, JSON.stringify({ version: 1, entries }, null, 2) + "\n");
   const renderStarted = performance.now();
-  console.log(`plumb: baseline written — ${findings.length} findings across ${Object.keys(entries).length} (rule,path) keys`);
+  console.log(`plumb: baseline written — ${findings.length} findings across ${Object.keys(entries).length} (rule,path) keys` +
+    (kept ? `, keeping ${kept} held for rules or files this run left out` : ""));
   timings.rendering += elapsed(renderStarted);
   emitProfile();
   process.exit(0);
@@ -388,14 +422,9 @@ if (baselineFile) {
   try { bl = JSON.parse(fs.readFileSync(baselineFile, "utf8")); }
   catch (e) { console.error(`plumb: cannot read baseline ${baselineFile}: ${e.message}`); process.exit(2); }
   const allowance = { ...(bl.entries || {}) };
-  // The entries for rules this run could have reported: all of them, less what --rule / --pack leave out and the
-  // CI-only ones a run without --ci skips. A rule that doesn't apply to the repo (its pack isn't detected) ran and
-  // found nothing; so did a rule the catalogue no longer has, whose entries can only go.
-  const ciOnly = (id) => catalogue.byRule.get(id)?.ciOnly ?? false;
-  const ran = (id) => ruleSelected(id) && (ci || !ciOnly(id));
   ranTotal = Object.entries(allowance).filter(([key]) => ran(key.split("\t")[0])).reduce((sum, [, count]) => sum + count, 0);
   ciOnlyHeld = Object.keys(allowance).some((key) => ciOnly(key.split("\t")[0]));
-  // --write-baseline writes only what the run found, so a run that left rules out would drop their entries.
+  // A run that left rules out compared only their entries, and its hint says so.
   narrowed = !!ruleFilter || !!packFilter || (ciOnlyHeld && !ci);
   baselineTotal = Object.values(allowance).reduce((a, b) => a + b, 0);
   findings = findings.filter((f) => {
@@ -413,7 +442,7 @@ const shrunkHint = !narrowed ? " — shrunk; re-run --write-baseline to ratchet 
   : ` — shrunk; ratchet down with --write-baseline on a run of every rule${ciOnlyHeld ? " with --ci" : ""}`;
 const baselineNote = baselineFile
   ? `+${baselined} baselined by ${baselineName}, baseline holds ${baselineTotal}` +
-    (baselined < ranTotal && !excludePatterns.length && !degraded ? shrunkHint : "")
+    (baselined < ranTotal && !excludePatterns.length && !degraded.length ? shrunkHint : "")
   : null;
 const renderStarted = performance.now();
 if (json) {

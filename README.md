@@ -90,6 +90,8 @@ Capture existing findings and then fail only on new ones:
 
 A `.plumb-baseline.json` at the checked repository root applies automatically. `--baseline <file>` uses another file instead, and `--no-baseline` reports every finding. The summary line, or a line on stderr under `--json`, always names the baseline and shows how many findings it absorbed.
 
+`--write-baseline` replaces only what the run checked. On a run narrowed by `--rule`, `--pack` or `--exclude`, or without `--ci`, the existing entries for the rules that did not run and the files that were excluded are kept. A run in which an engine failed (ast-grep, a check script, or a missing analysis dependency) refuses to write a baseline and exits 2, because the rules that did not run would lose their entries.
+
 ## Fidelity Boundaries
 
 TypeScript and Vue rules use the TypeScript compiler API and Vue SFC compiler. Frontend graph rules use dependency-cruiser, with compiler-backed Vue import extraction when dependency-cruiser cannot parse an SFC itself.

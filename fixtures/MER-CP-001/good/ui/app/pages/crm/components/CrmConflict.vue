@@ -19,5 +19,8 @@ defineProps<{ active: boolean }>();
     <UButton :type="'email'" />
     <UInput id="export" />
     <UFormField :id="'export'" />
+    <span v-bind="{ id: 'export' }" />
+    <UInput v-bind="{ id: 'export', type: 'email' }" />
+    <span v-bind="{ type: 'export' }" />
   </section>
 </template>

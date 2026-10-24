@@ -6,8 +6,11 @@
 // default local pass. The convention is the repo's own Taskfile: the task
 // whose command matches `rivet ... --output <dir>` is the generator, and the
 // resolved output path comes from `task --dry`. No Taskfile/no rivet task →
-// no convention → silence. The output dir is snapshotted before regeneration
-// and restored byte-for-byte afterward, so the working tree is never changed.
+// no convention → silence. A convention it can't check (no `task` binary, no
+// resolvable --output, a missing output dir, a failed generation) exits 2, so
+// the runner knows the rule didn't run rather than reading "no drift". The
+// output dir is snapshotted before regeneration and restored byte-for-byte
+// afterward, so the working tree is never changed.
 // DOC: rivet.md#practical-rules
 import { execFileSync, spawnSync } from "node:child_process";
 import fs from "node:fs";
@@ -35,16 +38,16 @@ for (const l of lines) {
 if (!genTask) process.exit(0);
 
 if (spawnSync("task", ["--version"], { encoding: "utf8" }).error) {
-  process.stderr.write("MER-RV-024: task (go-task) not on PATH — skipping\n");
-  process.exit(0);
+  process.stderr.write("MER-RV-024: task (go-task) not on PATH — cannot check\n");
+  process.exit(2);
 }
 
 const dry = spawnSync("task", ["--dry", genTask], { cwd: root, encoding: "utf8" });
 const om = `${dry.stdout || ""}\n${dry.stderr || ""}`.match(/--output\s+(\S+)/);
-if (!om) { process.stderr.write(`MER-RV-024: could not resolve --output for task ${genTask} — skipping\n`); process.exit(0); }
+if (!om) { process.stderr.write(`MER-RV-024: could not resolve --output for task ${genTask} — cannot check\n`); process.exit(2); }
 const outDir = path.resolve(root, om[1]);
 const outRel = path.relative(root, outDir);
-if (!fs.existsSync(outDir)) { process.stderr.write(`MER-RV-024: output dir ${outRel} does not exist — skipping\n`); process.exit(0); }
+if (!fs.existsSync(outDir)) { process.stderr.write(`MER-RV-024: output dir ${outRel} does not exist — cannot check\n`); process.exit(2); }
 
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "plumb-rv024-"));
 const snap = path.join(tmp, "snapshot");
@@ -52,7 +55,8 @@ fs.cpSync(outDir, snap, { recursive: true });
 try {
   const gen = spawnSync("task", [genTask], { cwd: root, encoding: "utf8", maxBuffer: 64 * 1024 * 1024, timeout: 600000 });
   if (gen.status !== 0) {
-    process.stderr.write(`MER-RV-024: task ${genTask} failed (${gen.status}) — skipping\n${(gen.stderr || "").slice(-500)}\n`);
+    process.stderr.write(`MER-RV-024: task ${genTask} failed (${gen.error?.message || gen.signal || gen.status}) — cannot check\n${(gen.stderr || "").slice(-500)}\n`);
+    process.exitCode = 2;
   } else {
     const diff = spawnSync("diff", ["-rq", snap, outDir], { encoding: "utf8", maxBuffer: 16 * 1024 * 1024 });
     if (diff.status === 1) {

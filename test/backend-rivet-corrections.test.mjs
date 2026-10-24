@@ -208,11 +208,15 @@ test("MER-RV-007 flags every app-written RivetResult extension named like an ada
     // Good: result filters that log or record the adapter's status in an app's own AuditResult/ValidationResult
     // or audit.Results, and set context.Result in a statement of their own; an attribute's typeof() on a
     // controller that calls Problem() elsewhere; another project's own `record Adapted` beside App's global alias
-    // of that name; and a Verification/ project whose <IsTestProject> alone makes it test code.
+    // of that name; a Verification/ project whose <IsTestProject> alone makes it test code; a pattern's `{ }` that
+    // ends no member, a named argument's label, a reassigned local and a lambda parameter that shadows one; and
+    // helpers and a nested reader handing back the adapter's output only to a log.
     assert.equal(run("MER-RV-007", "good"), "");
     const output = run("MER-RV-007", "bad");
     const locations = [...output.matchAll(/^MER-RV-007\twarn\t(\S+)/gm)].map((match) => match[1]).sort();
     assert.deepEqual(locations, [
+        // A top-level statement under the file's own alias.
+        "Host/Program.cs:5",
         // A plain static helper that copies the adapter's output into an ObjectResult.
         "Modules/Common/AdapterStatus.cs:1",
         // Straight off a cast, in the statement that builds the result.
@@ -225,6 +229,9 @@ test("MER-RV-007 flags every app-written RivetResult extension named like an ada
         "Modules/Common/FunctionResultExtensions.cs:1",
         // ToHttpResult returning IResult, and Respond returning ValueTask<HttpResults.Ok<T>>.
         "Modules/Common/HttpResultExtensions.cs:1",
+        // A namespace block's alias, used in that namespace and in one nested in it.
+        "Modules/Common/NestedAliases.cs:14",
+        "Modules/Common/NestedAliases.cs:6",
         "Modules/Common/ResultExtensions.Actions.cs:1",
         "Modules/Common/ResultExtensions.cs:1",
         // An app's own `namespace Rivet.Shims`: only `Rivet` itself is Rivet's.
@@ -235,6 +242,12 @@ test("MER-RV-007 flags every app-written RivetResult extension named like an ada
         "Modules/Common/WrapperRecord.cs:9",
         // The adapter's output under a using alias; the alias line itself builds no result.
         "Modules/Orders/AliasedRelay.cs:6",
+        // An anonymous object's braces inside the arguments end no member.
+        "Modules/Orders/AnonymousRelay.cs:4",
+        // A local assigned from a read after its declaration.
+        "Modules/Orders/AssignedStatus.cs:4",
+        // A block helper's `return` of a read, called into a local that builds the result.
+        "Modules/Orders/BodyHelper.cs:4",
         // A bridge class, then a struct that copies the adapter's output: one finding each.
         "Modules/Orders/BridgeThenStruct.cs:1",
         "Modules/Orders/BridgeThenStruct.cs:7",
@@ -243,11 +256,19 @@ test("MER-RV-007 flags every app-written RivetResult extension named like an ada
         "Modules/Orders/DerivedRelays.cs:21",
         "Modules/Orders/DerivedRelays.cs:33",
         "Modules/Orders/DerivedRelays.cs:6",
+        // A field that binds the adapter's output for every member.
+        "Modules/Orders/HeldRelay.cs:4",
         // Copied through a local, then built into a result.
         "Modules/Orders/LocalCopyFilter.cs:4",
+        // A nested reader hands the adapter's output back to the class around it, constructed in place or held
+        // in a local.
+        "Modules/Orders/NestedReader.cs:15",
+        "Modules/Orders/NestedReader.cs:4",
         "Modules/Orders/OrderResultExtensions.cs:1",
         // The outer class's method, after a nested class.
         "Modules/Orders/OuterRelay.cs:3",
+        // A property pattern's braces end no member.
+        "Modules/Orders/PatternRelay.cs:4",
         // A controller's `return Ok(a.Value);`.
         "Modules/Orders/RelayController.cs:4",
         // A result filter that sets Response.StatusCode and writes the value with WriteAsJsonAsync.
@@ -256,6 +277,8 @@ test("MER-RV-007 flags every app-written RivetResult extension named like an ada
         "Modules/Orders/ResultStatusFilter.cs:4",
         // A struct-only file: once, at the struct.
         "Modules/Orders/StatusCopy.cs:4",
+        // An expression-bodied helper that returns a read.
+        "Modules/Orders/StatusHelper.cs:4",
         // A typed Results<…> union, spaces in its generics.
         "Modules/Orders/TypedResultExtensions.cs:1",
         // A top-level statement in Program.cs, at its own line.
@@ -265,23 +288,34 @@ test("MER-RV-007 flags every app-written RivetResult extension named like an ada
     ]);
     const copies = [...output.matchAll(/^MER-RV-007\twarn\t(\S+)\t(.+?) copies the StatusCode or Value of RivetActionResult/gm)].map((match) => `${match[1]} ${match[2]}`).sort();
     assert.deepEqual(copies, [
+        "Host/Program.cs:5 This line",
         "Modules/Common/AdapterStatus.cs:1 AdapterStatus",
         "Modules/Common/CastRelay.cs:4 CastRelay",
         "Modules/Common/ConstrainedRelay.cs:2 ConstrainedRelay",
+        "Modules/Common/NestedAliases.cs:14 InnerCopy",
+        "Modules/Common/NestedAliases.cs:6 OuterCopy",
         "Modules/Common/RivetNamedShim.cs:4 Adapted",
         "Modules/Common/Shims.cs:12 Leak",
         "Modules/Common/WrapperRecord.cs:9 Wrapper",
         "Modules/Orders/AliasedRelay.cs:6 AliasedRelay",
+        "Modules/Orders/AnonymousRelay.cs:4 AnonymousRelay",
+        "Modules/Orders/AssignedStatus.cs:4 AssignedStatus",
+        "Modules/Orders/BodyHelper.cs:4 BodyHelper",
         "Modules/Orders/BridgeThenStruct.cs:7 Relay",
         "Modules/Orders/DerivedRelays.cs:21 EnvelopeFilter",
         "Modules/Orders/DerivedRelays.cs:33 LocalResponseFilter",
         "Modules/Orders/DerivedRelays.cs:6 DerivedRelayController",
+        "Modules/Orders/HeldRelay.cs:4 HeldRelay",
         "Modules/Orders/LocalCopyFilter.cs:4 LocalCopyFilter",
+        "Modules/Orders/NestedReader.cs:15 NestedLocalReader",
+        "Modules/Orders/NestedReader.cs:4 NestedReader",
         "Modules/Orders/OuterRelay.cs:3 OuterRelay",
+        "Modules/Orders/PatternRelay.cs:4 PatternRelay",
         "Modules/Orders/RelayController.cs:4 RelayController",
         "Modules/Orders/ResponseWritingFilter.cs:4 ResponseWritingFilter",
         "Modules/Orders/ResultStatusFilter.cs:4 ResultStatusFilter",
         "Modules/Orders/StatusCopy.cs:4 StatusCopy",
+        "Modules/Orders/StatusHelper.cs:4 StatusHelper",
         "Program.cs:3 This line",
         "Relay/WrappedRelay.cs:4 WrappedRelay",
     ]);

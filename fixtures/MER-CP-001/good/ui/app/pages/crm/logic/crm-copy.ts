@@ -5,8 +5,8 @@ export const crmCopy = { noun: "export", subject: "export", title: "export", typ
 export const describe = (count: number) => pluralise(count, "export");
 export const heading = () => "export";
 export const caption = (busy: boolean) => pluralise(2, busy ? "export" : "import");
-export const formatLabels = new Map([["csv", "export"]]);
-export const formatTitles = new Map([["csv", "export"] as const]);
+export const formatLabels = new Map([["pdf", "export"]]);
+export const formatTitles = new Map([["pdf", "export"] as const]);
 export const relabel = (labels: string[], index: number) => { labels[index] = "export"; };
 export const relabelKind = (labelsByKind: Record<string, string>, kind: string) => { labelsByKind[kind] = "export"; };
 export class ExportDialog {

@@ -194,9 +194,13 @@ function runAstGrep(r, selected, allYaml) {
   const started = performance.now();
   const out = spawnSync("ast-grep", args, { cwd: r, encoding: "utf8", maxBuffer: 64 * 1024 * 1024 });
   timings.astGrep.push({ ids: selected.flatMap((owner) => owner.ids), duration: elapsed(started) });
-  if (out.error) { degraded = true; console.error("plumb: ast-grep unavailable — YAML rules skipped"); return []; }
+  // ast-grep exits 0 with no matches and 1 with error-severity ones; anything else (a bad rule exits 8, a bad
+  // sgconfig 6, both with empty stdout) or a signal means it never scanned.
+  const skipped = (reason) => { degraded = true; console.error(`plumb: ast-grep failed, YAML rules skipped: ${reason}`); return []; };
+  if (out.error) return skipped(out.error.message);
+  if (out.signal || out.status > 1) return skipped(`${out.signal ? `killed by ${out.signal}` : `exit ${out.status}`}: ${out.stderr.trim()}`);
   let arr = [];
-  try { arr = JSON.parse(out.stdout || "[]"); } catch { degraded = true; return []; }
+  try { arr = JSON.parse(out.stdout || "[]"); } catch (error) { return skipped(`unreadable JSON output: ${error.message}`); }
   return arr.map((m) => ({
     id: m.ruleId,
     sev: m.severity === "warning" ? "warn" : (m.severity || "error"),
@@ -216,9 +220,11 @@ function runChecks(r, selected, rivetVariant) {
     });
     const duration = elapsed(started);
     (owner.ciOnly ? timings.external : timings.producers).push({ owner, duration });
-    if (out.error || (out.status && out.status > 1)) {
+    // Producers exit 0 whether or not they find drift; any other exit, a signal or a spawn error is an internal failure.
+    if (out.error || out.signal || out.status !== 0) {
       degraded = true;
-      console.error(`plumb: check ${owner.source} failed: ${out.error?.message || out.stderr}`);
+      const reason = out.error?.message || (out.signal ? `killed by ${out.signal}` : `exit ${out.status}`);
+      console.error(`plumb: check ${owner.source} failed (${reason})${out.stderr?.trim() ? `: ${out.stderr.trim()}` : ""}`);
       continue;
     }
     if (out.stderr) process.stderr.write(out.stderr);

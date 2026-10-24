@@ -985,11 +985,72 @@ test("baseline: a run whose check failed can't tell a shrink, and says nothing o
   };
   const quiet = isolatedPlumb({ "MER-TO-909-quiet.mjs": "#!/usr/bin/env node\n" });
   assert.match(quiet.run("--rule", "MER-TO-909", "--baseline", baselineOf(quiet)).stdout, /shrunk/);
-  const failing = isolatedPlumb({ "MER-TO-909-failure.mjs": "#!/usr/bin/env node\nprocess.exit(2);\n" });
-  const out = failing.run("--rule", "MER-TO-909", "--baseline", baselineOf(failing));
-  assert.match(out.stderr, /check .*MER-TO-909-failure\.mjs failed/);
+  // A producer exits 0 whether or not it finds drift, so any other exit, an uncaught throw (Node exits 1) or a
+  // signal is a failure.
+  for (const [body, reason] of [
+    ["process.exit(2);", /failed \(exit 2\)/],
+    ['throw new Error("producer blew up");', /failed \(exit 1\): .*producer blew up/s],
+    ['process.kill(process.pid, "SIGKILL");', /failed \(killed by SIGKILL\)/],
+  ]) {
+    const failing = isolatedPlumb({ "MER-TO-909-failure.mjs": `#!/usr/bin/env node\n${body}\n` });
+    const out = failing.run("--rule", "MER-TO-909", "--baseline", baselineOf(failing));
+    assert.match(out.stderr, /check .*MER-TO-909-failure\.mjs failed/, body);
+    assert.match(out.stderr, reason, body);
+    assert.match(out.stdout, /baseline holds 1/, body);
+    assert.doesNotMatch(out.stdout, /shrunk/, body);
+  }
+});
+
+test("baseline: a run whose in-process rule lacked its engine can't tell a shrink", () => {
+  const isolated = isolatedPlumb({});
+  fs.cpSync(path.join(FIX, "MER-BT-001", "good"), isolated.target, { recursive: true });
+  const bl = path.join(isolated.target, ".plumb-baseline.json");
+  fs.writeFileSync(bl, JSON.stringify({ version: 1, entries: { "MER-BT-001\tsrc/gone.ts": 1 } }));
+  const out = isolated.run("--rule", "MER-BT-001", "--baseline", bl);
+  assert.match(out.stderr, /TypeScript not installed/);
   assert.match(out.stdout, /baseline holds 1/);
   assert.doesNotMatch(out.stdout, /shrunk/);
+});
+
+test("baseline: a run whose ast-grep failed can't tell a shrink", () => {
+  const isolated = isolatedPlumb({});
+  // Catalogue-valid but not an ast-grep rule: ast-grep exits 8 with empty stdout.
+  fs.mkdirSync(path.join(isolated.home, "rules", "to"), { recursive: true });
+  fs.writeFileSync(path.join(isolated.home, "rules", "to", "MER-TO-908-broken.yml"), "id: MER-TO-908\nlanguage: nolang\nrule:\n  pattern: x\n");
+  fs.writeFileSync(path.join(isolated.target, "a.ts"), "x\n");
+  const bl = path.join(isolated.target, ".plumb-baseline.json");
+  fs.writeFileSync(bl, JSON.stringify({ version: 1, entries: { "MER-TO-908\ta.ts": 1 } }));
+  const out = isolated.run("--rule", "MER-TO-908", "--baseline", bl);
+  assert.match(out.stderr, /plumb: ast-grep failed, YAML rules skipped: exit 8: .*Cannot parse rule/s);
+  assert.match(out.stdout, /baseline holds 1/);
+  assert.doesNotMatch(out.stdout, /shrunk/);
+});
+
+test("MER-RV-024: a convention it can't check exits 2 with a reason, so a --ci baseline can't read it as a shrink", () => {
+  const check = path.join(CHECKS, "MER-RV-024-stale-generated.mjs");
+  const run = (r, env = {}) => spawnProducer(check, r, { encoding: "utf8", env: { PLUMB_CI: "1", ...env } });
+  const taskfile = 'version: "3"\n\ntasks:\n  generate:\n    cmds:\n      - ./fake-rivet --project api --output generated/rivet\n';
+  // No Taskfile, or none with a rivet task: the rule doesn't apply.
+  assert.equal(run(repo([], { "README.md": "x\n" })).status, 0);
+  assert.equal(run(repo([], { "Taskfile.yml": 'version: "3"\n\ntasks:\n  build:\n    cmds:\n      - echo hi\n' })).status, 0);
+  // No task binary: PATH holds only node.
+  const bin = repo([]);
+  fs.symlinkSync(process.execPath, path.join(bin, "node"));
+  const noTask = run(repo([], { "Taskfile.yml": taskfile }), { PATH: `${bin}:/usr/bin:/bin` });
+  assert.equal(noTask.status, 2, noTask.stderr);
+  assert.match(noTask.stderr, /task \(go-task\) not on PATH/);
+  const unresolved = run(repo([], { "Taskfile.yml": taskfile.replace("generated/rivet", "{{.OUT}}") }));
+  assert.equal(unresolved.status, 2, unresolved.stderr);
+  assert.match(unresolved.stderr, /could not resolve --output for task generate/);
+  const missing = run(repo([], { "Taskfile.yml": taskfile }));
+  assert.equal(missing.status, 2, missing.stderr);
+  assert.match(missing.stderr, /output dir generated\/rivet does not exist/);
+  const failing = repo([], { "Taskfile.yml": taskfile, "fake-rivet": "#!/bin/sh\nexit 3\n", "generated/rivet/rivet.ts": "// checked in\n" });
+  fs.chmodSync(path.join(failing, "fake-rivet"), 0o755);
+  const failed = run(failing);
+  assert.equal(failed.status, 2, failed.stderr);
+  assert.match(failed.stderr, /task generate failed/);
+  assert.equal(fs.readFileSync(path.join(failing, "generated", "rivet", "rivet.ts"), "utf8"), "// checked in\n");
 });
 
 test("baseline: shrinking is reported and suggests ratcheting down", () => {
@@ -1055,13 +1116,15 @@ test("baseline identity and suppression are unchanged for migrated findings", ()
 // index.vue lines 10, 11 and 15 are a literal type, a template literal type and an interface member: type
 // positions never count. Line 16's route argument is the generated client's, but the id in its query is a copy.
 // Each crm-positions.ts and CrmLinks.vue line shows one kind of id position, some with several ids in it
-// (crm-positions.ts:15, 16 and 20, CrmLinks.vue:3 and 4). The good fixture's server declares ExportId = "export",
-// and its crm-copy.ts and CrmConflict.vue use "export" as wording and stay clean: `noun:`, `title:`, `typeLabel:`,
-// a native element's `class=`, `title=`, `data-testid=` and `id=`, a component's `id=`/`:id=` and `noun=`/`:noun=`,
+// (crm-positions.ts:15, 16 and 20, CrmLinks.vue:3 and 4); crm-positions.ts:55 only declares the component line 56
+// maps to. A key mapped to another server id (51-53) is a route table, not a label. The good fixture's server declares
+// ExportId = "export", and its crm-copy.ts and CrmConflict.vue use "export" as wording and stay clean: `noun:`,
+// `title:`, `typeLabel:`, a native element's `class=`, `title=`, `data-testid=` and `id=`, a component's `id=`/`:id=`
+// and `noun=`/`:noun=`, the `id` and `type` keys of an argument-less `v-bind` object (attributes, like `:id`/`:type`),
 // test hooks (`data-test-id=`, `:data-qa-id=`), a route name (`:to="{ name: 'export' }"`), `:class` object keys, a
 // `new Map` entry's value, a class field and `this.title =` under wording names, an interpolation, a returned value,
 // a call argument, and the whitespace paths "Choose import/export" and `Choose ${mode}/export`. Its labels, colours,
-// icons and orderings keyed on "acme-crm" or "csv" (quoted, computed, `new Map` entries, through `as const` and
+// icons and orderings keyed on "acme-crm" (quoted, computed, `new Map` entries, through `as const` and
 // `satisfies`) are presentation, and "text/csv" is a MIME type, not a path to the "csv" id.
 test("MER-CP-001 names each copied id's qualified owner at its exact location", () => {
   const findings = JSON.parse(plumb(path.join(FIX, "MER-CP-001", "bad"), "--rule", "MER-CP-001", "--json").stdout);
@@ -1076,6 +1139,7 @@ test("MER-CP-001 names each copied id's qualified owner at its exact location", 
     ["ui/app/pages/crm/components/CrmLinks.vue:6", "CrmIntegration.IntegrationId"], // a component's `type` prop
     ["ui/app/pages/crm/components/CrmLinks.vue:7", "CrmIntegration.Webhooks.HandlerId"], // v-bind object, id-named key
     ["ui/app/pages/crm/components/CrmLinks.vue:8", "CrmIntegration.EmailChannelId"], // an HTML type on a component that isn't an input
+    ["ui/app/pages/crm/components/CrmLinks.vue:9", "CrmIntegration.IntegrationId"], // v-bind object, a component's `type`
     ["ui/app/pages/crm/composables/useCrmDestination.ts:6", "CrmIntegration.IntegrationId"], // ref(…)'s initial value, held by a variable
     ["ui/app/pages/crm/index.vue:12", "CrmIntegration.IntegrationId"], // compared against a literal-typed value
     ["ui/app/pages/crm/index.vue:13", "CrmIntegration.IntegrationId"], // hand-built /api/ URL
@@ -1130,13 +1194,18 @@ test("MER-CP-001 names each copied id's qualified owner at its exact location", 
     ["ui/app/pages/crm/logic/crm-positions.ts:49", "CrmIntegration.IntegrationId"], // a ref array's element, by the ref's name
     ["ui/app/pages/crm/logic/crm-positions.ts:5", "CrmConnector.ConnectorId"], // !=
     ["ui/app/pages/crm/logic/crm-positions.ts:50", "CrmIntegration.IntegrationId"], // static field, whatever its name
+    ["ui/app/pages/crm/logic/crm-positions.ts:51", "CrmIntegration.IntegrationId"], // key mapped to another id, a route table
+    ["ui/app/pages/crm/logic/crm-positions.ts:52", "CrmConnector.ConnectorId"], // new Map([[…]]) key mapped to another id
+    ["ui/app/pages/crm/logic/crm-positions.ts:53", "CrmConnector.ConnectorId"], // computed key mapped to another id
+    ["ui/app/pages/crm/logic/crm-positions.ts:54", "CrmIntegration.IntegrationId"], // MIME-shaped template tail of a path
+    ["ui/app/pages/crm/logic/crm-positions.ts:56", "CrmIntegration.IntegrationId"], // key mapped to a component, a dispatch table
     ["ui/app/pages/crm/logic/crm-positions.ts:8", "CrmIntegration.Webhooks.HandlerId"], // case label
   ]);
   const good = JSON.parse(plumb(path.join(FIX, "MER-CP-001", "good"), "--rule", "MER-CP-001", "--json").stdout);
   assert.deepEqual(good, []);
 });
 
-// Names are read by their last whole word, and a native element's `id` and `type`, and Vue's `key`, aren't ids. The
+// Names are read by their last whole word, and any tag's `id`, a native element's `type`, and Vue's `key`, aren't ids. The
 // held lines (2-5, 15, 16) count; the rest are wording, a conditional's condition, a returned value, a plain call
 // argument, `+=` and a whitespace "path".
 test("MER-CP-001 reads names by whole word and keeps wording, returns and call arguments out", () => {

@@ -48,3 +48,9 @@ export const external = { externalCRMId: "acme-crm" };
 export const variant = { abTestId: "acme-crm" };
 export const chooseIn = (kinds: { value: string[] }) => { kinds.value[0] = "acme-crm"; };
 export class CrmIds { static readonly CRM = "acme-crm"; }
+export const routes = { "acme-crm": "acme-webhook" };
+export const routeMap = new Map([["acme-connector", "acme-probe"]]);
+export const routeKeys = { ["acme-connector"]: "acme-webhook" };
+export const mimeShapedLink = (base: string) => `${base}text/acme-crm`;
+declare const AcmeCrmPanel: object;
+export const panels = { "acme-crm": AcmeCrmPanel };

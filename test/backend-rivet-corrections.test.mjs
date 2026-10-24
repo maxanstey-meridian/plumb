@@ -86,6 +86,13 @@ test("MER-BE-007 reports the domain type a port's name resolves to, not a namesa
     ]);
 });
 
+// A *Tests.cs file in a production project is production code: BE-024 reads it like its neighbours.
+test("MER-BE-024 flags ambient time in a *Tests.cs file of a production project", () => {
+    const locations = [...run("MER-BE-024", "bad").matchAll(/^MER-BE-024\t\w+\t(\S+)/gm)].map((match) => match[1]);
+    assert.ok(locations.includes("Modules/Orders/Application/CreateOrder.cs:3"), locations.join("\n"));
+    assert.ok(locations.includes("Modules/Orders/Application/CreateOrderTests.cs:3"), locations.join("\n"));
+});
+
 // A test project's files are test code wherever its folders sit (ArchitectureTesting/Modules/…), by its metadata.
 test("MER-BE-016, -024, -032, -042 and -055 exempt a test project's files by project metadata, not only by test folder or file names", () => {
     for (const rule of ["MER-BE-016", "MER-BE-024", "MER-BE-032", "MER-BE-042", "MER-BE-055"]) {
@@ -173,7 +180,9 @@ test("MER-RV-007 flags every app-written RivetResult extension named like an ada
     const output = run("MER-RV-007", "bad");
     const locations = [...output.matchAll(/^MER-RV-007\twarn\t(\S+)/gm)].map((match) => match[1]).sort();
     assert.deepEqual(locations, [
-        // ToResponse returning Task<HttpResponseData>, and a ToResult returning object.
+        // Bridges that call the adapter and rebuild its output or hand-write the error path, and a ToResult
+        // namesake returning object.
+        "Modules/Common/FunctionResultExtensions.cs:1",
         "Modules/Common/FunctionResultExtensions.cs:1",
         // ToHttpResult returning IResult, and Respond returning ValueTask<HttpResults.Ok<T>>.
         "Modules/Common/HttpResultExtensions.cs:1",
@@ -183,7 +192,8 @@ test("MER-RV-007 flags every app-written RivetResult extension named like an ada
         // A typed Results<…> union, spaces in its generics.
         "Modules/Orders/TypedResultExtensions.cs:1",
     ]);
-    assert.match(output, /FunctionResultExtensions\.cs:1\tFunctionResultExtensions hand-writes an HTTP-result bridge off RivetResult \(ToResponse, ToResult\)/);
+    assert.match(output, /FunctionResultExtensions\.cs:1\tFunctionResultExtensions hand-writes an HTTP-result bridge off RivetResult \(ToResponse, Rebuild, ToHttp, OneArm\)/);
+    assert.match(output, /FunctionResultExtensions\.cs:1\tFunctionResultExtensions declares its own ToResult off RivetResult, so a handler's call may bind to it instead of Rivet's first-party adapter — rename or delete it\t/);
     assert.match(output, /HttpResultExtensions\.cs:1\tHttpResultExtensions hand-writes an HTTP-result bridge off RivetResult \(ToHttpResult, Respond\) — delete it and use Rivet's first-party \.ToResult\(\)\/\.ToActionResult\(\) adapters\t/);
 });
 
@@ -288,17 +298,17 @@ test("MER-RV-027 follows transport namesakes and .Returns<T> payloads, checks Pa
         ["api/Contracts/Orders/OrderSummaryContract.cs:21", "OrderSummaryView.Note is [JsonIgnore(Condition = WhenWritingNull)] on a response"],
         ["api/Contracts/Orders/OrderSummaryContract.cs:24", "OrderSummaryView.Priority is [RivetOptional] on a response"],
         ["api/Contracts/Orders/OrderSummaryContract.cs:41", "OrderTotalsView.Currency has a default on a response"],
-        ["api/Contracts/Orders/OrderSummaryContract.cs:46", "Response type OrderHistoryDto is a record whose fields are properties, so a builder"],
+        ["api/Contracts/Orders/OrderSummaryContract.cs:46", "Response type OrderHistoryDto is a record whose fields are properties; response records take every field positionally"],
         ["api/Contracts/Orders/OrderSummaryContract.cs:50", "Entry.By has a default on a response"],
         ["api/Contracts/Orders/OrderSummaryContract.cs:54", "Response type OrderTagsView is a class with properties, so a builder"],
         ["api/Contracts/Orders/OrderSummaryContract.cs:61", "OrderTagsView.Colour is [RivetOptional] on a response"],
         // A DefaultIgnoreCondition in the host's JSON options drops fields from every response.
         ["api/Program.cs:5", "DefaultIgnoreCondition = WhenWritingNull in the host's JSON options drops every null field from every response"],
         ["api/Program.cs:8", "DefaultIgnoreCondition = WhenWritingDefault in the host's JSON options drops every field holding its type's default"],
-        ["api/Program.cs:14", "DefaultIgnoreCondition = WhenWritingNull in the host's JSON options drops every null field from every response"],
+        ["api/Program.cs:18", "DefaultIgnoreCondition = WhenWritingNull in the host's JSON options drops every null field from every response"],
         // Settable body properties on positional records, and union cases reached through [JsonDerivedType].
         ["api/Contracts/Orders/OrderEventsContract.cs:15", "OrderEventDto.Actor is set in the record body"],
-        ["api/Contracts/Orders/OrderEventsContract.cs:17", "OrderEventDto.Sequence is set in the record body"],
+        ["api/Contracts/Orders/OrderEventsContract.cs:17", "OrderEventDto.Sequence is a required body property"],
         ["api/Contracts/Orders/OrderEventsContract.cs:17", "OrderEventDto.Sequence is [RivetOptional] on a response"],
         ["api/Contracts/Orders/OrderEventsContract.cs:35", "Placed.Channel has a default and is [RivetOptional] on a response"],
         ["api/Contracts/Orders/OrderEventsContract.cs:42", "OrderCancelled.Reason has a default on a response"],

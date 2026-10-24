@@ -301,6 +301,13 @@ test("C# type names resolve the way the compiler looks them up: nested types, na
     ["api/Pragma.cs", "#nullable enable\nrecord Loose(int A);\n#region Response record types\n#endregion\n"],
     ["api/Shadow.cs", "using Inner = App.Wire.Envelope;\nusing Paging = App.Wire.Envelope;\nusing Envelopes = App.Wire.Envelope[];\nnamespace App.Contracts.Orders;\n" +
       "public static class Shadow\n{\n    public sealed record Inner(int A);\n    public sealed record UsesInner(Inner Value);\n}\npublic sealed record UsesPaging(Paging P, Envelopes E);\n"],
+    // Directives written inside a namespace belong to it: they beat its parents' members, and reach only its block.
+    ["api/Inside.cs", "namespace App.Contracts.Orders\n{\n    using Paging = App.Wire.Envelope;\n    public sealed record UsesInsideAlias(Paging P);\n}\n" +
+      "namespace App.Contracts.Orders\n{\n    public sealed record OutsideTheBlock(Paging P);\n}\n"],
+    // An alias bound outside the scan stays bound: an unreferenced project's App.Json is not what it names.
+    ["api/Outside.cs", "using Json = System.Text.Json.Nodes.JsonObject;\nusing Monies = App.Shared.Money?[];\nnamespace App.Contracts.Orders;\npublic sealed record UsesJson(Json J, Monies M);\n"],
+    ["tools/Other/Other.csproj", '<Project Sdk="Microsoft.NET.Sdk" />'],
+    ["tools/Other/Json.cs", "namespace App;\npublic sealed record Json(int A);\n"],
     ["api/Usings.cs", "global using App.Globals;\n"],
     ["api/Globals/Flag.cs", "namespace App.Globals;\npublic sealed record Flag(bool On);\n"],
     ["Directory.Build.props", '<Project><ItemGroup><Using Include="App.Props" /></ItemGroup></Project>'],
@@ -344,6 +351,12 @@ test("C# type names resolve the way the compiler looks them up: nested types, na
   assert.equal(resolved("Inner", shadow, shadow.text().indexOf("UsesInner")), "App.Contracts.Orders.Shadow.Inner");
   assert.equal(resolved("Paging", shadow, shadow.text().indexOf("UsesPaging")), "App.Paging");
   assert.equal(resolved("Envelopes", shadow, shadow.text().indexOf("UsesPaging")), "App.Wire.Envelope");
+  const inside = file("api/Inside.cs");
+  assert.equal(resolved("Paging", inside, inside.text().indexOf("UsesInsideAlias")), "App.Wire.Envelope");
+  assert.equal(resolved("Paging", inside, inside.text().indexOf("OutsideTheBlock")), "App.Paging");
+  const outside = file("api/Outside.cs");
+  assert.equal(resolved("Json", outside, outside.text().indexOf("UsesJson")), null);
+  assert.equal(resolved("Monies", outside, outside.text().indexOf("UsesJson")), "App.Shared.Money");
   // A positional record's parameter list is outside its body, so it doesn't see its nested types (CS0246): an
   // unqualified Parcel there finds nothing, and Box finds the namespace's own Box.
   const nested = file("api/Nested.cs");

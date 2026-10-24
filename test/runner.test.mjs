@@ -968,7 +968,16 @@ test("baseline: shrinking is reported and suggests ratcheting down", () => {
   assert.equal(out.status, 0);
   assert.match(out.stdout, /shrunk; re-run --write-baseline/);
   // A run narrowed to one rule can't produce the rest of the baseline, so it doesn't call it shrunk.
-  assert.doesNotMatch(plumb(r, "--baseline", bl, "--rule", "MER-BE-001").stdout, /shrunk/);
+  const focused = plumb(r, "--baseline", bl, "--rule", "MER-BE-001");
+  assert.equal(focused.status, 0, focused.stderr);
+  assert.match(focused.stdout, /baselined by \.plumb-baseline\.json/);
+  assert.doesNotMatch(focused.stdout, /shrunk/);
+  // Nor does a run without --ci when the baseline holds a CI-only rule's findings it never ran.
+  const withCiOnly = JSON.parse(fs.readFileSync(bl, "utf8"));
+  fs.writeFileSync(bl, JSON.stringify({ ...withCiOnly, entries: { ...withCiOnly.entries, "MER-RV-024\tweb/package.json": 1 } }));
+  const local = plumb(r, "--baseline", bl);
+  assert.equal(local.status, 0, local.stderr);
+  assert.doesNotMatch(local.stdout, /shrunk/);
 });
 
 test("baseline: --json emits only actionable findings; unreadable baseline → exit 2", () => {

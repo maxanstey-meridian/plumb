@@ -9,6 +9,7 @@ import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 import { createVisibility, shouldIncludeFile } from "./checks/_lib/fs-scan.mjs";
 import { planCapabilities } from "./lib/engine/contracts.mjs";
+import { isNuxtConfig } from "./lib/engine/frontend-analysis.mjs";
 import { createRepositorySnapshot } from "./lib/engine/repository-snapshot.mjs";
 import { runInProcessRules } from "./lib/engine/run-rules.mjs";
 import { inProcessRules } from "./lib/in-process-rules/index.mjs";
@@ -143,7 +144,7 @@ function detectPacks(snapshot) {
   for (const file of snapshot.files) {
     if (file.path.split("/").length - 1 > 14) continue;
     const f = file.path, b = file.name;
-    if (/^nuxt\.config\.(ts|js|mjs)$/.test(b)) nuxt = true;
+    if (isNuxtConfig(b)) nuxt = true;
     if (b.endsWith(".csproj")) {
       csproj = true;
       try { if (snapshot.text(file).includes("Rivet.Attributes")) rivet = true; } catch {}
@@ -364,12 +365,13 @@ if (writeBaselineFile) {
   emitProfile();
   process.exit(0);
 }
-let baselined = 0, baselineTotal = 0;
+let baselined = 0, baselineTotal = 0, baselineIds = new Set();
 if (baselineFile) {
   let bl;
   try { bl = JSON.parse(fs.readFileSync(baselineFile, "utf8")); }
   catch (e) { console.error(`plumb: cannot read baseline ${baselineFile}: ${e.message}`); process.exit(2); }
   const allowance = { ...(bl.entries || {}) };
+  baselineIds = new Set(Object.keys(allowance).map((key) => key.split("\t")[0]));
   baselineTotal = Object.values(allowance).reduce((a, b) => a + b, 0);
   findings = findings.filter((f) => {
     if (allowance[bKey(f)] > 0) { allowance[bKey(f)]--; baselined++; return false; }
@@ -377,8 +379,10 @@ if (baselineFile) {
   });
 }
 
-// A run narrowed by --rule, --pack or --exclude can't produce every baselined finding, so it can't tell a shrunk baseline.
-const narrowed = Boolean(ruleFilter || packFilter || excludePatterns.length);
+// A run narrowed by --rule, --pack or --exclude, or one without --ci when the baseline holds CI-only rules' findings,
+// can't produce every baselined finding, so it can't tell a shrunk baseline.
+const ciOnlyIds = new Set(catalogue.owners.filter((owner) => owner.ciOnly).flatMap((owner) => owner.ids));
+const narrowed = Boolean(ruleFilter || packFilter || excludePatterns.length) || (!ci && [...baselineIds].some((id) => ciOnlyIds.has(id)));
 // The baseline by its path inside the checked root (`.plumb-baseline.json`), or as given when it's elsewhere.
 const baselineName = baselineFile && (/^\.\.(?:[\\/]|$)/.test(path.relative(abs, path.resolve(baselineFile))) ? baselineFile : path.relative(abs, path.resolve(baselineFile)));
 const baselineNote = baselineFile

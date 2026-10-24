@@ -1,13 +1,27 @@
 namespace App.Modules.Common;
 
-// A helper that owns an error path and goes through Rivet's adapter is not a bridge.
+// A helper that owns an error path and returns Rivet's adapter output unchanged is not a bridge, arm by arm.
 public static class RefusalExtensions
 {
     public static IActionResult Done(this RivetResult result) => result.ToActionResult();
 
-    public static IResult Logged(this RivetResult result, ILogger logger)
+    public static async Task<IResult> Logged(this RivetResult result, ILogger logger)
     {
-        logger.LogInformation("refused");
+        await Task.Yield();
+        logger.LogInformation("refused {Count}", Count(() => { return 1; }));
+        int Local() { return 2; }
         return result.ToResult();
     }
+
+    public static IResult Either(this RivetResult result, bool flag) => flag ? result.ToResult() : result.ToResult();
+
+    public static IResult Switched(this RivetResult result, int kind)
+    {
+        return kind switch { 0 => result.ToResult(), _ => result.ToResult() };
+    }
+
+    public static IResult Matched(this RivetResult result, Outcome outcome) =>
+        outcome.Match(ok => result.ToResult(), error: reason => result.ToResult());
+
+    private static int Count(Func<int> count) => count();
 }

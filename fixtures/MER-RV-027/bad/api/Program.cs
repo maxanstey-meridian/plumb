@@ -11,6 +11,9 @@ builder.Services.AddControllers().AddJsonOptions(options =>
 var app = builder.Build();
 app.Run();
 
-[JsonSourceGenerationOptions(DefaultIgnoreCondition = global::System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
-[JsonSerializable(typeof(object))]
-partial class WireContext : JsonSerializerContext;
+// An IConfigureOptions<JsonOptions> sets the host's options too.
+sealed class JsonDefaults : IConfigureOptions<Microsoft.AspNetCore.Http.Json.JsonOptions>
+{
+    public void Configure(Microsoft.AspNetCore.Http.Json.JsonOptions options) =>
+        options.SerializerOptions.DefaultIgnoreCondition = global::System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull;
+}

@@ -16,3 +16,8 @@ static class Outbound
 {
     public static readonly System.Text.Json.JsonSerializerOptions Options = new() { DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull };
 }
+
+// A source-generated context's options are its own, not the host's.
+[JsonSourceGenerationOptions(DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull)]
+[JsonSerializable(typeof(object))]
+partial class OutboundContext : JsonSerializerContext;

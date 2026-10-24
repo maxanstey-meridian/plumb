@@ -110,6 +110,11 @@ test("TO-012 still reads an .editorconfig with an empty header, which only CShar
   assert.ok(JSON.parse(out.stdout).some((finding) => /\.editorconfig/.test(finding.location) && !/no \.editorconfig/.test(finding.message)), out.stdout);
 });
 
+test("TO-015 lets a CSharpier glob with a range past braces' limit match nothing and still reads the rest of the file", () => {
+  const root = repo({ ".editorconfig": "root = true\n\n[*.cs]\nmax_line_length = 120\n\n[V{1..2000}.cs]\nmax_line_length = 80\n", "Report.cs": csharp(110), "Wide.cs": csharp(125) });
+  assert.deepEqual(widths(findings(root)), ["Wide.cs:3 120"]);
+});
+
 test("TO-015 expands CSharpier brace sets into alternatives, numeric ranges into whole numbers", () => {
   const root = repo({
     ".editorconfig": "root = true\n\n[*.cs]\nmax_line_length = 120\n\n[src/{**,x}/*.cs]\nmax_line_length = 80\n\n[V{1..12}.cs]\nmax_line_length = 80\n\n[W{01..03}.cs]\nmax_line_length = 80\n\n[X{a..c}.cs]\nmax_line_length = 80\n",

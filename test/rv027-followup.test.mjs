@@ -71,20 +71,21 @@ test("MER-RV-027 fixtures: the good tree stays clean and the bad tree pins the p
         `${summary}:24\tOrderSummaryView.Priority ${optional}`,
         // Followed through a property; InternalAudit sits behind an unconditional [JsonIgnore], so it isn't.
         `${summary}:41\tOrderTotalsView.Currency ${defaulted}`,
-        `${summary}:46\tResponse type OrderHistoryDto is a record whose fields are properties${positional}`,
+        // Its only property is required, so the reason is the house shape, not a builder leaving it out.
+        `${summary}:46\tResponse type OrderHistoryDto is a record whose fields are properties; response records take every field positionally — declare it as a positional record`,
         `${summary}:50\tEntry.By ${defaulted}`,
         `${summary}:54\tResponse type OrderTagsView is a class with properties${positional}`,
         `${summary}:61\tOrderTagsView.Colour ${optional}`,
         // Settable body auto-properties of a positional record; computed, get-only and privately set ones aren't.
         `${events}:15\tOrderEventDto.Actor ${bodyProperty}`,
-        `${events}:17\tOrderEventDto.Sequence ${bodyProperty}`,
+        `${events}:17\tOrderEventDto.Sequence is a required body property, but response records take every field positionally — move it into the parameter list`,
         `${events}:17\tOrderEventDto.Sequence ${optional}`,
         // The cases a union base's [JsonDerivedType] names, nested or beside it; their overrides aren't body fields.
         `${events}:35\tPlaced.Channel has a default and is [RivetOptional] on a response, so a builder can leave it out and the client type marks it optional though the server always sends it — remove both`,
         `${events}:42\tOrderCancelled.Reason ${defaulted}`,
         `api/Program.cs:5\t${globalNull}`,
         `api/Program.cs:8\t${globalDefault}`,
-        `api/Program.cs:14\t${globalNull}`,
+        `api/Program.cs:18\t${globalNull}`,
     ]) assert.ok(bad.includes(expected), `missing ${expected}\n${bad.join("\n")}`);
 });
 
@@ -110,8 +111,11 @@ test("MER-RV-027 flags a DefaultIgnoreCondition in every host JSON options form,
             "// options.DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull;",
             'var text = "DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull";',
             "settings.NullValueHandling = NullValueHandling.Ignore;",
+            "builder.Services.AddOptions<JsonOptions>().Configure(o => o.SerializerOptions.DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull);",
+            // A source-generated context's options and an API client's are their own.
             "[JsonSourceGenerationOptions(DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull)]",
             "partial class Wire : JsonSerializerContext;",
+            "client.JsonSerializerOptions.DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull;",
         ],
     });
     assert.deepEqual(actual, sorted([
@@ -372,29 +376,42 @@ test("MER-RV-027 flags a positional response record's settable body auto-propert
     const at = (line, message) => `api/Contracts/Orders/OrdersContract.cs:${line}\t${message}`;
     assert.deepEqual(actual, sorted([
         at(9, `OrderDto.Note ${bodyProperty}`),
-        at(10, `OrderDto.Count ${bodyProperty}`),
+        at(10, "OrderDto.Count is a required body property, but response records take every field positionally — move it into the parameter list"),
         at(11, `OrderDto.Tag ${bodyProperty}`),
         at(11, `OrderDto.Tag ${omitNull}`),
     ]));
 });
 
-test("MER-RV-027 skips ignored, redeclared and converter-written members, reads array properties, and reads past a method with a default", () => {
+test("MER-RV-027 skips ignored, redeclared and converter-written members, reads array properties, and reads past methods and operators", () => {
     const actual = scan({
         "api/Api.csproj": webProject,
         "api/Contracts/Orders/OrdersContract.cs": contract("OrderDto",
-            "public sealed record OrderDto(string Name, Money Total, Stamp At) : Base",
+            "public sealed record OrderDto(string Name, Money Total, Stamp At, Echo E, Split S) : Base",
             "{",
             "    [JsonIgnore] public string? CacheKey { get; init; }",
-            "    [JsonPropertyName(\"n\")] public string Name { get; init; } = Name;",
+            "    [JsonPropertyName(\"n\")] public string Name { get; init; } = Name.Trim();",
             "    public string Describe(int indent = 0) { return Name; }",
+            "    public string Format(int indent = default(int)) { return Name; }",
             "    public required OrderLine[] Lines { get; init; }",
             "}",
             "public abstract record Base { [JsonIgnore] public string? Etag { get; init; } }",
-            "public sealed class OrderLine { public string Text { get; init; } = \"\"; }",
-            // A converter writes the type's JSON itself, on the type or on the member that holds it.
+            "public sealed class OrderLine",
+            "{",
+            "    public static bool operator ==(OrderLine a, OrderLine b) { return true; }",
+            "    public static bool operator !=(OrderLine a, OrderLine b) { return false; }",
+            "    public string Text { get; init; } = \"\";",
+            "    [RivetOptional] public string? Tag { get; init; }",
+            "}",
+            // A converter writes the type's JSON itself, on the type, on any part of a partial one, or on the member
+            // that holds it.
             "[JsonConverter(typeof(MoneyConverter))]",
             "public readonly struct Money { public decimal Amount { get; init; } }",
             "public sealed class Stamp { public DateTimeOffset At { get; init; } }",
+            // Redeclared without reading the parameter, the property is never set by the constructor.
+            "public sealed record Echo(string Name) { public string Name { get; init; } }",
+            "[JsonConverter(typeof(SplitConverter))]",
+            "public partial class Split { }",
+            "public partial class Split { public int A { get; init; } }",
         ),
         "api/Contracts/Orders/HolderContract.cs": [
             "namespace App.Contracts.Orders;",
@@ -408,9 +425,27 @@ test("MER-RV-027 skips ignored, redeclared and converter-written members, reads 
     });
     const at = (line, message) => `api/Contracts/Orders/OrdersContract.cs:${line}\t${message}`;
     assert.deepEqual(actual, sorted([
-        at(12, `OrderDto.Lines ${bodyProperty}`),
-        at(15, `Response type OrderLine is a class with properties${positional}`),
+        at(13, "OrderDto.Lines is a required body property, but response records take every field positionally — move it into the parameter list"),
+        at(16, `Response type OrderLine is a class with properties${positional}`),
+        at(21, `OrderLine.Tag ${optional}`),
         // OrderDto's own Stamp has no converter, so it is followed; HolderView's is written by one.
-        at(18, `Response type Stamp is a class with properties${positional}`),
+        at(25, `Response type Stamp is a class with properties${positional}`),
+        at(26, `Echo.Name ${bodyProperty}`),
     ]));
+});
+
+test("MER-RV-027 gives the positional reason, not the builder one, when no property can be left out", () => {
+    const actual = scan({
+        "api/Api.csproj": webProject,
+        "api/Contracts/Orders/OrdersContract.cs": contract("TicketView",
+            "public sealed class TicketView(Guid id)",
+            "{",
+            "    public Guid Id { get; } = id;",
+            "    public required string Title { get; init; }",
+            "}",
+        ),
+    });
+    assert.deepEqual(actual, [
+        "api/Contracts/Orders/OrdersContract.cs:7\tResponse type TicketView is a class with properties; response records take every field positionally — declare it as a positional record",
+    ]);
 });

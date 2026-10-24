@@ -94,8 +94,11 @@ test("MER-BE-024 flags ambient time in a *Tests.cs file of a production project"
 });
 
 // A test project's files are test code wherever its folders sit (ArchitectureTesting/Modules/…), by its metadata.
-test("MER-BE-016, -024, -032, -042 and -055 exempt a test project's files by project metadata, not only by test folder or file names", () => {
-    for (const rule of ["MER-BE-016", "MER-BE-024", "MER-BE-032", "MER-BE-042", "MER-BE-055"]) {
+test("BE's layer, style and placement rules exempt a test project's files by project metadata, not only by test folder or file names", () => {
+    const rules = ["MER-BE-001", "MER-BE-002", "MER-BE-003", "MER-BE-004", "MER-BE-005", "MER-BE-007", "MER-BE-008", "MER-BE-009",
+        "MER-BE-016", "MER-BE-020", "MER-BE-021", "MER-BE-022", "MER-BE-023", "MER-BE-024", "MER-BE-030", "MER-BE-031", "MER-BE-032",
+        "MER-BE-042", "MER-BE-053", "MER-BE-055", "MER-BE-060"];
+    for (const rule of rules) {
         const files = (project) => Object.fromEntries(fs.readdirSync(path.join(FIXTURES, rule, "bad"), { recursive: true })
             .filter((file) => fs.statSync(path.join(FIXTURES, rule, "bad", file)).isFile() && !file.endsWith(".csproj"))
             .map((file) => [`ArchitectureTesting/${file}`, fs.readFileSync(path.join(FIXTURES, rule, "bad", file), "utf8")])
@@ -175,13 +178,15 @@ test("MER-RV-006 finds multiline implicit-private behavior only in the attribute
     assert.match(output, /OrdersContract\.cs:4\t.*may contain only/);
 });
 
-test("MER-RV-007 flags every app-written RivetResult extension named like an adapter or returning an HTTP result, and leaves Rivet's own adapters and helpers that call them", () => {
+test("MER-RV-007 flags every app-written RivetResult extension named like an adapter or returning an HTTP result, and any app code that reads RivetActionResult, and leaves Rivet's own adapters, helpers that call them, tests and mentions in comments or strings", () => {
     assert.equal(run("MER-RV-007", "good"), "");
     const output = run("MER-RV-007", "bad");
     const locations = [...output.matchAll(/^MER-RV-007\twarn\t(\S+)/gm)].map((match) => match[1]).sort();
     assert.deepEqual(locations, [
+        // A plain static helper that casts to RivetActionResult.
+        "Modules/Common/AdapterStatus.cs:1",
         // Bridges that call the adapter and rebuild its output or hand-write the error path, and a ToResult
-        // namesake returning object.
+        // namesake returning object. The bridges' RivetActionResult casts add no third finding.
         "Modules/Common/FunctionResultExtensions.cs:1",
         "Modules/Common/FunctionResultExtensions.cs:1",
         // ToHttpResult returning IResult, and Respond returning ValueTask<HttpResults.Ok<T>>.
@@ -189,11 +194,17 @@ test("MER-RV-007 flags every app-written RivetResult extension named like an ada
         "Modules/Common/ResultExtensions.Actions.cs:1",
         "Modules/Common/ResultExtensions.cs:1",
         "Modules/Orders/OrderResultExtensions.cs:1",
+        // An endpoint filter's `is global::Rivet.RivetActionResult` pattern.
+        "Modules/Orders/ResultStatusFilter.cs:4",
         // A typed Results<…> union, spaces in its generics.
         "Modules/Orders/TypedResultExtensions.cs:1",
+        // A top-level statement in Program.cs, at its own line.
+        "Program.cs:3",
     ]);
     assert.match(output, /FunctionResultExtensions\.cs:1\tFunctionResultExtensions hand-writes an HTTP-result bridge off RivetResult \(ToResponse, Rebuild, ToHttp, OneArm\)/);
     assert.match(output, /FunctionResultExtensions\.cs:1\tFunctionResultExtensions declares its own ToResult off RivetResult, so a handler's call may bind to it instead of Rivet's first-party adapter — rename or delete it\t/);
+    assert.match(output, /AdapterStatus\.cs:1\tAdapterStatus reads RivetActionResult, the output of Rivet's \.ToActionResult\(\) adapter, which only a hand-written bridge needs — return \.ToResult\(\)\/\.ToActionResult\(\) directly instead\trivet\.md#minimal-apis$/m);
+    assert.match(output, /Program\.cs:3\tCode outside any class reads RivetActionResult/);
     assert.match(output, /HttpResultExtensions\.cs:1\tHttpResultExtensions hand-writes an HTTP-result bridge off RivetResult \(ToHttpResult, Respond\) — delete it and use Rivet's first-party \.ToResult\(\)\/\.ToActionResult\(\) adapters\t/);
 });
 
@@ -451,6 +462,7 @@ test("MER-TE-008 checks a TypeScript API's test/ tree and accepts doubles in its
     const findings = scan("MER-TE-008", {
         // A workspace root is not the package these tests belong to.
         "package.json": '{ "workspaces": ["api"] }\n',
+        "api/package.json": "{}\n",
         "api/test/orders/support/fake-clock.ts": "export class FakeClock {}\n",
         "api/tests/fake-mailer.ts": "export class FakeMailer {}\n",
         // src/test/ is app code, not a test tree.

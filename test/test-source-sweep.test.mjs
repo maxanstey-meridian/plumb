@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 // The BT, FE-043 and RV-021 rules read test code through the shared isTestScript definition
 // (testing-philosophy.md#test-location): a package's top-level test/, tests/ and e2e/ trees are tests, and a
-// test/ or tests/ folder inside the app tree is production code.
+// test/ or tests/ folder inside the app tree is production code. A file with no package is measured from the
+// repository root. Backend rules skip a Nuxt frontend's files.
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
@@ -85,6 +86,43 @@ test("the BT pack measures a test tree from a Nuxt root that has no package.json
         "pnpm-workspace.yaml": "onlyBuiltDependencies:\n  - esbuild\n",
         "lib/test/env.ts": "export const mode = process.env.MODE;\n",
     }, ["--rule", "MER-BT-017"]), ["MER-BT-017\tlib/test/env.ts:1"]);
+});
+
+test("a file with no package is measured from the repository root, so only a top-level test tree is tests", () => {
+    const env = "export const mode = process.env.MODE;\n";
+    assert.deepEqual(scan({
+        "test/env.ts": env,
+        "docs/test/env.ts": env,
+        "infra/tests/env.ts": env,
+    }, ["--rule", "MER-BT-017"]), [
+        "MER-BT-017\tdocs/test/env.ts:1",
+        "MER-BT-017\tinfra/tests/env.ts:1",
+    ]);
+});
+
+test("MER-BT-016 skips a Nuxt app/ tree beside a TypeScript backend but still checks the backend's application layer", () => {
+    const findings = scan({
+        "package.json": '{"private":true,"workspaces":["web","api"]}\n',
+        "web/package.json": '{"name":"web"}\n',
+        "web/nuxt.config.ts": "export default {}\n",
+        "web/app/composables/useClock.ts": "export const useClock = () => Date.now();\n",
+        "api/package.json": '{"name":"api"}\n',
+        "api/src/modules/orders/application/submit-order.ts": "export const submittedAt = () => Date.now();\n",
+    }, ["--rule", "MER-BT-016"]);
+    assert.deepEqual(findings, ["MER-BT-016\tapi/src/modules/orders/application/submit-order.ts:1"]);
+});
+
+test("the BT layer rules read a Nuxt frontend's app/ and modules/ trees as frontend code", () => {
+    const nuxt = {
+        "package.json": '{"name":"web"}\n',
+        "tsconfig.json": '{"compilerOptions":{"baseUrl":"."}}\n',
+        "nuxt.config.ts": "export default {}\n",
+        "src/app/composables/useOrders.ts": 'import { container } from "tsyringe";\nexport const useOrders = () => container.resolve("orders");\n',
+        "modules/billing/runtime/plugin.ts": 'import { internal } from "../../orders/runtime/internal";\nexport const plugin = internal;\n',
+        "modules/orders/runtime/internal.ts": "export const internal = 1;\n",
+    };
+    assert.deepEqual(scan(nuxt, ["--rule", "MER-BT-012"]), []);
+    assert.deepEqual(scan(nuxt, ["--rule", "MER-BT-015"]), []);
 });
 
 test("MER-FE-043 exempts the frontend root's tests/ and e2e/ trees but checks a tests/ folder inside the app", () => {

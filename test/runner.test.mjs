@@ -747,12 +747,13 @@ test("selected C# owners share source masks and parse each visible project once"
 test("focused syntax-light C# work does not construct the project graph", () => {
   const r = repo([], {
     "App.csproj": "<Project />\n",
-    "Modules/Auth/Domain/Clock.cs": "using Microsoft.EntityFrameworkCore;\npublic sealed class Clock { }\n",
+    "Modules/Auth/Api/OrderErrorDto.cs": "public sealed record OrderErrorDto(string Code);\n",
   });
-  // BE-001 reads only C# source; rules that judge test code by its project (BE-024 and others) build the graph.
-  const out = plumb(r, "--rule", "MER-BE-001", "--json", "--profile");
-  assert.equal(out.status, 1, out.stderr);
-  assert.match(out.stderr, /analysis-counters .*csharp-read=1 csharp-mask=1 csharp-classification=1 dotnet-project-parse=0 dotnet-project-graph-build=0 /);
+  // BE-052 reads only C# source; rules that judge test code by its project (BE-001, BE-024 and others) build the graph.
+  const out = plumb(r, "--rule", "MER-BE-052", "--json", "--profile");
+  assert.equal(JSON.parse(out.stdout).length, 1, out.stderr);
+  assert.match(out.stderr, /analysis-counters .*dotnet-project-parse=0 dotnet-project-graph-build=0 /);
+  assert.match(out.stderr, /capabilities .*csharp=1 dotnet-projects=0/);
 });
 
 test("selected frontend consumers share Vue parsing and one graph per root", () => {
@@ -972,11 +973,19 @@ test("baseline: shrinking is reported and suggests ratcheting down", () => {
   assert.equal(focused.status, 0, focused.stderr);
   assert.match(focused.stdout, /baselined by \.plumb-baseline\.json/);
   assert.doesNotMatch(focused.stdout, /shrunk/);
-  // Nor does a run without --ci when the baseline holds a CI-only rule's findings it never ran.
+  // A CI-only rule's entries don't hide a real shrink in a run without --ci…
   const withCiOnly = JSON.parse(fs.readFileSync(bl, "utf8"));
   fs.writeFileSync(bl, JSON.stringify({ ...withCiOnly, entries: { ...withCiOnly.entries, "MER-RV-024\tweb/package.json": 1 } }));
-  const local = plumb(r, "--baseline", bl);
+  assert.match(plumb(r, "--baseline", bl).stdout, /shrunk; re-run --write-baseline/);
+  // …nor count as one when they're the only entries that run couldn't produce.
+  const kept = repo(["MER-BE-005"], { "App.csproj": "<Project/>\n" });
+  const keptBaseline = path.join(kept, ".plumb-baseline.json");
+  plumb(kept, "--write-baseline", keptBaseline);
+  const written = JSON.parse(fs.readFileSync(keptBaseline, "utf8"));
+  fs.writeFileSync(keptBaseline, JSON.stringify({ ...written, entries: { ...written.entries, "MER-RV-024\tweb/package.json": 1 } }));
+  const local = plumb(kept, "--baseline", keptBaseline);
   assert.equal(local.status, 0, local.stderr);
+  assert.match(local.stdout, /baselined by \.plumb-baseline\.json/);
   assert.doesNotMatch(local.stdout, /shrunk/);
 });
 
@@ -999,12 +1008,17 @@ test("baseline identity and suppression are unchanged for migrated findings", ()
   assert.deepEqual(JSON.parse(fs.readFileSync(baseline, "utf8")).entries, { "MER-TO-001\tpackage.json": 1 });
 });
 
-// Lines 10, 11 and 15 are a literal type, a template literal type and an interface member: type positions
-// never count. Line 16's route argument is the generated client's, but the id in its query is a copy.
+// index.vue lines 10, 11 and 15 are a literal type, a template literal type and an interface member: type
+// positions never count. Line 16's route argument is the generated client's, but the id in its query is a copy.
+// crm-positions.ts and CrmLinks.vue hold one id position each per line; the good fixture's crm-copy.ts and
+// CrmConflict.vue use the same values as wording (`noun:`, `subject=`, `class=`, a call argument) and stay clean.
 test("MER-CP-001 names each copied id's qualified owner at its exact location", () => {
   const findings = JSON.parse(plumb(path.join(FIX, "MER-CP-001", "bad"), "--rule", "MER-CP-001", "--json").stdout);
   const owner = (finding) => finding.message.match(/ is (\S+) on the server/)?.[1];
   assert.deepEqual(findings.map((finding) => [finding.location, owner(finding)]), [
+    ["ui/app/pages/crm/components/CrmLinks.vue:2", "CrmIntegration.IntegrationId"], // static href
+    ["ui/app/pages/crm/components/CrmLinks.vue:3", "CrmConnector.ConnectorId"], // id-named static attributes
+    ["ui/app/pages/crm/components/CrmLinks.vue:3", "CrmIntegration.Webhooks.HandlerId"],
     ["ui/app/pages/crm/index.vue:12", "CrmIntegration.IntegrationId"], // compared against a literal-typed value
     ["ui/app/pages/crm/index.vue:13", "CrmIntegration.IntegrationId"], // hand-built /api/ URL
     ["ui/app/pages/crm/index.vue:14", "TestCrmConnectionUseCase.ProbeId"], // production type named Test…
@@ -1015,7 +1029,27 @@ test("MER-CP-001 names each copied id's qualified owner at its exact location", 
     ["ui/app/pages/crm/index.vue:7", "CrmIntegration.IntegrationId"],
     ["ui/app/pages/crm/index.vue:8", "CrmConnector.ConnectorId"],
     ["ui/app/pages/crm/index.vue:9", "CrmIntegration.Webhooks.HandlerId"],
+    ["ui/app/pages/crm/logic/crm-positions.ts:15", "CrmIntegration.IntegrationId"], // .includes( argument
+    ["ui/app/pages/crm/logic/crm-positions.ts:15", "CrmConnector.ConnectorId"], // .has( argument
+    ["ui/app/pages/crm/logic/crm-positions.ts:15", "CrmIntegration.Webhooks.HandlerId"], // .indexOf( argument
+    ["ui/app/pages/crm/logic/crm-positions.ts:16", "CrmIntegration.IntegrationId"], // array tested with .includes
+    ["ui/app/pages/crm/logic/crm-positions.ts:16", "CrmConnector.ConnectorId"],
+    ["ui/app/pages/crm/logic/crm-positions.ts:17", "CrmIntegration.Webhooks.HandlerId"], // array tested with .indexOf
+    ["ui/app/pages/crm/logic/crm-positions.ts:18", "CrmIntegration.Webhooks.HandlerId"], // listed constant, `as const`
+    ["ui/app/pages/crm/logic/crm-positions.ts:19", "CrmIntegration.IntegrationId"], // constant, `as const`
+    ["ui/app/pages/crm/logic/crm-positions.ts:20", "CrmIntegration.Webhooks.HandlerId"], // id-named properties
+    ["ui/app/pages/crm/logic/crm-positions.ts:20", "CrmConnector.ConnectorId"],
+    ["ui/app/pages/crm/logic/crm-positions.ts:21", "CrmIntegration.IntegrationId"], // object key
+    ["ui/app/pages/crm/logic/crm-positions.ts:22", "CrmIntegration.IntegrationId"], // template head building a path
+    ["ui/app/pages/crm/logic/crm-positions.ts:23", "CrmConnector.ConnectorId"], // template tail
+    ["ui/app/pages/crm/logic/crm-positions.ts:24", "CrmIntegration.Webhooks.HandlerId"], // template middle
+    ["ui/app/pages/crm/logic/crm-positions.ts:3", "CrmIntegration.IntegrationId"], // !==
+    ["ui/app/pages/crm/logic/crm-positions.ts:4", "CrmIntegration.IntegrationId"], // ==
+    ["ui/app/pages/crm/logic/crm-positions.ts:5", "CrmConnector.ConnectorId"], // !=
+    ["ui/app/pages/crm/logic/crm-positions.ts:8", "CrmIntegration.Webhooks.HandlerId"], // case label
   ]);
+  const good = JSON.parse(plumb(path.join(FIX, "MER-CP-001", "good"), "--rule", "MER-CP-001", "--json").stdout);
+  assert.deepEqual(good, []);
 });
 
 test("MER-CP-001 skips frontend tests but not a tests/ route folder inside the app tree", () => {

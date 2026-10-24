@@ -4,5 +4,5 @@ namespace Rivet;
 public static class RivetResultExtensions
 {
     public static IResult ToResult(this RivetResult result) => Results.Ok();
-    public static IActionResult ToActionResult(this RivetResult result) => new OkResult();
+    public static IActionResult ToActionResult(this RivetResult result) => new RivetActionResult(result);
 }

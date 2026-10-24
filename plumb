@@ -13,6 +13,7 @@ import { isNuxtConfig } from "./lib/engine/frontend-analysis.mjs";
 import { createRepositorySnapshot } from "./lib/engine/repository-snapshot.mjs";
 import { runInProcessRules } from "./lib/engine/run-rules.mjs";
 import { inProcessRules } from "./lib/in-process-rules/index.mjs";
+import { inNuxtFrontend } from "./lib/in-process-rules/helpers.mjs";
 import { createRepositoryInventory, writeInventoryManifest } from "./lib/repository-inventory.mjs";
 import { detectRivetContext } from "./lib/rivet-context.mjs";
 import { loadRuleOwners } from "./lib/rule-catalog.mjs";
@@ -141,6 +142,9 @@ function detectPacks(snapshot) {
   const packs = new Set(["TO", "CP"]);
   let csproj = false, modules = false, rivet = false, nuxt = false, tests = false, bts = false;
   const btsDomain = new Set(), btsApp = new Set();
+  // A Nuxt app's src/app/ or domain/ tree is frontend code, which the BT rules skip, so it doesn't turn the pack on.
+  const files = { files: snapshot.files.map((file) => ({ ...file, text: () => snapshot.text(file) })) };
+  const backendTree = (file) => !inNuxtFrontend(files, file);
   for (const file of snapshot.files) {
     if (file.path.split("/").length - 1 > 14) continue;
     const f = file.path, b = file.name;
@@ -161,8 +165,8 @@ function detectPacks(snapshot) {
     // layer-shaped TS tree (lowercase domain/ + application|app/ under src/ or
     // modules/) is also a BT marker — glyphantics-style layered backends have no
     // ports dir but still carry the layer doctrine (contract §5, v7a)
-    if (/(^|\/)(src|modules\/[^/]+)\/domain\//.test(f)) btsDomain.add(f.replace(/\/domain\/.*$/, ""));
-    if (/(^|\/)(src|modules\/[^/]+)\/(application|app)\//.test(f)) btsApp.add(f.replace(/\/(application|app)\/.*$/, ""));
+    if (/(^|\/)(src|modules\/[^/]+)\/domain\//.test(f) && backendTree(file)) btsDomain.add(f.replace(/\/domain\/.*$/, ""));
+    if (/(^|\/)(src|modules\/[^/]+)\/(application|app)\//.test(f) && backendTree(file)) btsApp.add(f.replace(/\/(application|app)\/.*$/, ""));
     if (b === "package.json") {
       try { if (snapshot.text(file).includes('"typed-inject"')) bts = true; } catch {}
     }
@@ -365,13 +369,17 @@ if (writeBaselineFile) {
   emitProfile();
   process.exit(0);
 }
-let baselined = 0, baselineTotal = 0, baselineIds = new Set();
+let baselined = 0, baselineTotal = 0, ranTotal = 0;
 if (baselineFile) {
   let bl;
   try { bl = JSON.parse(fs.readFileSync(baselineFile, "utf8")); }
   catch (e) { console.error(`plumb: cannot read baseline ${baselineFile}: ${e.message}`); process.exit(2); }
   const allowance = { ...(bl.entries || {}) };
-  baselineIds = new Set(Object.keys(allowance).map((key) => key.split("\t")[0]));
+  // The rules this run could have reported: all of them, less what --rule / --pack leave out and the CI-only ones
+  // a run without --ci skips. A rule that doesn't apply to the repo (its pack isn't detected) ran and found nothing.
+  const ranIds = new Set(catalogue.owners.filter((owner) => !owner.ciOnly || ci).flatMap((owner) => owner.ids)
+    .filter((id) => (!ruleFilter || id === ruleFilter) && (!packFilter || packFilter.has(id.split("-")[1]))));
+  ranTotal = Object.entries(allowance).filter(([key]) => ranIds.has(key.split("\t")[0])).reduce((sum, [, count]) => sum + count, 0);
   baselineTotal = Object.values(allowance).reduce((a, b) => a + b, 0);
   findings = findings.filter((f) => {
     if (allowance[bKey(f)] > 0) { allowance[bKey(f)]--; baselined++; return false; }
@@ -379,15 +387,13 @@ if (baselineFile) {
   });
 }
 
-// A run narrowed by --rule, --pack or --exclude, or one without --ci when the baseline holds CI-only rules' findings,
-// can't produce every baselined finding, so it can't tell a shrunk baseline.
-const ciOnlyIds = new Set(catalogue.owners.filter((owner) => owner.ciOnly).flatMap((owner) => owner.ids));
-const narrowed = Boolean(ruleFilter || packFilter || excludePatterns.length) || (!ci && [...baselineIds].some((id) => ciOnlyIds.has(id)));
+// The baseline shrank when fewer of the findings it holds for the rules that ran came back. --exclude hides files
+// from every rule, so a run with it can't tell.
 // The baseline by its path inside the checked root (`.plumb-baseline.json`), or as given when it's elsewhere.
 const baselineName = baselineFile && (/^\.\.(?:[\\/]|$)/.test(path.relative(abs, path.resolve(baselineFile))) ? baselineFile : path.relative(abs, path.resolve(baselineFile)));
 const baselineNote = baselineFile
   ? `+${baselined} baselined by ${baselineName}, baseline holds ${baselineTotal}` +
-    (baselined < baselineTotal && !narrowed ? " — shrunk; re-run --write-baseline to ratchet down" : "")
+    (baselined < ranTotal && !excludePatterns.length ? " — shrunk; re-run --write-baseline to ratchet down" : "")
   : null;
 const renderStarted = performance.now();
 if (json) {

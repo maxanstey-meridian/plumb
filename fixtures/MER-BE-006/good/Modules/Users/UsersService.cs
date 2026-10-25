@@ -7,3 +7,4 @@ public sealed class UsersService
     public LedgerEntry? Entry { get; set; }
     public string Address(string remote) => Acme.Common.ClientAddress.Of(remote);
 }
+public sealed class UsersQuota { public void Fail() => throw new Acme.Common.Errors.QuotaExceededException(new(1)); }

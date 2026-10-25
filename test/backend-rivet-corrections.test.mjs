@@ -47,6 +47,8 @@ test("MER-BE-006 propagates consumers through real nested declaration bodies and
     // through HostSettings, which names RetryWindow. HostSettings has only the host, which is no single owner. Forms
     // plus a transport contract's server: Rota through its contract class (ShiftWindow) and through a Conditions DTO
     // (RuleKind), Reference serving Contracts/ReferenceData (ListColumn), and the host serving Contracts/Health (BuildStamp).
+    // Forms plus a consumer passed on by a type that is no candidate (QuotaLimit, through an *Exception Users throws) or
+    // named in an attribute argument (ShiftSwap, in RotaEvent's [JsonDerivedType]).
     assert.equal(output, "");
 });
 
@@ -54,12 +56,15 @@ test("MER-BE-006 counts a module only where a name it writes resolves to the Com
     // Users declares its own Paging: a namesake, not a consumer of Acme.Common.Paging. A host test project's use of
     // RetryBudget, directly or through a contract it references, is not the host's. Rota serving its own wire keeps
     // RotaSlot Rota's, and makes WireColour, which only that wire names, Rota's; an unserved contract leaves Ledger Forms'.
+    // A type with no access modifier is a candidate (Throttle); a private nested one is not (Lookup's Cache).
     assertFindings("MER-BE-006", "bad", [
         ["Common/Ledger.cs:0", "Common type Ledger is referenced only by module Forms"],
+        ["Common/Lookup.cs:0", "Common type Lookup is referenced only by module Forms"],
         ["Common/Paging.cs:0", "Common type Paging is referenced only by module Forms"],
         ["Common/RetryBudget.cs:0", "Common type RetryBudget is referenced only by module Forms"],
         ["Common/RotaSlot.cs:0", "Common type RotaSlot is referenced only by module Rota"],
         ["Common/SlugRules.cs:0", "Common type SlugRules is referenced only by module Forms"],
+        ["Common/Throttle.cs:0", "Common type Throttle is referenced only by module Forms"],
         ["Common/WireColour.cs:0", "Common type WireColour is referenced only by module Rota"],
     ]);
     const files = {

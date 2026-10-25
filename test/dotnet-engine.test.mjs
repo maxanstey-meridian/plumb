@@ -468,7 +468,7 @@ test("C# declarations: nested types, bodyless records, attribute starts, constra
   const shape = (text) => {
     const { types, namespaces } = csharpDeclarations(maskCSharpText(text));
     return {
-      types: types.map(({ name, start, offset, end, namespace }) => ({ name, head: text.slice(start, offset), text: text.slice(start, end), namespace })),
+      types: types.map(({ name, kind, modifiers, start, offset, end, namespace }) => ({ name, kind, modifiers, head: text.slice(start, offset), text: text.slice(start, end), namespace })),
       namespaces: namespaces.map(({ fullName, start, end }) => ({ fullName, text: text.slice(start, end) })),
     };
   };
@@ -491,19 +491,22 @@ test("C# declarations: nested types, bodyless records, attribute starts, constra
   const outer = block.slice(block.indexOf("    public sealed class Outer") + 4, block.lastIndexOf("    }\n}") + 5);
   assert.deepEqual(shape(block), {
     types: [
-      { name: "Top", head: "[Serializable]\npublic sealed ", text: "[Serializable]\npublic sealed class Top { }", namespace: "" },
-      { name: "Outer", head: "public sealed ", text: outer, namespace: "App.Orders" },
-      { name: "Inner", head: "public sealed ", text: "public sealed record Inner(int A);", namespace: "App.Orders" },
-      { name: "Deep", head: "[Obsolete] private ", text: "[Obsolete] private struct Deep { }", namespace: "App.Orders" },
+      { name: "Top", kind: "class", modifiers: ["public", "sealed"], head: "[Serializable]\npublic sealed ", text: "[Serializable]\npublic sealed class Top { }", namespace: "" },
+      { name: "Outer", kind: "class", modifiers: ["public", "sealed"], head: "public sealed ", text: outer, namespace: "App.Orders" },
+      { name: "Inner", kind: "record", modifiers: ["public", "sealed"], head: "public sealed ", text: "public sealed record Inner(int A);", namespace: "App.Orders" },
+      { name: "Deep", kind: "struct", modifiers: ["private"], head: "[Obsolete] private ", text: "[Obsolete] private struct Deep { }", namespace: "App.Orders" },
     ],
     namespaces: [{ fullName: "App.Orders", text: block.slice(block.indexOf("namespace"), block.lastIndexOf("}")) }],
   });
-  // A file-scoped namespace runs to the end of the file.
-  const fileScoped = "namespace App.Shipping;\n\npublic record Parcel(string Name);\npublic class Box { }\n";
+  // A file-scoped namespace runs to the end of the file. A record struct is a record, and a type may have no access
+  // modifier or a `file` one.
+  const fileScoped = "namespace App.Shipping;\n\npublic record Parcel(string Name);\npublic class Box { }\nreadonly record struct Tag(int A);\nfile sealed class Local { }\n";
   assert.deepEqual(shape(fileScoped), {
     types: [
-      { name: "Parcel", head: "public ", text: "public record Parcel(string Name);", namespace: "App.Shipping" },
-      { name: "Box", head: "public ", text: "public class Box { }", namespace: "App.Shipping" },
+      { name: "Parcel", kind: "record", modifiers: ["public"], head: "public ", text: "public record Parcel(string Name);", namespace: "App.Shipping" },
+      { name: "Box", kind: "class", modifiers: ["public"], head: "public ", text: "public class Box { }", namespace: "App.Shipping" },
+      { name: "Tag", kind: "record", modifiers: ["readonly"], head: "readonly ", text: "readonly record struct Tag(int A);", namespace: "App.Shipping" },
+      { name: "Local", kind: "class", modifiers: ["file", "sealed"], head: "file sealed ", text: "file sealed class Local { }", namespace: "App.Shipping" },
     ],
     namespaces: [{ fullName: "App.Shipping", text: fileScoped }],
   });

@@ -197,7 +197,7 @@ test("enclosing types and type references come from the resolver's scan", () => 
       "        public static class Inner\n        {\n            public const string AId = \"a\";\n        }\n        public const string BId = \"b\";\n    }\n}\n"],
     ["api/Refs.cs", "using App.Ids;\nnamespace App.Refs;\npublic sealed record Refs(global::App.Ids.Outer<Refs>.Inner Value, List<Outer<Refs>> Items)\n{\n" +
       "    public int Count => Items?.Count ?? this.Value.ToString().Length; // Outer in a comment\n" +
-      "    public object[] Copy => [.. Seeds, ..Spare];\n}\n"],
+      "    public object[] Copy => [.. Seeds, ..Spare];\n}\npublic enum Reason { [Display(Name = Cap)] Inner, Spent = Done }\n"],
   ]), [Capability.CSHARP]);
   const { csharp } = f.context;
   const ids = f.context.file("api/Ids.cs"), text = ids.text();
@@ -209,10 +209,13 @@ test("enclosing types and type references come from the resolver's scan", () => 
 
   const refs = f.context.file("api/Refs.cs");
   const written = csharp.typeReferences(refs).map((reference) => reference.written);
-  // Each segment of a dotted name, no declared names (the namespace, the record), no member accesses, no comments;
-  // a collection spread's operand (`[.. Seeds]`) is a name, not a member access.
-  for (const name of ["App", "App.Ids", "global::App.Ids.Outer", "Refs", "List", "Outer", "Items", "Value", "Seeds", "Spare"]) assert.ok(written.includes(name), name);
-  for (const name of ["App.Refs", "ToString", "Length"]) assert.ok(!written.includes(name), name);
+  // Each segment of a dotted name, no declared names (the namespace, the record, the enum's members), no member
+  // accesses, no comments; a collection spread's operand (`[.. Seeds]`) is a name, not a member access, and so are an
+  // enum member's attribute and initializer.
+  for (const name of ["App", "App.Ids", "global::App.Ids.Outer", "Refs", "List", "Outer", "Items", "Value", "Seeds", "Spare", "Display", "Done"]) {
+    assert.ok(written.includes(name), name);
+  }
+  for (const name of ["App.Refs", "ToString", "Length", "Reason", "Inner", "Spent"]) assert.ok(!written.includes(name), name);
   assert.equal(written.filter((name) => name === "Refs").length, 2);
   assert.equal(written.filter((name) => name === "Outer").length, 1);
   const reference = csharp.typeReferences(refs).find((value) => value.written === "global::App.Ids.Outer");

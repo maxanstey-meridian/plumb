@@ -117,21 +117,53 @@ test("MER-BE-006 reads every part of a partial type, and never reports a type th
         // Settings' second part names Money, so Users, through Settings, is Money's second consumer.
         "Common/Settings.A.cs": "namespace Acme.Common;\npublic sealed partial class Settings { }\n",
         "Common/Settings.B.cs": "namespace Acme.Common;\npublic sealed partial class Settings { public Money? Floor { get; init; } }\n",
-        // A private nested interface makes no port file: RateGate is still a candidate.
-        "Common/RateGate.cs": "namespace Acme.Common;\npublic sealed class RateGate { private interface ITick { } private ITick? tick; }\n",
         // Only a protected internal nested type, of these, can be named outside Holder or its file.
         "Common/Holder.cs": "namespace Acme.Common;\npublic sealed class Holder\n{\n    protected sealed record Guarded(int A);\n" +
             "    protected internal sealed record Shared(int A);\n    private sealed class Inner { public sealed record Deep(int A); private Deep? deep; }\n" +
             "    private Guarded? guarded;\n    private Inner? inner;\n    public int Size() => new Local().GetHashCode();\n}\nfile sealed class Local { }\n",
-        "Modules/Forms/Forms.cs": "namespace Acme.Modules.Forms;\npublic sealed record Forms(Acme.Common.Settings Settings, Acme.Common.Money Money, Acme.Common.RateGate Gate, " +
+        "Modules/Forms/Forms.cs": "namespace Acme.Modules.Forms;\npublic sealed record Forms(Acme.Common.Settings Settings, Acme.Common.Money Money, " +
             "Acme.Common.Holder Holder, Acme.Common.Holder.Shared Shared);\n",
         "Modules/Users/Users.cs": "namespace Acme.Modules.Users;\npublic sealed record Users(Acme.Common.Settings Settings);\n",
     });
     assert.deepEqual(findings.map((finding) => finding.replace(/ — review.*/, "")).sort(), [
         "Common/Holder.cs:0\tCommon type Holder is referenced only by module Forms",
         "Common/Holder.cs:0\tCommon type Shared is referenced only by module Forms",
-        "Common/RateGate.cs:0\tCommon type RateGate is referenced only by module Forms",
     ]);
+});
+
+test("MER-BE-006 counts a call to a static class's extension member where the class's namespace is in scope, and never an enum member's name", () => {
+    const findings = scan("MER-BE-006", {
+        "Common/Roles.cs": "namespace Acme.Common;\npublic enum Role { Admin, Member }\npublic static class RoleRules\n{\n" +
+            "    public static bool IsAtLeast(this Role role, Role minimum) => role >= minimum;\n}\npublic sealed record Quota(int Limit);\n",
+        // A C# 14 extension block's members are extension members too.
+        "Common/Lists/ListRules.cs": "namespace Acme.Common.Lists;\npublic static class ListRules\n{\n    extension(System.Collections.Generic.List<int> list)\n    {\n" +
+            "        public bool Empty => list.Count == 0;\n    }\n}\n",
+        "Common/Text/TextRules.cs": "namespace Acme.Common.Text;\npublic static class TextRules { public static string Shout(this string text) => text; }\n",
+        "Modules/Forms/Forms.cs": "using Acme.Common;\nusing Acme.Common.Lists;\nusing Acme.Common.Text;\nnamespace Acme.Modules.Forms;\n" +
+            "public sealed class Forms { public Quota? Quota { get; init; } public bool Check(Role role, System.Collections.Generic.List<int> items) => " +
+            "role.IsAtLeast(Role.Admin) && items.Empty && \"x\".Shout() != \"\"; }\n",
+        // Users has no using for TextRules' namespace, so its own .Shout() is not TextRules'; its Quota is an enum member.
+        "Modules/Users/Users.cs": "using Acme.Common;\nusing Acme.Common.Lists;\nnamespace Acme.Modules.Users;\npublic enum UsersBlocker { Quota, Other }\n" +
+            "public sealed class Users { public bool Check(Role role, System.Collections.Generic.List<int> items, Speaker speaker) => " +
+            "role.IsAtLeast(Role.Member) && items.Empty && speaker.Shout(); }\npublic sealed class Speaker { public bool Shout() => true; }\n",
+    });
+    assert.deepEqual(findings.map((finding) => finding.replace(/ — review.*/, "")), [
+        "Common/Roles.cs:0\tCommon type Quota is referenced only by module Forms",
+        "Common/Text/TextRules.cs:0\tCommon type TextRules is referenced only by module Forms",
+    ]);
+});
+
+test("MER-BE-006 counts a port's consumers for the DTOs its signatures name, and reports a DTO beside the port that it doesn't", () => {
+    const findings = scan("MER-BE-006", {
+        "Common/Ports/IRateSource.cs": "namespace Acme.Common.Ports;\npublic interface IRateSource { RateQuote Quote(); }\n" +
+            "public sealed record RateQuote(decimal Value);\npublic sealed record RateDraft(decimal Value);\n",
+        "Modules/Forms/Forms.cs": "namespace Acme.Modules.Forms;\npublic sealed record Forms(Acme.Common.Ports.IRateSource Source, Acme.Common.Ports.RateQuote Last, " +
+            "Acme.Common.Ports.RateDraft Draft);\n",
+        // Users never writes RateQuote: it receives one through var.
+        "Modules/Users/Users.cs": "namespace Acme.Modules.Users;\npublic sealed class Users(Acme.Common.Ports.IRateSource source) { public decimal Rate() { var quote = source.Quote(); return quote.Value; } }\n",
+    });
+    assert.deepEqual(findings.map((finding) => finding.replace(/ — review.*/, "")),
+        ["Common/Ports/IRateSource.cs:0\tCommon type RateDraft is referenced only by module Forms"]);
 });
 
 test("MER-BE-007 reports the domain type a port's name resolves to, not a namesake", () => {

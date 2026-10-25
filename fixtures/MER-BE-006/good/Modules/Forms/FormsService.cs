@@ -12,8 +12,8 @@ public sealed class FormsService : Acme.Common.Ports.IAddressLookup
     // Ledger's module consumers are Forms and Users (through its global alias); Clock is globally imported.
     public Acme.Common.Ledger? Ledger { get; set; }
     public int Stamp() => Acme.Common.Clock.Now;
-    // AddressDto + NotFoundException referenced ONLY here — exempt per §7
-    // (interface-file DTO rule; *Exception rule). IAddressLookup has 2 consumers.
-    public object Find(string q) => new Acme.Common.Ports.AddressDto(q);
+    // AddressDto is named only here, but IAddressLookup's signature names it, so Users consumes it too.
+    // NotFoundException is referenced only here — exempt per §7 (*Exception rule).
+    public Acme.Common.Ports.AddressDto Find(string q) => new(q);
     public void Fail() => throw new Acme.Common.NotFoundException();
 }

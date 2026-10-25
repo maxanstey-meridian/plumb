@@ -276,17 +276,23 @@ test("MER-FE-031 and MER-FE-022 count consumers through shared items, per featur
   }
   const bad = (id) => focusedFindings(path.join(FIX, id, "bad"), id).findings.map((finding) => [finding.location, finding.message]);
   const item = (owner) => `only one subtree (${owner}) consumes this shared item — review ownership; consumer count alone does not prove misplacement`;
-  const composable = (owner) => `shared composable is consumed only by ${owner} — composables live at their composition root; move it into that subtree`;
+  const composable = (owner, route = "") => `shared composable is consumed only by ${owner}${route} — composables live at their composition root; ` +
+    (route ? "move them together into that subtree" : "move it into that subtree");
+  // Bad: tests are no consumers, and neither a nested .global middleware file nor middleware/<dir>/index.global.ts is
+  // global middleware.
   assert.deepEqual(bad("MER-FE-031"), [
     ["app/shared/components/Chart.vue:0", item("pages/index")],
     ["app/shared/logic/conditions.ts:0", item("features/alpha")],
+    ["app/shared/logic/expiry.ts:0", item("middleware")],
     ["app/shared/logic/format.ts:0", item("pages/index")],
     ["app/shared/logic/redirect.ts:0", item("middleware")],
     ["app/shared/logic/scale.ts:0", item("pages/index")],
+    ["app/shared/logic/session.ts:0", item("middleware")],
   ]);
   assert.deepEqual(bad("MER-FE-022"), [
     ["app/shared/composables/use-clock.ts:0", composable("pages/index")],
-    ["app/shared/composables/use-ticker.ts:0", composable("pages/index")],
+    ["app/shared/composables/use-pulse.ts:0", composable("pages/index", ", directly and through shared/components/Pulse.vue")],
+    ["app/shared/composables/use-ticker.ts:0", composable("pages/index", ", through shared/components/Ticker.vue")],
   ]);
 });
 

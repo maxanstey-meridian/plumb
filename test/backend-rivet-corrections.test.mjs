@@ -43,9 +43,6 @@ test("MER-BE-005 rejects sibling published Contracts in Domain but permits Appli
 
 test("MER-BE-006 propagates consumers through real nested declaration bodies, and counts the host as a consumer", () => {
     const output = run("MER-BE-006", "good");
-    for (const type of ["SubmissionAudit", "SubmissionState", "SubmissionDetails", "SubmissionItem"]) {
-        assert.doesNotMatch(output, new RegExp(`Common type ${type} `));
-    }
     // One module each, plus the host: Program.cs (ClientAddress), Middleware/ (RequestQuota), and Program.cs
     // through HostSettings, which names RetryWindow. HostSettings has only the host, which is no single owner.
     assert.equal(output, "");
@@ -126,7 +123,11 @@ test("MER-BE-006 leaves a test project under another module out of a Common type
         "api/Modules/Forms/FormsQuery.cs": "using Acme.Common;\nnamespace Acme.Modules.Forms;\npublic sealed record FormsQuery(Paging Paging);\n",
         "api/Modules/Users/Specs/Specs.csproj": testProject('<ProjectReference Include="../../../Api.csproj" />'),
         "api/Modules/Users/Specs/PagingSpecs.cs": "using Acme.Common;\nnamespace Acme.Specs;\npublic sealed class PagingSpecs { public Paging Sample { get; } = new(1, 20); }\n",
-    }), ["api/Common/Paging.cs:0\tCommon type Paging is referenced only by module Forms — review ownership; move it only if Forms truly owns it"]);
+        // Build output is neither a consumer nor a candidate. A git repository, so the inventory lists obj/ at all.
+        "api/Modules/Users/obj/Debug/net10.0/Users.g.cs": "namespace Acme.Modules.Users;\npublic sealed record Generated(Acme.Common.Paging Paging);\n",
+        "api/Common/obj/Debug/net10.0/Stamp.g.cs": "namespace Acme.Common;\npublic sealed record Stamp(int Value);\n",
+        "api/Modules/Forms/FormsStamp.cs": "namespace Acme.Modules.Forms;\npublic sealed record FormsStamp(Acme.Common.Stamp Stamp);\n",
+    }, undefined, { git: true }), ["api/Common/Paging.cs:0\tCommon type Paging is referenced only by module Forms — review ownership; move it only if Forms truly owns it"]);
 });
 
 // A test double named like an entity, in a test project's Modules/Forms/Domain/, doesn't make Forms the entity's owner.
@@ -652,13 +653,15 @@ test("MER-RV-027 follows transport namesakes and .Returns<T> payloads, checks Pa
 });
 
 // A throwaway repo holding only `files`, scanned for one rule (or with `args`).
-function scan(rule, files, args = ["--rule", rule]) {
+// `git` makes the root a repository: outside one, the inventory's fallback walk never lists obj/ or bin/.
+function scan(rule, files, args = ["--rule", rule], { git = false } = {}) {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "plumb-backend-"));
     try {
         for (const [file, content] of Object.entries(files)) {
             fs.mkdirSync(path.dirname(path.join(root, file)), { recursive: true });
             fs.writeFileSync(path.join(root, file), content);
         }
+        if (git) assert.equal(spawnSync("git", ["init", "-q"], { cwd: root }).status, 0);
         const result = spawnSync(PLUMB, [root, ...args, "--ci", "--json"], { encoding: "utf8" });
         assert.ok([0, 1].includes(result.status), result.stderr);
         return JSON.parse(result.stdout).filter((finding) => !rule || finding.rule === rule).map((finding) => `${finding.location}\t${finding.message}`);
@@ -748,7 +751,7 @@ test("MER-BE-018 reads every <Using> form and global using statement, and exempt
         "api/Modules/Payments/Infrastructure/GovUkPayConnectionTest.cs": "using App.Contracts.Orders;\n",
         // A global using split over lines is reported once, as a global using.
         "api/Modules/Orders/Application/Usings.cs": "global using Wire =\n    App.Contracts.Orders.OrderDto;\n",
-    });
+    }, undefined, { git: true });
     assert.deepEqual(findings.map((finding) => finding.replace(/ puts the API's.*/, "")).sort(), [
         "Directory.Build.props:12\t<Using Include=\"App.Contracts.Orders\">",
         "Directory.Build.props:3\t<Using Include=\"App.Contracts.Orders\">",

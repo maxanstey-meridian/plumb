@@ -9,6 +9,9 @@ public sealed class FormsService : Acme.Common.Ports.IAddressLookup
     // RequestQuota's and RetryWindow's only module consumer; the host is the second.
     public Acme.Common.RequestQuota? Quota { get; set; }
     public Acme.Common.RetryWindow? Retry { get; set; }
+    // Ledger's module consumers are Forms and Users (through its global alias); Clock is globally imported.
+    public Acme.Common.Ledger? Ledger { get; set; }
+    public int Stamp() => Acme.Common.Clock.Now;
     // AddressDto + NotFoundException referenced ONLY here — exempt per §7
     // (interface-file DTO rule; *Exception rule). IAddressLookup has 2 consumers.
     public object Find(string q) => new Acme.Common.Ports.AddressDto(q);

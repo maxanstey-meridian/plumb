@@ -6,7 +6,7 @@ public sealed class SpreadLocalRelay
     public IResult Send(RivetActionResult adapted)
     {
         var rows = (IEnumerable<object>)adapted.Value!;
-        return Results.Json([.. rows]);
+        return Results.Json<object[]>([.. rows]);
     }
 }
 
@@ -17,7 +17,7 @@ public sealed class SpreadMemberRelay
 
     IEnumerable<object> Rows() => (IEnumerable<object>)adapted.Value!;
 
-    public IResult Send() => Results.Json([.. Rows()]);
+    public IResult Send() => Results.Json<object[]>([.. Rows()]);
 }
 
 public static class RowReader
@@ -28,7 +28,7 @@ public static class RowReader
 // a sibling type's static helper,
 public sealed class SpreadStaticRelay
 {
-    public IResult Send(RivetActionResult adapted) => Results.Json([.. RowReader.Rows(adapted)]);
+    public IResult Send(RivetActionResult adapted) => Results.Json<object[]>([.. RowReader.Rows(adapted)]);
 }
 
 // and a nested reader bound to a name.
@@ -42,6 +42,6 @@ public sealed class SpreadBoundRelay
     public IResult Send(RivetActionResult adapted)
     {
         Reader reader = new(adapted);
-        return Results.Json([.. reader.Rows]);
+        return Results.Json<object[]>([.. reader.Rows]);
     }
 }

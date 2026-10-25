@@ -1201,46 +1201,51 @@ if (process.argv[2].endsWith("bad")) console.log("MER-TO-910\\twarn\\tresult.txt
   assert.match(out.stdout, /^self-test: 2\/3 failing — degraded: 2 analyses incomplete \(see above\)$/m);
 });
 
-test("MER-RV-024: a convention it can't check exits 2 with a reason, so a --ci baseline can't read it as a shrink", { skip: !goTask && "go-task (task) not on PATH" }, () => {
-  const check = path.join(CHECKS, "MER-RV-024-stale-generated.mjs");
-  const run = (r, env = {}) => spawnProducer(check, r, { encoding: "utf8", env: { PLUMB_CI: "1", ...env } });
-  const taskfile = 'version: "3"\n\ntasks:\n  generate:\n    cmds:\n      - ./fake-rivet --project api --output generated/rivet\n';
-  // No Taskfile, or none with a rivet task: the rule doesn't apply.
-  assert.equal(run(repo([], { "README.md": "x\n" })).status, 0);
-  assert.equal(run(repo([], { "Taskfile.yml": 'version: "3"\n\ntasks:\n  build:\n    cmds:\n      - echo hi\n' })).status, 0);
+const rv024 = (r, env = {}) =>
+  spawnProducer(path.join(CHECKS, "MER-RV-024-stale-generated.mjs"), r, { encoding: "utf8", env: { PLUMB_CI: "1", ...env } });
+const rv024Taskfile = 'version: "3"\n\ntasks:\n  generate:\n    cmds:\n      - ./fake-rivet --project api --output generated/rivet\n';
+
+// These cases fake their own PATH, so they run with or without go-task installed.
+test("MER-RV-024: with no go-task on PATH it exits 2 with a reason, whatever else is called `task`", () => {
   // No task binary: PATH holds only node.
   const bin = repo([]);
   fs.symlinkSync(process.execPath, path.join(bin, "node"));
-  const noTask = run(repo([], { "Taskfile.yml": taskfile }), { PATH: bin });
+  const noTask = rv024(repo([], { "Taskfile.yml": rv024Taskfile }), { PATH: bin });
   assert.equal(noTask.status, 2, noTask.stderr);
   assert.match(noTask.stderr, /MER-RV-024: task \(go-task\) not on PATH — cannot check/);
   // A `task` that isn't go-task is never asked to run the generator.
   fs.writeFileSync(path.join(bin, "task"), "#!/bin/sh\necho 3.1.0\n");
   fs.chmodSync(path.join(bin, "task"), 0o755);
-  const otherTask = run(repo([], { "Taskfile.yml": taskfile }), { PATH: bin });
+  const otherTask = rv024(repo([], { "Taskfile.yml": rv024Taskfile }), { PATH: bin });
   assert.equal(otherTask.status, 2, otherTask.stderr);
   assert.match(otherTask.stderr, /MER-RV-024: `task` on PATH is not go-task — cannot check/);
+});
+
+test("MER-RV-024: a convention it can't check exits 2 with a reason, so a --ci baseline can't read it as a shrink", { skip: !goTask && "go-task (task) not on PATH" }, () => {
+  // No Taskfile, or none with a rivet task: the rule doesn't apply.
+  assert.equal(rv024(repo([], { "README.md": "x\n" })).status, 0);
+  assert.equal(rv024(repo([], { "Taskfile.yml": 'version: "3"\n\ntasks:\n  build:\n    cmds:\n      - echo hi\n' })).status, 0);
   // An empty --output is unresolved, not the next line's first word.
-  const unresolved = run(repo([], { "Taskfile.yml": `${taskfile.replace("generated/rivet", "{{.OUT}}")}      - ./fake-rivet --check\n` }));
+  const unresolved = rv024(repo([], { "Taskfile.yml": `${rv024Taskfile.replace("generated/rivet", "{{.OUT}}")}      - ./fake-rivet --check\n` }));
   assert.equal(unresolved.status, 2, unresolved.stderr);
   assert.match(unresolved.stderr, /could not resolve --output for task generate/);
-  const missing = run(repo([], { "Taskfile.yml": taskfile }));
+  const missing = rv024(repo([], { "Taskfile.yml": rv024Taskfile }));
   assert.equal(missing.status, 2, missing.stderr);
   assert.match(missing.stderr, /output dir generated\/rivet does not exist/);
   // --output=dir names the directory as --output dir does.
-  const joined = run(repo([], { "Taskfile.yml": taskfile.replace("--output generated/rivet", "--output=generated/rivet") }));
+  const joined = rv024(repo([], { "Taskfile.yml": rv024Taskfile.replace("--output generated/rivet", "--output=generated/rivet") }));
   assert.equal(joined.status, 2, joined.stderr);
   assert.match(joined.stderr, /output dir generated\/rivet does not exist/);
   // A generator that fails, or whose output diff can't read, can't be checked; either way the checked-in output is
   // restored over whatever it wrote.
   const generating = (script) => {
-    const r = repo([], { "Taskfile.yml": taskfile, "fake-rivet": `#!/bin/sh\n${script}\n`, "generated/rivet/rivet.ts": "// checked in\n" });
+    const r = repo([], { "Taskfile.yml": rv024Taskfile, "fake-rivet": `#!/bin/sh\n${script}\n`, "generated/rivet/rivet.ts": "// checked in\n" });
     fs.chmodSync(path.join(r, "fake-rivet"), 0o755);
     return r;
   };
   const restored = (r) => fs.readFileSync(path.join(r, "generated", "rivet", "rivet.ts"), "utf8");
   const failing = generating("printf 'changed\\n' > generated/rivet/rivet.ts\nexit 3");
-  const failed = run(failing);
+  const failed = rv024(failing);
   assert.equal(failed.status, 2, failed.stderr);
   assert.match(failed.stderr, /task generate failed/);
   assert.equal(restored(failing), "// checked in\n");
@@ -1254,7 +1259,7 @@ test("MER-RV-024: a convention it can't check exits 2 with a reason, so a --ci b
     ["exit 0", { PATH: taskBin }, /diff failed \(spawnSync diff ENOENT\)/],
   ]) {
     const unreadable = generating(script);
-    const out = run(unreadable, env);
+    const out = rv024(unreadable, env);
     assert.equal(out.status, 2, `${script}: ${out.stderr}`);
     assert.match(out.stderr, reason, script);
     assert.doesNotMatch(out.stdout, /MER-RV-024/, script);
@@ -1270,25 +1275,39 @@ test("baseline: shrinking is reported and suggests ratcheting down", () => {
   fs.rmSync(path.join(r, "api"), { recursive: true });
   fs.writeFileSync(path.join(r, "App.csproj"), "<Project/>\n");
   // The hint names the command that works: the file given to --baseline, in its place…
-  const ratchets = (out, file) => out.stdout.includes(` — shrunk; re-run with --write-baseline ${file} in place of --baseline to ratchet down)\n`);
+  const ratchets = (out, file) => out.stdout.includes(` — shrunk; re-run with --write-baseline=${file} in place of --baseline to ratchet down)\n`);
   const out = plumb(r, "--baseline", bl);
   assert.equal(out.status, 0);
   assert.ok(ratchets(out, bl), out.stdout);
   // …or, with none given, the discovered one by its path from the current directory, absolute when it's outside.
-  assert.ok(plumb(r).stdout.includes(` — shrunk; re-run with --write-baseline ${bl} to ratchet down)\n`));
+  assert.ok(plumb(r).stdout.includes(` — shrunk; re-run with --write-baseline=${bl} to ratchet down)\n`));
   const inside = spawnSync(PLUMB, ["."], { cwd: r, encoding: "utf8" });
-  assert.ok(inside.stdout.includes(" — shrunk; re-run with --write-baseline .plumb-baseline.json to ratchet down)\n"), inside.stdout);
+  assert.ok(inside.stdout.includes(" — shrunk; re-run with --write-baseline=.plumb-baseline.json to ratchet down)\n"), inside.stdout);
   // Either way the path is quoted for the shell, so one with a space or a quote pastes back as the one argument.
   const spaced = path.join(repo(), "my repo's");
   fs.cpSync(r, spaced, { recursive: true });
   const spacedBaseline = path.join(spaced, ".plumb-baseline.json");
   const pasted = (out) => {
-    const hint = out.stdout.match(/ — shrunk; re-run with --write-baseline (.+?)(?: in place of --baseline)? to ratchet down\)\n/)?.[1];
+    const hint = out.stdout.match(/ — shrunk; re-run with --write-baseline=(.+?)(?: in place of --baseline)? to ratchet down\)\n/)?.[1];
     assert.ok(hint, out.stdout);
     return spawnSync("sh", ["-c", `printf %s ${hint}`], { encoding: "utf8" }).stdout;
   };
   assert.equal(pasted(plumb(spaced, "--baseline", spacedBaseline)), spacedBaseline);
   assert.equal(pasted(plumb(spaced)), spacedBaseline);
+  // …and joined to the flag with `=`, so a path starting with `-` (which the parser would read as a flag after a
+  // space) or `=` (zsh's `=cmd` expansion) is still the flag's value: the hint, run as written, ratchets down.
+  const leading = path.join(repo(), "leading");
+  fs.cpSync(r, leading, { recursive: true });
+  for (const name of ["-x.json", "=x.json"]) {
+    fs.copyFileSync(path.join(leading, ".plumb-baseline.json"), path.join(leading, name));
+    const run = (...args) => spawnSync(PLUMB, [".", ...args], { cwd: leading, encoding: "utf8" });
+    const hinted = run(`--baseline=${name}`).stdout.match(/ — shrunk; re-run with (--write-baseline=\S+) in place of --baseline/)?.[1];
+    assert.equal(hinted, `--write-baseline=${name}`);
+    if (name.startsWith("-")) assert.equal(run("--write-baseline", name).status, 2, "after a space it reads as a flag");
+    const rerun = spawnSync("sh", ["-c", `"$0" . ${hinted}`, PLUMB], { cwd: leading, encoding: "utf8" });
+    assert.equal(rerun.status, 0, rerun.stderr);
+    assert.doesNotMatch(run(`--baseline=${name}`).stdout, /shrunk/);
+  }
   // A narrowed run compares only the entries of the rules it ran, and the same hint holds: a narrowed
   // --write-baseline keeps every other rule's entries.
   const focused = plumb(r, "--baseline", bl, "--rule", "MER-BE-001");
@@ -1384,8 +1403,9 @@ test("baseline identity and suppression are unchanged for migrated findings", ()
 // Each crm-positions.ts and CrmLinks.vue line shows one kind of id position, some with several ids in it
 // (crm-positions.ts:15, 16 and 20, CrmLinks.vue:3 and 4); crm-positions.ts:55 only declares the component line 56
 // maps to. A key mapped to another server id (31, 51-53, 65, 72, 74, and 86 and 87 written with `.set` and at an
-// index) or to a route (57-59, 62, 64, 66-69, 71, 74, 76, 78, 85, and 73, 75 and 84 through a branch or fallback: a
-// value starting with `/`, `./` or `../`, a full or protocol-relative URL, or a template whose first text does) is a
+// index) or to a route (57-59, 62, 64, 66-69, 71, 74, 76, 78, 85, 101, 105, and 73, 75 and 84 through a branch or
+// fallback: a value starting with `/`, `./`, `../`, `#/` or `#!/`, a full or protocol-relative URL, or a template
+// whose first text does) is a
 // route table, not a label, and both ids of an id-to-id map are copies; a `new Map` or `Object.fromEntries` entry's
 // key counts however the result is used (64-66, 74), and an unquoted key only beside a value with an id among its
 // results (70, 79-82: directly, in an array, in a branch, beside `??`). A key mapped to a value that may not be a
@@ -1400,7 +1420,14 @@ test("baseline identity and suppression are unchanged for migrated findings", ()
 // from `useRouter()` or from a router bound to it, one taking a bare string) builds a link like `to` does, and so
 // does a query built with `URLSearchParams` (94-98: a URL's `searchParams.set`/`.append`, `new URLSearchParams` from
 // an object, entries or a string, and a name bound to one), whose parameter names count only beside an id value
-// (99, 100), and a request's `query` or ofetch's `params` (101-103: `$fetch`, `useFetch`).
+// (99, 100), though a name declared as something else is read as an id, whatever the file binds the same name to
+// elsewhere (106: a parameter, beside line 98's search params), and a request's `query` or
+// ofetch's `params` (useCrmDestination.ts:19-22: `$fetch`, `useFetch`, `$fetch.raw`). A path's pieces are read at `/`
+// and `=` (102, a query value holding `=`), its query starts at the first `?` only (103), a hashbang route is a route
+// (104), and a template's piece is a path when the template holds a `/` anywhere (107); a template's piece past a
+// hash-mode `#/` is read (useCrmDestination.ts:23, CrmLinks.vue:31), and one that continues a query is read as the
+// open parameter's value and its `&name=value` values (108-111, CrmLinks.vue:32: a tail in `navigateTo`, a middle,
+// the CSV-style id before a bare name, a `URLSearchParams` string, a query-only link).
 // A link's MIME-shaped value (CrmLinks.vue:12-18: static, bound, a template, a bare `v-bind` object's `to` or `href`,
 // and a route location's `path`) is a relative path, a nested object in a `v-bind` (11) is data, not attributes, and a link's route
 // location `params` and `query` values (19, 20, 24, also in an array), its query string (21, 22, and 25 and 29
@@ -1427,8 +1454,10 @@ test("baseline identity and suppression are unchanged for migrated findings", ()
 // non-link prop (`:meta`) is no link, nor is a query-shaped `:title` without a `/`, `.push` onto a list, a `push`
 // not bound from `useRouter()` and a form's `.append` aren't links, and "text/csv" is a MIME type, not a path to the
 // "csv" id. A query parameter's name beside a value that isn't an id (`?email=${address}`, `?export=1`, a search
-// params `.set`/`.get`, an initial object's keys or entry's name) is no copy, and a fragment only scrolls (`href="#export"`
-// beside `id="export"`, a route location's `hash`, `<use href="#csv">`, `<Teleport to="#export">`, a template's
+// params `.set`/`.get`, an initial object's keys or entry's name, also past a substitution: `` `?tab=${t}&csv` ``,
+// `&export=1`, a `URLSearchParams` string's, a query after a hash-mode route) is no copy, nor is the name `.has` asks
+// of a variable declared as search params beside a same-named parameter that isn't, and a fragment only scrolls
+// (`href="#export"` beside `id="export"`, a route location's `hash`, `<use href="#csv">`, `<Teleport to="#export">`, a template's
 // text past a `#`).
 test("MER-CP-001 names each copied id's qualified owner at its exact location", () => {
   const findings = JSON.parse(plumb(path.join(FIX, "MER-CP-001", "bad"), "--rule", "MER-CP-001", "--json").stdout);
@@ -1458,6 +1487,8 @@ test("MER-CP-001 names each copied id's qualified owner at its exact location", 
     ["ui/app/pages/crm/components/CrmLinks.vue:3", "CrmConnector.ConnectorId"], // id-named static attributes
     ["ui/app/pages/crm/components/CrmLinks.vue:3", "CrmIntegration.Webhooks.HandlerId"],
     ["ui/app/pages/crm/components/CrmLinks.vue:30", "CrmIntegration.IntegrationId"], // a hash-mode route is a route, not a fragment
+    ["ui/app/pages/crm/components/CrmLinks.vue:31", "CrmConnector.ConnectorId"], // a template's piece past a hash-mode route's `#/`
+    ["ui/app/pages/crm/components/CrmLinks.vue:32", "CrmIntegration.IntegrationId"], // a query-only template link's value past a substitution
     ["ui/app/pages/crm/components/CrmLinks.vue:4", "CrmIntegration.Webhooks.HandlerId"], // id-named bound attributes
     ["ui/app/pages/crm/components/CrmLinks.vue:4", "CrmIntegration.IntegrationId"],
     ["ui/app/pages/crm/components/CrmLinks.vue:5", "CrmIntegration.IntegrationId"], // under an id-named key in a bound object
@@ -1471,6 +1502,11 @@ test("MER-CP-001 names each copied id's qualified owner at its exact location", 
     ["ui/app/pages/crm/composables/useCrmDestination.ts:16", "TestCrmConnectionUseCase.ProbeId"], // destructured from a bound router
     ["ui/app/pages/crm/composables/useCrmDestination.ts:17", "CrmIntegration.IntegrationId"], // a hash-mode route, `#/…`
     ["ui/app/pages/crm/composables/useCrmDestination.ts:18", "CrmConnector.ConnectorId"], // a hash-mode route after the URL, `/#/…`
+    ["ui/app/pages/crm/composables/useCrmDestination.ts:19", "CrmIntegration.IntegrationId"], // $fetch's `query`
+    ["ui/app/pages/crm/composables/useCrmDestination.ts:20", "CrmConnector.ConnectorId"], // useFetch's `query`
+    ["ui/app/pages/crm/composables/useCrmDestination.ts:21", "TestCrmConnectionUseCase.ProbeId"], // $fetch's `params`, ofetch's alias for `query`
+    ["ui/app/pages/crm/composables/useCrmDestination.ts:22", "CrmIntegration.Webhooks.HandlerId"], // $fetch.raw's `query`
+    ["ui/app/pages/crm/composables/useCrmDestination.ts:23", "CrmIntegration.IntegrationId"], // a template's piece past `/#/` in navigateTo
     ["ui/app/pages/crm/composables/useCrmDestination.ts:6", "CrmIntegration.IntegrationId"], // ref(…)'s initial value, held by a variable
     ["ui/app/pages/crm/index.vue:12", "CrmIntegration.IntegrationId"], // compared against a literal-typed value
     ["ui/app/pages/crm/index.vue:13", "CrmIntegration.IntegrationId"], // hand-built /api/ URL
@@ -1484,10 +1520,17 @@ test("MER-CP-001 names each copied id's qualified owner at its exact location", 
     ["ui/app/pages/crm/index.vue:9", "CrmIntegration.Webhooks.HandlerId"],
     ["ui/app/pages/crm/logic/crm-positions.ts:100", "CrmIntegration.EmailChannelId"], // an entry's name beside an id value
     ["ui/app/pages/crm/logic/crm-positions.ts:100", "CrmIntegration.IntegrationId"],
-    ["ui/app/pages/crm/logic/crm-positions.ts:101", "CrmIntegration.IntegrationId"], // $fetch's `query`
-    ["ui/app/pages/crm/logic/crm-positions.ts:102", "CrmConnector.ConnectorId"], // useFetch's `query`
-    ["ui/app/pages/crm/logic/crm-positions.ts:103", "TestCrmConnectionUseCase.ProbeId"], // $fetch's `params`, ofetch's alias for `query`
-    ["ui/app/pages/crm/logic/crm-positions.ts:104", "CrmIntegration.IntegrationId"], // a route table to a hash-mode route, `#/…`
+    ["ui/app/pages/crm/logic/crm-positions.ts:101", "CrmIntegration.IntegrationId"], // a route table to a hash-mode route, `#/…`
+    ["ui/app/pages/crm/logic/crm-positions.ts:102", "CrmIntegration.IntegrationId"], // a query value holding `=`, split at it
+    ["ui/app/pages/crm/logic/crm-positions.ts:103", "CrmIntegration.IntegrationId"], // a `&` before any `?` is the path's
+    ["ui/app/pages/crm/logic/crm-positions.ts:104", "CrmIntegration.IntegrationId"], // a hashbang route, `#!/…`
+    ["ui/app/pages/crm/logic/crm-positions.ts:105", "CrmConnector.ConnectorId"], // a route table to a hashbang route
+    ["ui/app/pages/crm/logic/crm-positions.ts:106", "CrmIntegration.IntegrationId"], // `.has` on a parameter sharing a search params name
+    ["ui/app/pages/crm/logic/crm-positions.ts:107", "CrmIntegration.IntegrationId"], // a template's query piece, its `/` in an earlier piece
+    ["ui/app/pages/crm/logic/crm-positions.ts:108", "CrmIntegration.IntegrationId"], // a query continued past a substitution, a tail
+    ["ui/app/pages/crm/logic/crm-positions.ts:109", "CrmIntegration.IntegrationId"], // and a middle
+    ["ui/app/pages/crm/logic/crm-positions.ts:110", "CrmIntegration.CsvFormatId"], // a value before a bare name
+    ["ui/app/pages/crm/logic/crm-positions.ts:111", "CrmIntegration.IntegrationId"], // a URLSearchParams string past a substitution
     ["ui/app/pages/crm/logic/crm-positions.ts:15", "CrmIntegration.IntegrationId"], // .includes( argument
     ["ui/app/pages/crm/logic/crm-positions.ts:15", "CrmConnector.ConnectorId"], // .has( argument
     ["ui/app/pages/crm/logic/crm-positions.ts:15", "CrmIntegration.Webhooks.HandlerId"], // .indexOf( argument
@@ -1612,7 +1655,7 @@ test("MER-CP-001 names each copied id's qualified owner at its exact location", 
       "building a URL from it) — have the DTO carry the answer: availableActions, a named flag, the route, or the id itself.");
   const tableNote = " A table keyed on it may map it only to labels, colours or icons.";
   assert.deepEqual(findings.filter((finding) => finding.message.endsWith(tableNote)).map((finding) => [finding.location, owner(finding)]), [
-    ...[[104, "IntegrationId"], // sorted as text, so ahead of line 21
+    ...[[101, "IntegrationId"], [105, "ConnectorId"], // sorted as text, so ahead of line 21
       [21, "IntegrationId"], [31, "ConnectorId"], [36, "ConnectorId"], [51, "IntegrationId"], [52, "ConnectorId"], [53, "ConnectorId"],
       [56, "IntegrationId"], [57, "IntegrationId"], [58, "ConnectorId"], [59, "Webhooks.HandlerId"], [61, "CsvFormatId"],
       [62, "IntegrationId"], [64, "IntegrationId"], [65, "ConnectorId"], [66, "IntegrationId"], [67, "IntegrationId"], [67, "ConnectorId"],

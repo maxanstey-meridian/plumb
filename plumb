@@ -452,12 +452,13 @@ const baselineName = baselineFile && (/^\.\.(?:[\\/]|$)/.test(path.relative(abs,
 // out, a file --exclude hid) can't tell, nor can a degraded run. The same run with --write-baseline ratchets down,
 // narrowed or not, since a write replaces only the entries it checked. The hint names the file as this shell can reach
 // it: as given to --baseline, or the discovered one by its path from here (absolute when it's outside), quoted for a
-// POSIX shell so it pastes as one argument.
+// POSIX shell and joined to the flag with `=`, so it pastes as one argument even when it starts with `=` (zsh's `=cmd`
+// expansion) or `-` (which the parser would read as a flag).
 const shellQuote = (p) => /^[\w@%+=:,./-]+$/.test(p) ? p : `'${p.replace(/'/g, "'\\''")}'`;
 const discoveredFromHere = path.relative(process.cwd(), DEFAULT_BASELINE);
 const ratchet = parsed.values.baseline
-  ? `re-run with --write-baseline ${shellQuote(parsed.values.baseline)} in place of --baseline`
-  : `re-run with --write-baseline ${shellQuote(/^\.\.(?:[\\/]|$)/.test(discoveredFromHere) ? DEFAULT_BASELINE : discoveredFromHere)}`;
+  ? `re-run with --write-baseline=${shellQuote(parsed.values.baseline)} in place of --baseline`
+  : `re-run with --write-baseline=${shellQuote(/^\.\.(?:[\\/]|$)/.test(discoveredFromHere) ? DEFAULT_BASELINE : discoveredFromHere)}`;
 const baselineNote = baselineFile
   ? `+${baselined} baselined by ${baselineName}, baseline holds ${baselineTotal}` +
     (shrunk && !degraded.length ? ` — shrunk; ${ratchet} to ratchet down` : "")

@@ -31,7 +31,7 @@ public static class BranchNameExtensions
     }
 }
 
-// and one a deconstruction writes again holds what it assigns.
+// One a deconstruction writes again holds what it assigns,
 public static class DeconstructExtensions
 {
     public static IActionResult ToHttp(this RivetResult result, IActionResult other)
@@ -40,4 +40,47 @@ public static class DeconstructExtensions
         (adapted, _) = (other, 1);
         return adapted;
     }
+}
+
+// brackets and calls in the deconstruction's target too.
+public static class BracketDeconstructExtensions
+{
+    public static IActionResult ToHttp(this RivetResult result, IActionResult other, int[] slots)
+    {
+        var adapted = result.ToActionResult();
+        (adapted, slots[Index(0)]) = (other, 1);
+        return adapted;
+    }
+
+    static int Index(int value) => value;
+}
+
+// A value that may be the other operand of a ??, held in a local or returned directly, may be anything.
+public static class CoalesceLocalExtensions
+{
+    public static IActionResult ToHttp(this RivetResult result, IActionResult? other)
+    {
+        var adapted = other ?? result.ToActionResult();
+        return adapted;
+    }
+}
+
+public static class CoalesceReturnExtensions
+{
+    public static IActionResult ToHttp(this RivetResult result, IActionResult? other) => other ?? result.ToActionResult();
+}
+
+// A returned field is no local of the method's: another member may write it between the adapter and the return.
+public static class FieldNameExtensions
+{
+    static IActionResult adapted = null!;
+
+    public static IActionResult ToHttp(this RivetResult result, IActionResult other)
+    {
+        adapted = result.ToActionResult();
+        Swap(other);
+        return adapted;
+    }
+
+    static void Swap(IActionResult other) => adapted = other;
 }

@@ -8,5 +8,7 @@ export const useCrmDestination = () => {
   const load = async () => {
     destination.value = await crmClient.getDestination();
   };
-  return { destination, copy, load };
+  // A query parameter's name is no id, also in a route location's `query`.
+  const invite = (address: string) => navigateTo({ path: "/invite", query: { email: address } });
+  return { destination, copy, load, invite };
 };

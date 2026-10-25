@@ -440,6 +440,8 @@ test("C# type names prefer the declaration in the referrer's project closure", (
     ["one/Right/Clash.cs", "namespace App.Right;\npublic sealed record Clash(int B);\n"],
     ["one/UsesClash.cs", "using App.Left;\nusing App.Right;\nnamespace App.Contracts;\npublic sealed record UsesClash(Clash C);\n"],
     ["two/Clash.cs", "namespace App;\npublic sealed record Clash(int C);\n"],
+    // Aliases bound to the unreferenced project's Remote and to a type outside the scan.
+    ["one/UsesAliases.cs", "using Far = App.Contracts.Remote;\nusing Thing = Vendor.Http.Thing;\nnamespace App.Contracts;\npublic sealed record UsesAliases(Far F, Thing T);\n"],
   ]), [Capability.CSHARP, Capability.DOTNET_PROJECTS]);
   const { csharp } = f.context;
   const file = (name) => csharp.csharpFiles.find((value) => value.path === name);
@@ -451,6 +453,14 @@ test("C# type names prefer the declaration in the referrer's project closure", (
   assert.equal(csharp.resolveType("Remote", uses, uses.text().indexOf("record Uses"))?.fullName, "App.Contracts.Remote");
   const clash = file("one/UsesClash.cs");
   assert.equal(csharp.resolveType("Clash", clash, clash.text().indexOf("record UsesClash")), null);
+  // visibleOnly: an unreferenced project's type is no fallback, but an alias names its target wherever it is, with no
+  // declarations when the scan has none.
+  const visibleOnly = (name, from, offset) => csharp.resolveType(name, from, offset, { visibleOnly: true });
+  assert.equal(visibleOnly("Remote", uses, uses.text().indexOf("record Uses")), null);
+  const aliases = file("one/UsesAliases.cs"), inAliases = aliases.text().indexOf("record UsesAliases");
+  assert.equal(visibleOnly("Far", aliases, inAliases)?.fullName, "App.Contracts.Remote");
+  assert.deepEqual(visibleOnly("Thing", aliases, inAliases), { fullName: "Vendor.Http.Thing", declarations: [] });
+  assert.equal(csharp.resolveType("Thing", aliases, inAliases), null);
 });
 
 test("C# declarations: nested types, bodyless records, attribute starts, constraint keywords, block and file-scoped namespaces", async () => {

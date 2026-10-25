@@ -205,28 +205,32 @@ test("MER-RV-006 finds multiline implicit-private behavior only in the attribute
 });
 
 test("MER-RV-007 flags every app-written RivetResult extension named like an adapter or returning an HTTP result, and app code whose one statement copies RivetActionResult's StatusCode or Value into a result or the response, by the type it's declared in, and leaves Rivet's own adapters, helpers that call them, filters that only read it, tests and mentions in comments, strings or attributes", () => {
-    // Good: result filters that log or record the adapter's status in an app's own AuditResult/ValidationResult
-    // or audit.Results, and set context.Result in a statement of their own; an attribute's typeof() on a
-    // controller that calls Problem() elsewhere; another project's own `record Adapted` beside App's global alias
-    // of that name; a Verification/ project whose <IsTestProject> alone makes it test code (its RivetResult helper may write the
-    // adapter's output to the response); a pattern's `{ }` that
-    // ends no member, a named argument's label, a reassigned local and a lambda parameter that shadows one; and
-    // helpers and a nested reader handing back the adapter's output only to a log. Also: the `new` modifier on an
-    // indexer, which constructs nothing; a call that picks the overload returning no read; a block- or
-    // expression-bodied local function, a typed lambda, one of several lambda parameters and a lambda's own local
-    // that shadow the local; and a local whose block ends before another block or a loop declares its name again.
-    // Also: a lambda with an explicit return type and a where-constrained local function whose parameter shadows the
-    // local; a where-constrained local function's return, which is not its method's; a member call hidden by a local
-    // function of its name; another type's namesake qualified through its parent and a property named like a
-    // sibling; the `new` modifier on a method, whose block's statements stay its own; and adapter helpers whose
-    // Match arms are async or declare their return type, or that hold a where-constrained local function; and a
-    // RivetActionResult or RivetResult of the app's own, under another qualifier, global:: alone or an alias of one
-    // (an extension off an alias of the app's RivetResult is no bridge), or bare where the app's own type of that
-    // name is in scope (declared around the code, or in its namespace in another file). Also: a qualifier or a
-    // receiver whose dot ends a line, which still names another type's namesake or another object's member; a helper that adapts once, reads and logs the adapter's output and
-    // returns the local holding it; helpers that set a filter context's Result to the adapter's output or an app's
-    // own auditContext.Result, then return the adapter's; a nested type of a type around the code, which hides a top-level one of its name; Match arms under a nullable type argument; and a lambda's block in a logging statement,
-    // whose result is the lambda's own.
+    // Good: result filters that log or record the adapter's status in an app's own AuditResult/ValidationResult or
+    // audit.Results, and set context.Result in a statement of their own; an attribute's typeof() on a controller
+    // that calls Problem() elsewhere; another project's own `record Adapted` beside App's global alias of that name;
+    // a Verification/ project whose <IsTestProject> alone makes it test code (its RivetResult helper may write the
+    // adapter's output to the response); a pattern's `{ }` that ends no member, a named argument's label, a
+    // reassigned local and a lambda parameter that shadows one; and helpers and a nested reader handing back the
+    // adapter's output only to a log. Also: the `new` modifier on an indexer, which constructs nothing; a call that
+    // picks the overload returning no read; a block- or expression-bodied local function, a typed lambda, one of
+    // several lambda parameters and a lambda's own local that shadow the local; and a local whose block ends before
+    // another block or a loop declares its name again. Also: a lambda with an explicit return type and a
+    // where-constrained local function whose parameter shadows the local; a where-constrained local function's
+    // return, which is not its method's; a member call hidden by a local function of its name; another type's
+    // namesake qualified through its parent and a property named like a sibling; the `new` modifier on a method,
+    // whose block's statements stay its own; and adapter helpers whose Match arms are async or declare their return
+    // type, or that hold a where-constrained local function; and a RivetActionResult or RivetResult of the app's
+    // own, under another qualifier, global:: alone or an alias of one (an extension off an alias of the app's
+    // RivetResult is no bridge), or bare where the app's own type of that name is in scope (declared around the
+    // code, or in its namespace in another file). Also: a qualifier or a receiver whose dot ends a line, which still
+    // names another type's namesake or another object's member; a helper that adapts once, reads and logs the
+    // adapter's output and returns the local holding it; helpers that set a filter context's Result to the adapter's
+    // output or an app's own auditContext.Result or transactionContext.Result, then return the adapter's, or that
+    // set it through the local holding the adapter's output; a nested type of a type around the code, which hides a
+    // top-level one of its name; Match arms under a nullable type argument; a lambda's block in a logging statement,
+    // whose result is the lambda's own; the adapter's output `?? throw`; aliases named RivetActionResult and
+    // RivetResult bound to another project's types or to types outside the scan; and a returned local holding the
+    // adapter's output that's declared before its one write, or first or last of several in a statement.
     assert.equal(run("MER-RV-007", "good"), "");
     const output = run("MER-RV-007", "bad");
     const locations = [...output.matchAll(/^MER-RV-007\twarn\t(\S+)/gm)].map((match) => match[1]).sort();
@@ -248,6 +252,9 @@ test("MER-RV-007 flags every app-written RivetResult extension named like an ada
         "Modules/Common/CastRelay.cs:4",
         // `where T : class where U : struct` declares no type named "where".
         "Modules/Common/ConstrainedRelay.cs:2",
+        // Helpers that return the adapter but set a filter's result to something else, on every arm or one.
+        "Modules/Common/FilterResultExtensions.cs:14",
+        "Modules/Common/FilterResultExtensions.cs:4",
         // Bridges that call the adapter and rebuild its output or hand-write the error path, and a ToResult
         // namesake returning object. The bridges' RivetActionResult casts add no third finding.
         "Modules/Common/FunctionResultExtensions.cs:1",
@@ -263,11 +270,16 @@ test("MER-RV-007 flags every app-written RivetResult extension named like an ada
         "Modules/Common/ResultExtensions.Actions.cs:1",
         "Modules/Common/ResultExtensions.cs:1",
         // A returned local reassigned after the adapter's result, assigned it only in a lambda's block or on one
-        // arm of a ?:, or written again by a deconstruction.
+        // arm of a ?:, or written again by a deconstruction (through brackets and calls in its target too); a ??
+        // whose other operand is returned, held in a local or directly; and a returned field another member writes.
         "Modules/Common/ReturnedNameExtensions.cs:15",
         "Modules/Common/ReturnedNameExtensions.cs:25",
         "Modules/Common/ReturnedNameExtensions.cs:35",
         "Modules/Common/ReturnedNameExtensions.cs:4",
+        "Modules/Common/ReturnedNameExtensions.cs:46",
+        "Modules/Common/ReturnedNameExtensions.cs:59",
+        "Modules/Common/ReturnedNameExtensions.cs:68",
+        "Modules/Common/ReturnedNameExtensions.cs:74",
         // An app's own `namespace Rivet.Shims`: only `Rivet` itself is Rivet's.
         "Modules/Common/RivetNamedShim.cs:4",
         // The app namespace after a `namespace Rivet { }` block; the shim itself is Rivet's.

@@ -28,6 +28,8 @@
   <button type="button" @click="open('acme-probe')">Probe</button>
   <NuxtLink :to="`?tab=${tab}&integration=acme-crm`">CRM</NuxtLink>
   <a href="#/crm/acme-crm">CRM</a>
+  <a :href="`#/crm/${tab}/acme-connector`">Connector</a>
+  <NuxtLink :to="`?tab=${tab}&integration=acme-crm&page=1`">CRM</NuxtLink>
 </template>
 
 <script setup lang="ts">

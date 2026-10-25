@@ -27,7 +27,7 @@ export const integrationBadges = { "acme-crm": <const>"Beta" };
 export const integrationShortNames = new Map([["acme-crm", <string>"Acme"]]);
 export const formatNames = { "csv": "Spreadsheet" };
 export const formatHints = new Map([["csv", "Opens in a spreadsheet"]]);
-// A `/` in wording isn't a route: only a value starting with `/`, `./` or `../` (or `${…}/`), or a URL, maps an id to one.
+// A `/` in wording isn't a route: only a value starting with `/`, `./`, `../`, `#/` or `#!/` (or `${…}/`), or a URL, maps an id to one.
 export const integrationAccess = { "acme-crm": "Read/Write" };
 export const integrationAccessLabels = new Map([["acme-crm", "Read/Write"]]);
 // A component's name as a string is a label; dispatch on the imported component is flagged (crm-positions.ts:56).
@@ -62,11 +62,10 @@ export const queueExport = (steps: string[]) => steps.push("export");
 export const queueStep = (push: (step: string) => number) => push("export");
 export const appendExport = (form: FormData) => form.append("format", "export");
 // A query parameter's name is no id, unless its value is one too; neither is anything past a `#`, which only scrolls.
-declare const navigateTo: (to: string) => void;
-export const invite = (address: string) => navigateTo(`/invite?email=${address}`);
+export const inviteLink = (address: string) => `/invite?email=${encodeURIComponent(address)}`;
 export const reportLink = "/reports?export=1";
 export const inviteQuery = (url: URL, address: string) => url.searchParams.set("email", address);
-export const invitedEmail = () => new URLSearchParams(location.search).get("email");
+export const invitedEmail = (search: string) => new URLSearchParams(search).get("email");
 export const inviteParams = (address: string) => new URLSearchParams({ email: address, "csv": address, ["export"]: address });
 export const inviteEntries = (address: string) => new URLSearchParams([["email", address]]);
 export const sectionLink = (tab: string) => `/crm#${tab}/export`;
@@ -74,6 +73,16 @@ export const sectionLink = (tab: string) => `/crm#${tab}/export`;
 export const reportFlag = "/reports?export";
 export const reportTabs = "/reports?tab=1&csv";
 export const reportQuery = () => new URLSearchParams("export&tab=1");
+export const tabQuery = (t: string) => new URLSearchParams(`acme-crm&tab=${t}`);
+// Also past a substitution, as the query continues: a bare name, a name beside a value that isn't an id, and a query
+// after a hash-mode route.
+export const tabFlag = (t: string) => `/reports?tab=${t}&csv`;
+export const tabExport = (t: string) => `/reports?tab=${t}&export=1`;
+export const tabNames = (t: string) => new URLSearchParams(`tab=${t}&export&page=1`);
+export const hashTabs = (t: string) => `/crm?x=1#/${t}?tab=${t}&csv`;
 // Asking whether a parameter is there, or for all its values, names it too.
 export const hasExport = (url: URL) => url.searchParams.has("export");
 export const csvValues = (url: URL) => url.searchParams.getAll("csv");
+// A name is search params by its own declaration, not by another of the same name in the file.
+export const readExport = () => { const params = new URLSearchParams(location.search); return params.has("export"); };
+export const readTab = (params: Record<string, string>) => params.tab;

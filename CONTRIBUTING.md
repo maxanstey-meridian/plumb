@@ -5,7 +5,7 @@
 The test suite and `./plumb --self-test` use every one of Plumb's [requirements](README.md#requirements), with its Node dependencies installed:
 
 - ast-grep on `PATH`
-- go-task (`task`) on `PATH`: without it the two `MER-RV-024` runner tests (its producer contract and its own) are skipped and its self-test fixture fails, since the self-test runs the CI-only checks
+- go-task (`task`) on `PATH`: without it two `MER-RV-024` runner tests are skipped (the one that runs its check script against its fixtures, `producer MER-RV-024-stale-generated.mjs: …`, and the one for conventions it can't check, `MER-RV-024: a convention it can't check exits 2 …`) and its self-test fixture fails, since the self-test runs the CI-only checks
 
 ## Add A Rule
 

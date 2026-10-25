@@ -16,5 +16,13 @@ export const useCrmDestination = () => {
   const openProbe = () => swap("acme-probe");
   const hashRoute = "#/crm/acme-crm";
   const openSettings = () => navigateTo("/#/settings/acme-connector");
-  return { destination, picked, load, openCrm, openConnector, openWebhook, openProbe, hashRoute, openSettings };
+  const fetchCrm = () => $fetch("/api/crm", { query: { integration: "acme-crm" } });
+  const crm = useFetch("/api/crm", { query: { connector: "acme-connector" } });
+  const fetchProbe = () => $fetch("/api/crm", { params: { probe: "acme-probe" } });
+  const fetchWebhook = () => $fetch.raw("/api/crm", { query: { hook: "acme-webhook" } });
+  const openTab = (tab: string) => navigateTo(`/#/crm/${tab}/acme-crm`);
+  return {
+    destination, picked, load, openCrm, openConnector, openWebhook, openProbe, hashRoute, openSettings,
+    fetchCrm, crm, fetchProbe, fetchWebhook, openTab,
+  };
 };

@@ -16,6 +16,8 @@ public static class RefusalExtensions
 
     public static IResult Either(this RivetResult result, bool flag) => flag ? result.ToResult() : result.ToResult();
 
+    public static IActionResult Checked(this RivetResult result) => result.ToActionResult() ?? throw new InvalidOperationException();
+
     public static IResult Switched(this RivetResult result, int kind)
     {
         return kind switch { 0 => result.ToResult(), _ => result.ToResult() };

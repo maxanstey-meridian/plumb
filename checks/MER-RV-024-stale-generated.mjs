@@ -37,13 +37,16 @@ for (const l of lines) {
 }
 if (!genTask) process.exit(0);
 
-if (spawnSync("task", ["--version"], { encoding: "utf8" }).error) {
+// Another tool can own the name (Taskwarrior is `task` too, and its --version is a bare number like go-task's), so
+// go-task is known by its help naming the Taskfile.
+const probe = spawnSync("task", ["--help"], { encoding: "utf8" });
+if (probe.error || !/\bTaskfile\b/.test(`${probe.stdout || ""}${probe.stderr || ""}`)) {
   process.stderr.write("MER-RV-024: task (go-task) not on PATH — cannot check\n");
   process.exit(2);
 }
 
 const dry = spawnSync("task", ["--dry", genTask], { cwd: root, encoding: "utf8" });
-const om = `${dry.stdout || ""}\n${dry.stderr || ""}`.match(/--output[^\S\n]+(\S+)/);
+const om = `${dry.stdout || ""}\n${dry.stderr || ""}`.match(/--output(?:=|[^\S\n]+)(\S+)/);
 if (!om) { process.stderr.write(`MER-RV-024: could not resolve --output for task ${genTask} — cannot check\n`); process.exit(2); }
 const outDir = path.resolve(root, om[1]);
 const outRel = path.relative(root, outDir);

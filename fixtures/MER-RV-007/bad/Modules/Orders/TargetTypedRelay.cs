@@ -18,3 +18,19 @@ public sealed class TargetTypedReturn
         return new(adapted.Value);
     }
 }
+
+// The same, from an async method declared to return a Task of one.
+public sealed class TargetTypedAsync
+{
+    public async Task<ObjectResult> SendAsync(RivetActionResult adapted)
+    {
+        await Task.Yield();
+        return new(adapted.Value);
+    }
+}
+
+// The same, from a method declared to return a global::-qualified one.
+public sealed class TargetTypedGlobal
+{
+    public global::Microsoft.AspNetCore.Mvc.ObjectResult Send(RivetActionResult adapted) => new(adapted.Value);
+}

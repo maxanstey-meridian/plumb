@@ -40,3 +40,45 @@ public sealed class LambdaLocalStatus(ILogger<LambdaLocalStatus> logger)
         return Results.StatusCode(status);
     }
 }
+
+// A reassignment that reads the local after a lambda's block, in the same statement, still holds the adapter's
+// status.
+public sealed class LambdaArgumentStatus
+{
+    public IResult Send(RivetActionResult adapted)
+    {
+        var status = adapted.StatusCode;
+        status = Pick(() => { return 1; }, status);
+        return Results.StatusCode(status);
+    }
+
+    private static int Pick(Func<int> fallback, int current) => current;
+}
+
+// An assignment inside an if's braces may not run either.
+public sealed class BracedConditionStatus : IResultFilter
+{
+    public void OnResultExecuting(ResultExecutingContext context)
+    {
+        if (context.Result is not RivetActionResult adapted) return;
+        var status = adapted.StatusCode;
+        if (status > 500) { status = 500; }
+        context.Result = new ObjectResult(null) { StatusCode = status };
+    }
+
+    public void OnResultExecuted(ResultExecutedContext context) { }
+}
+
+// Nor may one after else.
+public sealed class ElseStatus(ILogger<ElseStatus> logger) : IResultFilter
+{
+    public void OnResultExecuting(ResultExecutingContext context)
+    {
+        if (context.Result is not RivetActionResult adapted) return;
+        var status = adapted.StatusCode;
+        if (status < 500) logger.LogInformation("adapted {Status}", status); else status = 500;
+        context.Result = new ObjectResult(null) { StatusCode = status };
+    }
+
+    public void OnResultExecuted(ResultExecutedContext context) { }
+}

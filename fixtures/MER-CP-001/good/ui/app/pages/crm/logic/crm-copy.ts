@@ -36,3 +36,14 @@ export const integrationPanelNames = { "acme-crm": "AcmeCrmPanel" };
 export const exportPrompt = (mode: string) => `Choose ${mode}/export`;
 export const csvType = "text/csv";
 export const csvTypeFor = (header: boolean) => `text/csv${header ? ";header=present" : ""}`;
+// An asset is presentation, by its web asset extension (even "csv", a server id): a logo is an icon, also at a URL.
+export const integrationLogos = { "acme-crm": "/logos/acme.svg" };
+export const integrationLogoMap = new Map([["acme-crm", "/logos/acme.svg?v=2"]]);
+export const integrationLogoAt = (base: string) => ({ "acme-crm": `${base}/acme.png` });
+export const integrationCdnLogos = { "acme-crm": "https://cdn.example/acme.svg" };
+export const integrationExports = { "acme-crm": "/exports/acme.csv" };
+// A choice between labels, and a translation, are labels; unquoted keys are field names unless both sides are ids.
+export const integrationStatus = (busy: boolean) => ({ "acme-crm": busy ? "Connecting" : "Acme CRM" });
+export const integrationCaptions = (t: (key: string) => string) => ({ "acme-crm": t("acme"), "csv": t("csv") ?? "Spreadsheet" });
+export const formatCaptions = (i18n: { t: (key: string) => string }) => ({ "csv": i18n.t("format.csv") });
+export const formatFlags = { email: true, csv: "Comma separated" };

@@ -60,3 +60,19 @@ export const tabRoutes = (tab: string) => ({ ["acme-webhook"]: `/settings/${tab}
 // A label that equals a server id ("export") reads as an id-to-id map: the accepted trade-off, since route tables are the real harm.
 export const formatLabels = new Map([["csv", "export"]]);
 export const baseRoutes = (base: string) => ({ "acme-crm": `${base}/crm` });
+declare const register: (routes: ReadonlyMap<string, string>) => void;
+export const lazyRoutes = () => new Map([["acme-crm", "/settings/crm"]]);
+register(new Map([["acme-connector", "acme-webhook"]]));
+export const computedRoutes = computed(() => new Map([["acme-crm", "/settings/crm"]]));
+export const relativeRoutes = { "acme-crm": "./settings/crm", "acme-connector": "../crm" };
+export const joinedRoutes = (a: string, b: string) => ({ "acme-webhook": `${a}${b}/crm` });
+export const connectUrls = { "acme-crm": "https://acme.example/connect", "acme-connector": "https://acme.zip" };
+export const formatActions = { csv: "export", email: "acme-webhook" };
+export const plainRoutes = { "acme-crm": `/settings/crm` };
+export const constRoutes = new Map([["acme-crm", "acme-webhook" as const]]);
+export const busyRoutes = (busy: boolean) => ({ "acme-crm": busy ? "Connecting" : "/settings/crm", "acme-connector": busy ? "/settings/connector" : "Connector" });
+export const crmRoutes = Object.fromEntries([["acme-crm", "/settings/crm"], ["acme-connector", "acme-webhook"]]);
+export const titleRoutes = (t: (key: string) => string) => ({ "acme-crm": t("crm.title") ?? "/settings/crm", "acme-connector": t("crm.connector") || "/settings/connector" });
+export const docsRoutes = { "acme-crm": "/docs/crm/1.10" };
+export const customRoutes = (t: (key: string) => string, route?: string) => ({ "acme-webhook": route ?? t("crm.webhook") });
+export const profileRoutes = { "acme-crm": "/users/john.doe" };

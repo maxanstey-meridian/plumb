@@ -1,5 +1,12 @@
 # Contributing
 
+## Test Prerequisites
+
+The test suite needs every one of Plumb's [requirements](README.md#requirements), with its Node dependencies installed:
+
+- ast-grep on `PATH`
+- go-task (`task`) on `PATH`; the `MER-RV-024` runner test is skipped without it
+
 ## Add A Rule
 
 1. Add a descriptor-backed rule under `lib/in-process-rules/` when the existing path, text, configuration, TypeScript, Vue, C#, resolution, frontend graph, or .NET project analysis is sufficient.

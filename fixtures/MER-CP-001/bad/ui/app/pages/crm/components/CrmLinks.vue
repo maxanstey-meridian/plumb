@@ -12,4 +12,8 @@
   <NuxtLink to="text/acme-crm">CRM</NuxtLink>
   <NuxtLink :href="'text/acme-connector'">Connector</NuxtLink>
   <span v-bind="active ? { to: 'text/acme-webhook' } : {}" />
+  <NuxtLink :to="{ path: 'text/acme-webhook' }">Webhook</NuxtLink>
+  <span v-bind="{ to: { path: 'text/acme-probe' } }" />
+  <NuxtLink :to="`text/acme-crm${tab}`">CRM</NuxtLink>
+  <a v-bind="{ href: 'text/acme-connector' }">Connector</a>
 </template>

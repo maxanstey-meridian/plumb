@@ -13,3 +13,19 @@ public sealed class NewModifierIndexer : StatusTable
 
     public IResult Show(Order a) => Results.Ok(a.Value);
 }
+
+public class StatusLog
+{
+    public virtual IResult Show(RivetActionResult adapted) => Results.Ok();
+}
+
+// The `new` modifier on a method constructs nothing either: its block's statements are its own, so a read logged in
+// one shares no statement with the result another builds.
+public sealed class NewModifierMethod(ILogger<NewModifierMethod> logger) : StatusLog
+{
+    public new IResult Show(RivetActionResult adapted)
+    {
+        logger.LogInformation("adapted {Status}", adapted.StatusCode);
+        return Results.Ok();
+    }
+}

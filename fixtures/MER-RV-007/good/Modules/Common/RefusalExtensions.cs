@@ -10,6 +10,7 @@ public static class RefusalExtensions
         await Task.Yield();
         logger.LogInformation("refused {Count}", Count(() => { return 1; }));
         int Local() { return 2; }
+        T Pick<T>(T value) where T : class { return value; }
         return result.ToResult();
     }
 
@@ -22,6 +23,12 @@ public static class RefusalExtensions
 
     public static IResult Matched(this RivetResult result, Outcome outcome) =>
         outcome.Match(ok => result.ToResult(), error: reason => result.ToResult());
+
+    public static IResult TypedMatched(this RivetResult result, Outcome outcome) =>
+        outcome.Match(IResult (ok) => result.ToResult(), error: IResult (reason) => result.ToResult());
+
+    public static Task<IResult> MatchedAsync(this RivetResult result, Outcome outcome) =>
+        outcome.MatchAsync(async ok => result.ToResult(), error: async reason => result.ToResult());
 
     private static int Count(Func<int> count) => count();
 }

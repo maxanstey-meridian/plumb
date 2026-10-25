@@ -28,7 +28,7 @@ Plumb is a policy checker, not a compiler or general-purpose static-analysis fra
 - pnpm 11, pinned by `packageManager`
 - Git for the normal repository inventory; a filesystem fallback is available
 - ast-grep on `PATH` for YAML rules
-- `task` and the target repository's toolchain for the CI-only Rivet freshness check
+- go-task (`task`) and the target repository's toolchain for the CI-only Rivet freshness check
 
 Install Plumb's Node dependencies:
 
@@ -71,7 +71,9 @@ Useful options:
 
 `--ci` enables checks that execute the target repository's own toolchain. `--profile` writes phase timings, selected owners, shared-analysis counters, external execution timings, and capability initialization to stderr without changing finding output.
 
-A run is degraded when an engine it needed failed or was missing: ast-grep, a check script, or an analysis dependency such as TypeScript. The rules it serves report nothing, so stderr names each failure and the summary line ends `— degraded: N engines failed`. Under `--json` the stderr lines alone say so. A degraded run still exits by its findings locally, and exits 2 under `--ci`.
+A run is degraded when an analysis it needed is incomplete. Either an engine failed or was missing (ast-grep, a check script, or an analysis dependency such as TypeScript), so the rules it serves report nothing; or a rule ran on partial input, so it can miss findings. A `tsconfig.json` Plumb can't read is the common partial case: one that extends a package which isn't installed (the target repository has no `node_modules`) leaves its path aliases unresolved, so the import rules can't follow aliased imports. stderr names each cause, and the summary line ends `— degraded: N analyses incomplete (see above)` (`1 analysis` for one). Under `--json` the stderr lines alone say so. A degraded run still exits by its findings locally, and exits 2 under `--ci`.
+
+The summary line reads `plumb: E error, W warn, I info`, then ` (+B baselined by FILE, baseline holds T)` when a baseline applies, with ` — shrunk; re-run --write-baseline to ratchet down` inside the parentheses when it shrank, then the degraded note.
 
 ### Repository Inventory
 
@@ -79,7 +81,7 @@ In a Git repository, Plumb scans tracked files and visible untracked files from 
 
 A `.plumbignore` at the checked repository root adds persistent exclusions using gitignore syntax, including negation. Repeatable `--exclude <pattern>` options add invocation-specific patterns after `.plumbignore`.
 
-All rule engines and executable producers receive the same canonical inventory. A finding outside that inventory is discarded.
+All rule engines and executable producers receive the same canonical inventory. A finding on a file outside that inventory is discarded. A finding on a directory, or on a file that doesn't exist (a missing required file, say), is kept, even under an excluded path.
 
 ### Baselines
 
@@ -90,9 +92,17 @@ Capture existing findings and then fail only on new ones:
 ./plumb /path/to/repo
 ```
 
-A `.plumb-baseline.json` at the checked repository root applies automatically. `--baseline <file>` uses another file instead, and `--no-baseline` reports every finding. The summary line, or a line on stderr under `--json`, always names the baseline and shows how many findings it absorbed.
+A `.plumb-baseline.json` at the checked repository root applies automatically. `--baseline <file>` uses another file instead, and `--no-baseline` reports every finding. The summary line, or a line on stderr under `--json`, always names the baseline and shows how many findings it absorbed. It says the baseline shrank when an entry the run checked didn't all come back; the same command with `--write-baseline` then ratchets it down.
 
-`--write-baseline` replaces only what the run checked. On a run narrowed by `--rule`, `--pack` or `--exclude`, or without `--ci`, the existing entries for the rules that did not run and the files that were excluded are kept. A run in which an engine failed (ast-grep, a check script, or a missing analysis dependency) refuses to write a baseline and exits 2, because the rules that did not run would lose their entries.
+`--write-baseline` replaces only what the run checked: the entries for a rule that ran, at a path where its finding would have been reported. On a run narrowed by `--rule`, `--pack` or `--exclude`, or without `--ci`, the existing entries for the rules that did not run and for the files that `.plumbignore` or `--exclude` left out are kept. An entry at a directory or a file that doesn't exist is always checked, since a finding there is never hidden. A degraded run refuses to write a baseline and exits 2, because entries for the findings its incomplete analyses missed would be dropped. A baseline file that exists but can't be read also exits 2 and is left untouched.
+
+### Exit Codes
+
+- `0`: no finding at or above `--fail-on` after the baseline, or a baseline written.
+- `1`: at least one finding at or above `--fail-on` (default `error`).
+- `2`: a usage error (an unknown or incomplete option, an invalid value, conflicting baseline options, no repository root or more than one, a root that doesn't exist), a rule catalogue that can't load, an unreadable baseline, a failed scan, a refused `--write-baseline`, or a degraded `--ci` run. A degraded `--ci` run exits 2 even when it also has findings.
+
+`--self-test` exits 1 when any fixture fails, including one reported as `ERROR`, and 0 when all pass.
 
 ## Fidelity Boundaries
 
@@ -148,4 +158,4 @@ Run every accepted fixture through the full CLI:
 ./plumb --self-test
 ```
 
-The Node suite is the practical local gate. The fixture self-test starts the complete runner for all 96 fixture pairs and is intentionally slower.
+The Node suite is the practical local gate. The fixture self-test starts the complete runner for every fixture pair and is intentionally slower.

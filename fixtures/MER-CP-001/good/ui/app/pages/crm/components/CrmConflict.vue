@@ -27,5 +27,9 @@ defineProps<{ active: boolean }>();
     <input v-bind="active ? { type: 'email' } : {}">
     <AcmeCrmPanel v-on="{ 'export': () => {} }" />
     <AcmeCrmPanel v-bind="{ 'export': true, ['csv']: active }" />
+    <AcmeCrmPanel v-on="active ? { 'acme-crm': () => {} } : {}" />
+    <AcmeCrmPanel v-bind="{ email: 'export' }" />
+    <AcmeCrmPanel :data-kind="{ path: 'export' }" />
+    <AcmeCrmPanel :data-logos="{ 'acme-crm': '/logos/acme.svg' }" />
   </section>
 </template>

@@ -1,5 +1,8 @@
 <script setup lang="ts">
-defineProps<{ noun?: string; subject?: string; typeLabel?: string }>();
+defineProps<{
+  noun?: string; subject?: string; typeLabel?: string;
+  meta?: { path: string }; logos?: Record<string, string>; labels?: Record<string, string>;
+}>();
 </script>
 
 <template>

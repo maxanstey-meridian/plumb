@@ -30,5 +30,8 @@ public static class RefusalExtensions
     public static Task<IResult> MatchedAsync(this RivetResult result, Outcome outcome) =>
         outcome.MatchAsync(async ok => result.ToResult(), error: async reason => result.ToResult());
 
+    public static IResult? NullableMatched(this RivetResult result, Outcome outcome) =>
+        outcome.Match<IResult?>(ok => result.ToResult(), error: reason => result.ToResult());
+
     private static int Count(Func<int> count) => count();
 }

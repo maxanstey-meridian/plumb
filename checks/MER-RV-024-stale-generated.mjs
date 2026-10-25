@@ -6,13 +6,14 @@
 // default local pass. The convention is the repo's own Taskfile: the task
 // whose command matches `rivet ... --output <dir>` is the generator, and the
 // resolved output path comes from `task --dry`. No Taskfile/no rivet task →
-// no convention → silence. A convention it can't check (no `task` binary, no
-// resolvable --output, a missing output dir, a failed generation or diff) exits 2, so
+// no convention → silence. A convention it can't check (no `task` on PATH, a
+// `task` on PATH that isn't go-task, such as Taskwarrior, no resolvable
+// --output, a missing output dir, a failed generation or diff) exits 2, so
 // the runner knows the rule didn't run rather than reading "no drift". The
 // output dir is snapshotted before regeneration and restored byte-for-byte
 // afterward, so the working tree is never changed.
 // DOC: rivet.md#practical-rules
-import { execFileSync, spawnSync } from "node:child_process";
+import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -40,8 +41,12 @@ if (!genTask) process.exit(0);
 // Another tool can own the name (Taskwarrior is `task` too, and its --version is a bare number like go-task's), so
 // go-task is known by its help naming the Taskfile.
 const probe = spawnSync("task", ["--help"], { encoding: "utf8" });
-if (probe.error || !/\bTaskfile\b/.test(`${probe.stdout || ""}${probe.stderr || ""}`)) {
-  process.stderr.write("MER-RV-024: task (go-task) not on PATH — cannot check\n");
+const unusable = probe.error?.code === "ENOENT" ? "task (go-task) not on PATH"
+  : probe.error ? `task could not run (${probe.error.message})`
+  : !/\bTaskfile\b/.test(`${probe.stdout || ""}${probe.stderr || ""}`) ? "`task` on PATH is not go-task"
+  : null;
+if (unusable) {
+  process.stderr.write(`MER-RV-024: ${unusable} — cannot check\n`);
   process.exit(2);
 }
 

@@ -1129,36 +1129,43 @@ test("baseline: a narrowed --write-baseline replaces only what the run checked a
   // With --ci it ran, found nothing (no Taskfile) and its entry goes.
   assert.equal(plumb(r, "--rule", "MER-RV-024", "--ci", "--write-baseline", bl).status, 0);
   assert.deepEqual(entriesOf(), full);
-  // A write checks the entries whose findings would have got through: a file .plumbignore or --exclude left out keeps
-  // its entries, while a directory or a missing file is never hidden, so its entries are replaced by what was found
-  // (repeated writes never add to them) or go.
+  // A write checks every entry but those of the files --exclude left out of this run, which it keeps. A file a
+  // persistent exclusion hides (.plumbignore, a fallback skip folder, .gitignore) can never be reported, so its entries
+  // go, as a missing file's do; a directory is never hidden, so its entries are replaced by what was found (repeated
+  // writes never add to them).
   const dirFindings = isolatedPlumb({
     "MER-TO-909-dirs.mjs": `#!/usr/bin/env node
 console.log("MER-TO-909\\twarn\\tgenerated/rivet:0\\tdirectory finding\\ttools.md#default-stack-1");
 console.log("MER-TO-909\\twarn\\tgenerated/missing.txt:1\\tmissing-file finding\\ttools.md#default-stack-1");
 `,
   });
-  for (const [file, text] of [["generated/rivet/rivet.ts", "// generated\n"], ["generated/old.ts", "// old\n"], ["hidden.ts", "// hidden\n"], [".plumbignore", "hidden.ts\n"]]) {
+  for (const [file, text] of [["generated/rivet/rivet.ts", "// generated\n"], ["generated/old.ts", "// old\n"], ["hidden.ts", "// hidden\n"], [".plumbignore", "hidden.ts\n"], ["node_modules/dep/index.ts", "// dependency\n"], ["built/out.ts", "// built\n"]]) {
     fs.mkdirSync(path.dirname(path.join(dirFindings.target, file)), { recursive: true });
     fs.writeFileSync(path.join(dirFindings.target, file), text);
   }
   const dirBaseline = path.join(dirFindings.target, ".plumb-baseline.json");
   const found = { "MER-TO-909\tgenerated/rivet": 1, "MER-TO-909\tgenerated/missing.txt": 1 };
-  const hidden = { "MER-TO-909\tgenerated/rivet/rivet.ts": 1, "MER-TO-909\thidden.ts": 1 };
-  const dirEntries = { ...found, ...hidden, "MER-TO-909\tgenerated/old.ts": 2, "MER-TO-909\tgone/missing.ts": 4 };
-  // A directory pattern hides the files under it, not the directory's own entry.
-  for (const [exclude, written, keeping] of [
-    ["generated/", { ...found, ...hidden, "MER-TO-909\tgenerated/old.ts": 2 }, 4],
-    ["generated/rivet/", { ...found, ...hidden }, 2],
-  ]) {
-    fs.writeFileSync(dirBaseline, JSON.stringify({ version: 1, entries: dirEntries }));
+  const persistent = { "MER-TO-909\thidden.ts": 1, "MER-TO-909\tnode_modules/dep/index.ts": 1 };
+  const dirEntries = { ...found, ...persistent, "MER-TO-909\tgenerated/rivet/rivet.ts": 1, "MER-TO-909\tgenerated/old.ts": 2, "MER-TO-909\tgone/missing.ts": 4 };
+  const writes = (entries, args, written, keeping) => {
+    const label = args.join(" ") || "full";
+    fs.writeFileSync(dirBaseline, JSON.stringify({ version: 1, entries }));
     for (let write = 1; write <= 3; write++) {
-      const out = dirFindings.run("--rule", "MER-TO-909", "--exclude", exclude, "--write-baseline", dirBaseline);
+      const out = dirFindings.run("--rule", "MER-TO-909", ...args, "--write-baseline", dirBaseline);
       assert.equal(out.status, 0, out.stderr);
-      assert.match(out.stdout, new RegExp(`baseline written — 2 findings across ${Object.keys(written).length} \\(rule,path\\) keys, keeping ${keeping} held for rules or files this run left out$`, "m"), `${exclude} write ${write}`);
-      assert.deepEqual(JSON.parse(fs.readFileSync(dirBaseline, "utf8")).entries, written, `${exclude} write ${write}`);
+      const held = keeping ? `, keeping ${keeping} held for rules or files this run left out` : "";
+      assert.match(out.stdout, new RegExp(`baseline written — 2 findings across ${Object.keys(written).length} \\(rule,path\\) keys${held}$`, "m"), `${label} write ${write}`);
+      assert.deepEqual(JSON.parse(fs.readFileSync(dirBaseline, "utf8")).entries, written, `${label} write ${write}`);
     }
-  }
+  };
+  // A directory pattern excludes the files under it, not the directory's own entry.
+  writes(dirEntries, ["--exclude", "generated/"], { ...found, "MER-TO-909\tgenerated/rivet/rivet.ts": 1, "MER-TO-909\tgenerated/old.ts": 2 }, 3);
+  writes(dirEntries, ["--exclude", "generated/rivet/"], { ...found, "MER-TO-909\tgenerated/rivet/rivet.ts": 1 }, 1);
+  writes(dirEntries, [], found, 0);
+  // In Git, a gitignored file is as unreportable, whatever --exclude says of it.
+  fs.writeFileSync(path.join(dirFindings.target, ".gitignore"), "built/\n");
+  spawnSync("git", ["init", "-q"], { cwd: dirFindings.target });
+  writes({ ...found, ...persistent, "MER-TO-909\tbuilt/out.ts": 1 }, ["--exclude", "built/"], found, 0);
 });
 
 test("self-test: a check that crashes on its good fixture is an ERROR, not clean", () => {
@@ -1204,13 +1211,13 @@ test("MER-RV-024: a convention it can't check exits 2 with a reason, so a --ci b
   fs.symlinkSync(process.execPath, path.join(bin, "node"));
   const noTask = run(repo([], { "Taskfile.yml": taskfile }), { PATH: bin });
   assert.equal(noTask.status, 2, noTask.stderr);
-  assert.match(noTask.stderr, /task \(go-task\) not on PATH/);
+  assert.match(noTask.stderr, /MER-RV-024: task \(go-task\) not on PATH — cannot check/);
   // A `task` that isn't go-task is never asked to run the generator.
   fs.writeFileSync(path.join(bin, "task"), "#!/bin/sh\necho 3.1.0\n");
   fs.chmodSync(path.join(bin, "task"), 0o755);
   const otherTask = run(repo([], { "Taskfile.yml": taskfile }), { PATH: bin });
   assert.equal(otherTask.status, 2, otherTask.stderr);
-  assert.match(otherTask.stderr, /task \(go-task\) not on PATH/);
+  assert.match(otherTask.stderr, /MER-RV-024: `task` on PATH is not go-task — cannot check/);
   // An empty --output is unresolved, not the next line's first word.
   const unresolved = run(repo([], { "Taskfile.yml": `${taskfile.replace("generated/rivet", "{{.OUT}}")}      - ./fake-rivet --check\n` }));
   assert.equal(unresolved.status, 2, unresolved.stderr);
@@ -1260,26 +1267,31 @@ test("baseline: shrinking is reported and suggests ratcheting down", () => {
   // fix the violation → suppressed < baseline total → shrink message
   fs.rmSync(path.join(r, "api"), { recursive: true });
   fs.writeFileSync(path.join(r, "App.csproj"), "<Project/>\n");
+  // The hint names the command that works: the file given to --baseline, in its place…
+  const ratchets = (out, file) => out.stdout.includes(` — shrunk; re-run with --write-baseline ${file} in place of --baseline to ratchet down)\n`);
   const out = plumb(r, "--baseline", bl);
   assert.equal(out.status, 0);
-  assert.match(out.stdout, /shrunk; re-run --write-baseline/);
+  assert.ok(ratchets(out, bl), out.stdout);
+  // …or, with none given, the discovered one by its path from the current directory, absolute when it's outside.
+  assert.ok(plumb(r).stdout.includes(` — shrunk; re-run with --write-baseline ${bl} to ratchet down)\n`));
+  const inside = spawnSync(PLUMB, ["."], { cwd: r, encoding: "utf8" });
+  assert.ok(inside.stdout.includes(" — shrunk; re-run with --write-baseline .plumb-baseline.json to ratchet down)\n"), inside.stdout);
   // A narrowed run compares only the entries of the rules it ran, and the same hint holds: a narrowed
   // --write-baseline keeps every other rule's entries.
-  const hint = /shrunk; re-run --write-baseline to ratchet down\)$/m;
   const focused = plumb(r, "--baseline", bl, "--rule", "MER-BE-001");
   assert.equal(focused.status, 0, focused.stderr);
   assert.match(focused.stdout, /baselined by \.plumb-baseline\.json/);
   assert.doesNotMatch(focused.stdout, /shrunk/);
-  assert.match(plumb(r, "--baseline", bl, "--rule", "MER-BE-005").stdout, hint);
-  assert.match(plumb(r, "--baseline", bl, "--pack", "BE").stdout, hint);
+  assert.ok(ratchets(plumb(r, "--baseline", bl, "--rule", "MER-BE-005"), bl));
+  assert.ok(ratchets(plumb(r, "--baseline", bl, "--pack", "BE"), bl));
   assert.doesNotMatch(plumb(r, "--baseline", bl, "--pack", "FE").stdout, /shrunk/);
   // --exclude hides its files from every rule, so only their entries can't tell; a shrink among the rest still shows.
-  assert.match(plumb(r, "--baseline", bl, "--exclude", "docs/**").stdout, hint);
+  assert.ok(ratchets(plumb(r, "--baseline", bl, "--exclude", "docs/**"), bl));
   // A CI-only rule's entries don't hide a real shrink in a run without --ci…
   const withCiOnly = JSON.parse(fs.readFileSync(bl, "utf8"));
   fs.writeFileSync(bl, JSON.stringify({ ...withCiOnly, entries: { ...withCiOnly.entries, "MER-RV-024\tweb/package.json": 1 } }));
-  assert.match(plumb(r, "--baseline", bl).stdout, hint);
-  assert.match(plumb(r, "--baseline", bl, "--rule", "MER-BE-005", "--ci").stdout, hint);
+  assert.ok(ratchets(plumb(r, "--baseline", bl), bl));
+  assert.ok(ratchets(plumb(r, "--baseline", bl, "--rule", "MER-BE-005", "--ci"), bl));
   // …nor count as one when they're the only entries that run couldn't produce.
   const kept = repo(["MER-BE-005"], { "App.csproj": "<Project/>\n" });
   const keptBaseline = path.join(kept, ".plumb-baseline.json");
@@ -1292,19 +1304,20 @@ test("baseline: shrinking is reported and suggests ratcheting down", () => {
   assert.doesNotMatch(local.stdout, /shrunk/);
   // An entry for a rule the catalogue no longer has can only go, so it counts as shrunk.
   fs.writeFileSync(keptBaseline, JSON.stringify({ ...written, entries: { ...written.entries, "MER-BE-999\tgone.cs": 3 } }));
-  assert.match(plumb(kept, "--baseline", keptBaseline).stdout, /shrunk; re-run --write-baseline/);
+  assert.ok(ratchets(plumb(kept, "--baseline", keptBaseline), keptBaseline));
   // Excluded, it wasn't checked, and the entries that were all came back.
   fs.writeFileSync(path.join(kept, "notes.txt"), "x\n");
   fs.writeFileSync(keptBaseline, JSON.stringify({ ...written, entries: { ...written.entries, "MER-BE-999\tnotes.txt": 3 } }));
-  assert.match(plumb(kept, "--baseline", keptBaseline).stdout, /shrunk; re-run --write-baseline/);
+  assert.ok(ratchets(plumb(kept, "--baseline", keptBaseline), keptBaseline));
   const keptExcluded = plumb(kept, "--baseline", keptBaseline, "--exclude", "notes.txt");
   assert.equal(keptExcluded.status, 0, keptExcluded.stderr);
   assert.match(keptExcluded.stdout, /baselined by \.plumb-baseline\.json/);
   assert.doesNotMatch(keptExcluded.stdout, /shrunk/);
   // A finding no pattern hides (at a directory) doesn't stand in for an entry that didn't come back, and an entry
-  // whose file .plumbignore or --exclude hid, a directory pattern's included, can't tell.
+  // whose file --exclude hid, a directory pattern's included, can't tell. One whose file a persistent exclusion hides
+  // (.plumbignore, a fallback skip folder, .gitignore) can never come back, so it shows a shrink.
   const dirFinding = isolatedPlumb({ "MER-TO-909-dir.mjs": producer("MER-TO-909").replace("result.txt:1", "generated/rivet:0") });
-  for (const [file, text] of [["generated/rivet/rivet.ts", "// generated\n"], ["generated/old.ts", "// old\n"], ["hidden.ts", "// hidden\n"], [".plumbignore", "hidden.ts\n"]]) {
+  for (const [file, text] of [["generated/rivet/rivet.ts", "// generated\n"], ["generated/old.ts", "// old\n"], ["hidden.ts", "// hidden\n"], [".plumbignore", "hidden.ts\n"], ["node_modules/dep/index.ts", "// dependency\n"], ["built/out.ts", "// built\n"]]) {
     fs.mkdirSync(path.dirname(path.join(dirFinding.target, file)), { recursive: true });
     fs.writeFileSync(path.join(dirFinding.target, file), text);
   }
@@ -1312,20 +1325,26 @@ test("baseline: shrinking is reported and suggests ratcheting down", () => {
   fs.writeFileSync(dirBaseline, JSON.stringify({ version: 1, entries: { "MER-TO-909\tgenerated/rivet": 1, "MER-TO-909\tresult.txt": 1 } }));
   const absorbed = dirFinding.run("--rule", "MER-TO-909", "--baseline", dirBaseline, "--exclude", "generated/");
   assert.equal(absorbed.status, 0, absorbed.stderr);
-  assert.match(absorbed.stdout, /\+1 baselined by \.plumb-baseline\.json, baseline holds 2 — shrunk; re-run --write-baseline to ratchet down\)$/m);
+  assert.match(absorbed.stdout, /\+1 baselined by \.plumb-baseline\.json, baseline holds 2 — shrunk; /);
+  assert.ok(ratchets(absorbed, dirBaseline), absorbed.stdout);
   const shrinkOf = (entries, ...args) => {
     fs.writeFileSync(dirBaseline, JSON.stringify({ version: 1, entries: { "MER-TO-909\tgenerated/rivet": 1, ...entries } }));
     const out = dirFinding.run("--rule", "MER-TO-909", "--baseline", dirBaseline, ...args);
     assert.equal(out.status, 0, out.stderr);
     assert.match(out.stdout, /\+1 baselined by \.plumb-baseline\.json/);
-    return /shrunk; re-run --write-baseline to ratchet down\)$/m.test(out.stdout);
+    return ratchets(out, dirBaseline);
   };
   assert.equal(shrinkOf({ "MER-TO-909\tgenerated/old.ts": 1 }, "--exclude", "generated/"), false);
   assert.equal(shrinkOf({ "MER-TO-909\tgenerated/rivet/rivet.ts": 1 }, "--exclude", "generated/rivet/"), false);
   assert.equal(shrinkOf({ "MER-TO-909\tgenerated/old.ts": 1 }, "--exclude", "generated/rivet/"), true);
-  assert.equal(shrinkOf({ "MER-TO-909\thidden.ts": 1 }), false);
+  assert.equal(shrinkOf({ "MER-TO-909\thidden.ts": 1 }), true);
+  assert.equal(shrinkOf({ "MER-TO-909\tnode_modules/dep/index.ts": 1 }), true);
   // A missing file is never hidden, so its entry is checked even under a pattern that covers it.
   assert.equal(shrinkOf({ "MER-TO-909\tgenerated/gone.ts": 1 }, "--exclude", "generated/"), true);
+  fs.writeFileSync(path.join(dirFinding.target, ".gitignore"), "built/\n");
+  spawnSync("git", ["init", "-q"], { cwd: dirFinding.target });
+  assert.equal(shrinkOf({ "MER-TO-909\tbuilt/out.ts": 1 }, "--exclude", "built/"), true);
+  assert.equal(shrinkOf({ "MER-TO-909\thidden.ts": 1 }, "--exclude", "hidden.ts"), true);
 });
 
 test("baseline: --json emits only actionable findings; unreadable baseline → exit 2", () => {
@@ -1351,16 +1370,27 @@ test("baseline identity and suppression are unchanged for migrated findings", ()
 // positions never count. Line 16's route argument is the generated client's, but the id in its query is a copy.
 // Each crm-positions.ts and CrmLinks.vue line shows one kind of id position, some with several ids in it
 // (crm-positions.ts:15, 16 and 20, CrmLinks.vue:3 and 4); crm-positions.ts:55 only declares the component line 56
-// maps to. A key mapped to another server id (31, 51-53, 65, 72 and 74) or to a route (57-59, 62, 64, 66-69, 71, 74,
-// 76, and 73 and 75 through a branch or fallback: a value starting with `/`, `./` or `../`, a full URL, or a template
-// whose first text does) is a route table, not a label, and both ids of an id-to-id map are copies; a `new Map` or
-// `Object.fromEntries` entry's key counts however the result is used (64-66, 74), and an unquoted key only beside a
-// value that is an id too (70). Only a web asset's extension makes an asset, not a version's or a name's dot (76,
-// 78). A key mapped to a number (36) is flagged, an ordering or a limit alike, since a limit is a rule. Line 61's
-// "export" is meant as a label, but a value is judged by whether it equals an id, so "csv" mapped to it is flagged
-// too: the accepted trade-off, as route tables are the real harm. A link's MIME-shaped value (CrmLinks.vue:12-18:
-// static, bound, a template, a bare `v-bind` object's `to` or `href`, and a route location's `path`) is a relative
-// path, and a nested object in a `v-bind` (11) is data, not attributes. The good fixture's server declares
+// maps to. A key mapped to another server id (31, 51-53, 65, 72, 74, and 86 and 87 written with `.set` and at an
+// index) or to a route (57-59, 62, 64, 66-69, 71, 74, 76, 78, 85, and 73, 75 and 84 through a branch or fallback: a
+// value starting with `/`, `./` or `../`, a full or protocol-relative URL, or a template whose first text does) is a
+// route table, not a label, and both ids of an id-to-id map are copies; a `new Map` or `Object.fromEntries` entry's
+// key counts however the result is used (64-66, 74), and an unquoted key only beside a value with an id among its
+// results (70, 79-82: directly, in an array, in a branch, beside `??`). A key mapped to a value that may not be a
+// label is flagged: an unknown value `??` a label (77), a template of only substitutions (83), or a branch whose
+// other result is an id or route, even beside `undefined`, or that holds only `null` and `undefined` (84). Only a
+// web asset's extension makes an asset, not a version's or a name's dot (76, 78), nor a protocol-relative URL's host
+// (85). A key mapped to a number (36) is
+// flagged, an ordering or a limit alike, since a limit is a rule. Line 61's "export" is meant as a label, but a
+// value is judged by whether it equals an id, so "csv" mapped to it is flagged too: the accepted trade-off, as route
+// tables are the real harm. Navigating from script (90-93: `navigateTo`, `router.push`/`.replace`, with a path, a
+// route location's `path`, `params` or `query`; useCrmDestination.ts:12-14, a router and its methods bound by name
+// from `useRouter()`) builds a link like `to` does, and so does a query built with `URLSearchParams` (94-98: a URL's
+// `searchParams.set`/`.append`, `new URLSearchParams` from an object, entries or a string, and a name bound to one).
+// A link's MIME-shaped value (CrmLinks.vue:12-18: static, bound, a template, a bare `v-bind` object's `to` or `href`,
+// and a route location's `path`) is a relative path, a nested object in a `v-bind` (11) is data, not attributes, and a link's route
+// location `params` and `query` values (19, 20, 24, also in an array), its query string (21, 22, and 25 and 29
+// without a `/`), its `hash` (26), an in-page `href` (27), a `$router.push` in a handler (23), and a `push` bound from
+// `useRouter()` in the script (28) build the link from an id. The good fixture's server declares
 // ExportId = "export", and its crm-copy.ts and CrmConflict.vue use "export" as wording and stay clean: `noun:`,
 // `title:`, `typeLabel:`, a native element's `class=`, `title=`, `data-testid=` and `id=`, a component's `id=`/`:id=`
 // and `noun=`/`:noun=`, the `id` and `type` keys of an argument-less `v-bind` object (attributes, like
@@ -1372,13 +1402,17 @@ test("baseline identity and suppression are unchanged for migrated findings", ()
 // `new Map` entries, through `as const`, `<const>`, `<string>` and `satisfies`) are presentation, including
 // "Read/Write", whose `/` doesn't make it a route, and a component's name as a string ("AcmeCrmPanel"): the accepted
 // reading, as Nuxt dispatches on the imported component, which is flagged (56). Labels too: a choice between labels,
-// a translation (`t("acme")`, `i18n.t(…)`, also beside `??`), and an asset path, known by a web asset's extension
-// (also `.csv`, though "csv" is an id), at a full URL or in a bound object. Unquoted keys beside wording are field
-// names (`{ email: true }`), a branched `v-on` object's keys are events, and "text/csv" is a MIME type, not a path to
-// the "csv" id.
+// a translation (`t("acme")`, `i18n.t(…)`, `$t(…)` in a bound object, also beside `??` or through `!`), a label beside
+// `null` or `undefined`, and an asset path, known by a web asset's extension (also `.csv`, though "csv" is an id),
+// at a full or protocol-relative URL, with a fragment, or in a bound object. A label table written with `.set`, at
+// an index or by `Object.fromEntries` is presentation like a `new Map`. Unquoted keys beside wording are field names
+// (`{ email: true }`, `{ csv: "Comma separated" }`), a branched `v-on` object's keys are events, a `path` in a
+// non-link prop (`:meta`) is no link, nor is a query-shaped `:title` without a `/`, `.push` onto a list, a `push`
+// not bound from `useRouter()` and a form's `.append` aren't links, and "text/csv" is a MIME type, not a path to the
+// "csv" id.
 test("MER-CP-001 names each copied id's qualified owner at its exact location", () => {
   const findings = JSON.parse(plumb(path.join(FIX, "MER-CP-001", "bad"), "--rule", "MER-CP-001", "--json").stdout);
-  const owner = (finding) => finding.message.match(/ is (\S+) on the server/)?.[1];
+  const owner = (finding) => finding.message.match(/copies the server's (\S+) —/)?.[1];
   assert.deepEqual(findings.map((finding) => [finding.location, owner(finding)]), [
     ["ui/app/pages/crm/components/CrmLinks.vue:10", "CrmIntegration.ExportId"], // v-bind object, a link's `to`
     ["ui/app/pages/crm/components/CrmLinks.vue:11", "CrmIntegration.Webhooks.HandlerId"], // nested object in a v-bind, id-named key
@@ -1389,7 +1423,18 @@ test("MER-CP-001 names each copied id's qualified owner at its exact location", 
     ["ui/app/pages/crm/components/CrmLinks.vue:16", "TestCrmConnectionUseCase.ProbeId"], // a route location's `path` in a v-bind object
     ["ui/app/pages/crm/components/CrmLinks.vue:17", "CrmIntegration.IntegrationId"], // MIME-shaped template bound to a link
     ["ui/app/pages/crm/components/CrmLinks.vue:18", "CrmConnector.ConnectorId"], // MIME-shaped `href` in a v-bind object
+    ["ui/app/pages/crm/components/CrmLinks.vue:19", "CrmIntegration.IntegrationId"], // a link's route-location `params` value
     ["ui/app/pages/crm/components/CrmLinks.vue:2", "CrmIntegration.IntegrationId"], // static href
+    ["ui/app/pages/crm/components/CrmLinks.vue:20", "CrmConnector.ConnectorId"], // a link's route-location `query` value
+    ["ui/app/pages/crm/components/CrmLinks.vue:21", "CrmIntegration.IntegrationId"], // a static link's query value
+    ["ui/app/pages/crm/components/CrmLinks.vue:22", "CrmIntegration.Webhooks.HandlerId"], // a bound link's query value after `&`
+    ["ui/app/pages/crm/components/CrmLinks.vue:23", "TestCrmConnectionUseCase.ProbeId"], // `$router.push` in a handler
+    ["ui/app/pages/crm/components/CrmLinks.vue:24", "CrmConnector.ConnectorId"], // a listed `params` value in a v-bind link
+    ["ui/app/pages/crm/components/CrmLinks.vue:25", "CrmIntegration.IntegrationId"], // a query-only link, no `/`
+    ["ui/app/pages/crm/components/CrmLinks.vue:26", "CrmConnector.ConnectorId"], // a link's route-location `hash`
+    ["ui/app/pages/crm/components/CrmLinks.vue:27", "CrmIntegration.Webhooks.HandlerId"], // an in-page `href` fragment
+    ["ui/app/pages/crm/components/CrmLinks.vue:28", "TestCrmConnectionUseCase.ProbeId"], // `push` bound from useRouter() in the script
+    ["ui/app/pages/crm/components/CrmLinks.vue:29", "CrmIntegration.IntegrationId"], // a query-only template link
     ["ui/app/pages/crm/components/CrmLinks.vue:3", "CrmConnector.ConnectorId"], // id-named static attributes
     ["ui/app/pages/crm/components/CrmLinks.vue:3", "CrmIntegration.Webhooks.HandlerId"],
     ["ui/app/pages/crm/components/CrmLinks.vue:4", "CrmIntegration.Webhooks.HandlerId"], // id-named bound attributes
@@ -1399,6 +1444,9 @@ test("MER-CP-001 names each copied id's qualified owner at its exact location", 
     ["ui/app/pages/crm/components/CrmLinks.vue:7", "CrmIntegration.Webhooks.HandlerId"], // v-bind object, id-named key
     ["ui/app/pages/crm/components/CrmLinks.vue:8", "CrmIntegration.EmailChannelId"], // an HTML type on a component that isn't an input
     ["ui/app/pages/crm/components/CrmLinks.vue:9", "CrmIntegration.IntegrationId"], // v-bind object, a component's `type`
+    ["ui/app/pages/crm/composables/useCrmDestination.ts:12", "CrmIntegration.IntegrationId"], // a router bound from useRouter()
+    ["ui/app/pages/crm/composables/useCrmDestination.ts:13", "CrmConnector.ConnectorId"], // a destructured `push`
+    ["ui/app/pages/crm/composables/useCrmDestination.ts:14", "CrmIntegration.Webhooks.HandlerId"], // a renamed `replace`
     ["ui/app/pages/crm/composables/useCrmDestination.ts:6", "CrmIntegration.IntegrationId"], // ref(…)'s initial value, held by a variable
     ["ui/app/pages/crm/index.vue:12", "CrmIntegration.IntegrationId"], // compared against a literal-typed value
     ["ui/app/pages/crm/index.vue:13", "CrmIntegration.IntegrationId"], // hand-built /api/ URL
@@ -1494,7 +1542,38 @@ test("MER-CP-001 names each copied id's qualified owner at its exact location", 
     ["ui/app/pages/crm/logic/crm-positions.ts:76", "CrmIntegration.IntegrationId"], // a version's dot isn't an asset extension
     ["ui/app/pages/crm/logic/crm-positions.ts:77", "CrmIntegration.Webhooks.HandlerId"], // an unknown value `??` a label
     ["ui/app/pages/crm/logic/crm-positions.ts:78", "CrmIntegration.IntegrationId"], // nor is a name's (`/users/john.doe`)
+    ["ui/app/pages/crm/logic/crm-positions.ts:79", "CrmIntegration.CsvFormatId"], // unquoted id key, an id listed in its value
+    ["ui/app/pages/crm/logic/crm-positions.ts:79", "CrmIntegration.ExportId"],
     ["ui/app/pages/crm/logic/crm-positions.ts:8", "CrmIntegration.Webhooks.HandlerId"], // case label
+    ["ui/app/pages/crm/logic/crm-positions.ts:80", "CrmIntegration.CsvFormatId"], // unquoted id key, an id in a branch
+    ["ui/app/pages/crm/logic/crm-positions.ts:80", "CrmIntegration.ExportId"],
+    ["ui/app/pages/crm/logic/crm-positions.ts:81", "CrmIntegration.EmailChannelId"], // unquoted id key, ids in both branches
+    ["ui/app/pages/crm/logic/crm-positions.ts:81", "CrmIntegration.ExportId"],
+    ["ui/app/pages/crm/logic/crm-positions.ts:81", "CrmIntegration.CsvFormatId"],
+    ["ui/app/pages/crm/logic/crm-positions.ts:82", "CrmIntegration.CsvFormatId"], // unquoted id key, an `as const` id beside `??`
+    ["ui/app/pages/crm/logic/crm-positions.ts:82", "CrmIntegration.ExportId"],
+    ["ui/app/pages/crm/logic/crm-positions.ts:83", "CrmIntegration.IntegrationId"], // templates of only substitutions aren't labels
+    ["ui/app/pages/crm/logic/crm-positions.ts:83", "CrmConnector.ConnectorId"],
+    ["ui/app/pages/crm/logic/crm-positions.ts:84", "CrmIntegration.IntegrationId"], // a label `:` an id
+    ["ui/app/pages/crm/logic/crm-positions.ts:84", "CrmIntegration.Webhooks.HandlerId"],
+    ["ui/app/pages/crm/logic/crm-positions.ts:84", "CrmConnector.ConnectorId"], // `undefined` `:` a route
+    ["ui/app/pages/crm/logic/crm-positions.ts:84", "TestCrmConnectionUseCase.ProbeId"], // `null` `:` `undefined`, no label at all
+    ["ui/app/pages/crm/logic/crm-positions.ts:85", "CrmIntegration.IntegrationId"], // a protocol-relative URL's host isn't an asset
+    ["ui/app/pages/crm/logic/crm-positions.ts:86", "CrmIntegration.IntegrationId"], // `.set` of an id to an id
+    ["ui/app/pages/crm/logic/crm-positions.ts:86", "CrmIntegration.Webhooks.HandlerId"],
+    ["ui/app/pages/crm/logic/crm-positions.ts:87", "CrmConnector.ConnectorId"], // an id assigned at an id's index
+    ["ui/app/pages/crm/logic/crm-positions.ts:87", "TestCrmConnectionUseCase.ProbeId"],
+    ["ui/app/pages/crm/logic/crm-positions.ts:90", "CrmIntegration.IntegrationId"], // navigateTo(…)
+    ["ui/app/pages/crm/logic/crm-positions.ts:91", "CrmConnector.ConnectorId"], // router.push(…)
+    ["ui/app/pages/crm/logic/crm-positions.ts:92", "CrmIntegration.Webhooks.HandlerId"], // router.replace({ path })
+    ["ui/app/pages/crm/logic/crm-positions.ts:93", "TestCrmConnectionUseCase.ProbeId"], // router.push's `params` and `query`
+    ["ui/app/pages/crm/logic/crm-positions.ts:93", "CrmIntegration.IntegrationId"],
+    ["ui/app/pages/crm/logic/crm-positions.ts:94", "CrmIntegration.IntegrationId"], // searchParams.set(…)
+    ["ui/app/pages/crm/logic/crm-positions.ts:94", "CrmConnector.ConnectorId"], // searchParams.append(…)
+    ["ui/app/pages/crm/logic/crm-positions.ts:95", "CrmIntegration.Webhooks.HandlerId"], // new URLSearchParams({ … })
+    ["ui/app/pages/crm/logic/crm-positions.ts:96", "TestCrmConnectionUseCase.ProbeId"], // new URLSearchParams([[…]])
+    ["ui/app/pages/crm/logic/crm-positions.ts:97", "CrmIntegration.IntegrationId"], // new URLSearchParams("…")
+    ["ui/app/pages/crm/logic/crm-positions.ts:98", "CrmConnector.ConnectorId"], // .append on a name bound to URLSearchParams
   ]);
   const good = JSON.parse(plumb(path.join(FIX, "MER-CP-001", "good"), "--rule", "MER-CP-001", "--json").stdout);
   assert.deepEqual(good, []);
@@ -1560,7 +1639,7 @@ test("MER-CP-001 reads constrained generics and `new` consts, and test paths rel
     "tests/fixtures/basic/pages/index.vue": '<script setup lang="ts">\nconst id = "a-id";\n</script>\n',
   });
   const findings = JSON.parse(plumb(r, "--rule", "MER-CP-001", "--json").stdout);
-  assert.deepEqual(findings.map((finding) => [finding.location, finding.message.match(/ is (\S+) on the server/)?.[1]]), [
+  assert.deepEqual(findings.map((finding) => [finding.location, finding.message.match(/copies the server's (\S+) —/)?.[1]]), [
     ["src/web/pages/index.vue:2", "Handlers.AId"],
     ["src/web/pages/index.vue:2", "Handlers.BId"],
   ]);
@@ -1578,5 +1657,5 @@ test("MER-CP-001 takes no server ids from a test project, known by metadata, and
     "app/pages/index.vue": '<script setup lang="ts">\nconst ids = ["fixture-id", "hook-id", "crm-id"];\n</script>\n',
   });
   const findings = JSON.parse(plumb(r, "--rule", "MER-CP-001", "--json").stdout);
-  assert.deepEqual(findings.map((finding) => finding.message.match(/ is (\S+) on the server/)?.[1]), ["Crm.Hooks.HookId", "Crm.CrmId"]);
+  assert.deepEqual(findings.map((finding) => finding.message.match(/copies the server's (\S+) —/)?.[1]), ["Crm.Hooks.HookId", "Crm.CrmId"]);
 });

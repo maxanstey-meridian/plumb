@@ -48,6 +48,22 @@ public sealed class PatternLabelStatus
     }
 }
 
+// after a type pattern whose type argument is nullable, its `?` no ?:,
+public sealed class NullableLabelStatus
+{
+    public IResult Send(RivetActionResult adapted, object kind)
+    {
+        switch (kind)
+        {
+            case List<int?> list:
+                var status = adapted.StatusCode;
+                return Results.StatusCode(status);
+            default:
+                return Results.Ok();
+        }
+    }
+}
+
 // and after `default:`.
 public sealed class DefaultLabelStatus
 {

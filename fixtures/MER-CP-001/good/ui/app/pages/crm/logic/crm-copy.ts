@@ -27,7 +27,7 @@ export const integrationBadges = { "acme-crm": <const>"Beta" };
 export const integrationShortNames = new Map([["acme-crm", <string>"Acme"]]);
 export const formatNames = { "csv": "Spreadsheet" };
 export const formatHints = new Map([["csv", "Opens in a spreadsheet"]]);
-// A `/` in wording isn't a route: only a value starting with `/` (or `${…}/`) maps an id to one.
+// A `/` in wording isn't a route: only a value starting with `/`, `./` or `../` (or `${…}/`), or a URL, maps an id to one.
 export const integrationAccess = { "acme-crm": "Read/Write" };
 export const integrationAccessLabels = new Map([["acme-crm", "Read/Write"]]);
 // A component's name as a string is a label; dispatch on the imported component is flagged (crm-positions.ts:56).
@@ -36,14 +36,28 @@ export const integrationPanelNames = { "acme-crm": "AcmeCrmPanel" };
 export const exportPrompt = (mode: string) => `Choose ${mode}/export`;
 export const csvType = "text/csv";
 export const csvTypeFor = (header: boolean) => `text/csv${header ? ";header=present" : ""}`;
-// An asset is presentation, by its web asset extension (even "csv", a server id): a logo is an icon, also at a URL.
+// A link to a file, known by its web asset extension (even "csv", a server id), also at a URL or with a fragment, is an
+// asset or a download, not a route: the owner-accepted trade-off.
 export const integrationLogos = { "acme-crm": "/logos/acme.svg" };
 export const integrationLogoMap = new Map([["acme-crm", "/logos/acme.svg?v=2"]]);
 export const integrationLogoAt = (base: string) => ({ "acme-crm": `${base}/acme.png` });
-export const integrationCdnLogos = { "acme-crm": "https://cdn.example/acme.svg" };
+export const integrationCdnLogos = { "acme-crm": "https://cdn.example/acme.svg", "csv": "//cdn.example/csv.svg" };
+export const integrationLogoMarks = { "acme-crm": "/logos/acme.svg#mark" };
 export const integrationExports = { "acme-crm": "/exports/acme.csv" };
 // A choice between labels, and a translation, are labels; unquoted keys are field names unless both sides are ids.
 export const integrationStatus = (busy: boolean) => ({ "acme-crm": busy ? "Connecting" : "Acme CRM" });
 export const integrationCaptions = (t: (key: string) => string) => ({ "acme-crm": t("acme"), "csv": t("csv") ?? "Spreadsheet" });
 export const formatCaptions = (i18n: { t: (key: string) => string }) => ({ "csv": i18n.t("format.csv") });
-export const formatFlags = { email: true, csv: "Comma separated" };
+export const fieldRules = { required: true, email: true };
+export const exportOptions = { header: true, csv: "Comma separated" };
+// A null or undefined branch is no answer, so the label beside it decides; a `!` passes a label through.
+export const integrationBetaBadges = (isBeta: boolean, t: (key: string) => string | undefined) =>
+  ({ "acme-crm": isBeta ? "Beta" : undefined, "csv": t("csv.badge") ?? null, ["export"]: t("export.badge")! });
+// The same label table written with `.set`, at an index, or from entries.
+export const setLabels = (labels: Map<string, string>) => labels.set("acme-crm", "Acme CRM");
+export const indexLabels = (labels: Record<string, string>) => { labels["acme-crm"] = "Acme CRM"; };
+export const entryLabels = Object.fromEntries([["acme-crm", "Acme CRM"]]);
+// A `.push` onto a list, a `push` not bound from `useRouter()`, and a form's `.append` aren't links.
+export const queueExport = (steps: string[]) => steps.push("export");
+export const queueStep = (push: (step: string) => number) => push("export");
+export const appendExport = (form: FormData) => form.append("format", "export");

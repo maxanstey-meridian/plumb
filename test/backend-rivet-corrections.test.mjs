@@ -220,11 +220,19 @@ test("MER-RV-007 flags every app-written RivetResult extension named like an ada
     // sibling; the `new` modifier on a method, whose block's statements stay its own; and adapter helpers whose
     // Match arms are async or declare their return type, or that hold a where-constrained local function; and a
     // RivetActionResult or RivetResult of the app's own, under another qualifier, global:: alone or an alias of one
-    // (an extension off an alias of the app's RivetResult is no bridge).
+    // (an extension off an alias of the app's RivetResult is no bridge), or bare where the app's own type of that
+    // name is in scope (declared around the code, or in its namespace in another file). Also: a qualifier or a
+    // receiver whose dot ends a line, which still names another type's namesake or another object's member; a helper that reads and logs the adapter's output and
+    // returns the adapter; Match arms under a nullable type argument; and a lambda's block in a logging statement,
+    // whose result is the lambda's own.
     assert.equal(run("MER-RV-007", "good"), "");
     const output = run("MER-RV-007", "bad");
     const locations = [...output.matchAll(/^MER-RV-007\twarn\t(\S+)/gm)].map((match) => match[1]).sort();
     assert.deepEqual(locations, [
+        // A bridge off RivetResult under its project's `global using` alias, and the adapter's output under the
+        // project's `global using` alias of Rivet's namespace.
+        "Host/HostExtensions.cs:10",
+        "Host/HostExtensions.cs:4",
         // A top-level statement under the file's own alias.
         "Host/Program.cs:5",
         // A plain static helper that copies the adapter's output into an ObjectResult.
@@ -247,12 +255,19 @@ test("MER-RV-007 flags every app-written RivetResult extension named like an ada
         // A namespace block's alias, used in that namespace and in one nested in it.
         "Modules/Common/NestedAliases.cs:14",
         "Modules/Common/NestedAliases.cs:6",
+        // Bridges off RivetResult qualified by Rivet's namespace, with and without global::.
+        "Modules/Common/QualifiedResultExtensions.cs:10",
+        "Modules/Common/QualifiedResultExtensions.cs:4",
         "Modules/Common/ResultExtensions.Actions.cs:1",
         "Modules/Common/ResultExtensions.cs:1",
         // An app's own `namespace Rivet.Shims`: only `Rivet` itself is Rivet's.
         "Modules/Common/RivetNamedShim.cs:4",
         // The app namespace after a `namespace Rivet { }` block; the shim itself is Rivet's.
         "Modules/Common/Shims.cs:12",
+        // Helpers that return the adapter on every path but write its status to the response, read bare or under
+        // an alias.
+        "Modules/Common/StatusWriterExtensions.cs:18",
+        "Modules/Common/StatusWriterExtensions.cs:7",
         // A record after a class, its reference in the record's parameter list.
         "Modules/Common/WrapperRecord.cs:9",
         // A property's `get =>` that returns a read, called into a result.
@@ -268,11 +283,13 @@ test("MER-RV-007 flags every app-written RivetResult extension named like an ada
         // A bridge class, then a struct that copies the adapter's output: one finding each.
         "Modules/Orders/BridgeThenStruct.cs:1",
         "Modules/Orders/BridgeThenStruct.cs:7",
-        // A declaration after `case 1:`, a `when` with a ?: of its own, a property pattern's label and `default:`.
+        // A declaration after `case 1:`, a `when` with a ?: of its own, a property pattern's label, a type pattern
+        // with a nullable type argument and `default:`.
         "Modules/Orders/CaseLabels.cs:20",
         "Modules/Orders/CaseLabels.cs:36",
         "Modules/Orders/CaseLabels.cs:4",
         "Modules/Orders/CaseLabels.cs:52",
+        "Modules/Orders/CaseLabels.cs:68",
         // A local bound to `new RivetActionResult(…)`.
         "Modules/Orders/ConstructedAdapter.cs:4",
         // A controller deriving from the app's own base; the app's own result set on `ctx.Result`; a response
@@ -286,11 +303,18 @@ test("MER-RV-007 flags every app-written RivetResult extension named like an ada
         "Modules/Orders/GuardedArm.cs:4",
         // A field that binds the adapter's output for every member.
         "Modules/Orders/HeldRelay.cs:4",
+        // A result built around a lambda's block, the read after the block: an expression body and a `return`.
+        "Modules/Orders/LambdaArgumentResult.cs:10",
+        "Modules/Orders/LambdaArgumentResult.cs:4",
         // Copied through a local, then built into a result.
         "Modules/Orders/LocalCopyFilter.cs:4",
         // An overload picked by its argument count, and a member's local function, returning a read.
         "Modules/Orders/MemberHelpers.cs:14",
         "Modules/Orders/MemberHelpers.cs:4",
+        // The adapter's output under a file's alias of Rivet's namespace, and a bridge off RivetResult qualified by
+        // it through `::`.
+        "Modules/Orders/NamespaceAliasRelay.cs:12",
+        "Modules/Orders/NamespaceAliasRelay.cs:6",
         // A nested reader hands the adapter's output back to the class around it, constructed in place or held
         // in a local.
         "Modules/Orders/NestedReader.cs:15",
@@ -316,9 +340,13 @@ test("MER-RV-007 flags every app-written RivetResult extension named like an ada
         "Modules/Orders/ResponseWritingFilter.cs:4",
         // An endpoint filter's `is global::Rivet.RivetActionResult` pattern rebuilt as Results.Json.
         "Modules/Orders/ResultStatusFilter.cs:4",
-        // A sibling type's static helper that returns a read: bare, after a suffix of its namespace, after global::.
+        // A sibling type's helper that returns a read: static, bare, after a suffix of its namespace or after
+        // global::; through an instance constructed in place or handed in; and in a ?:'s arm.
         "Modules/Orders/SiblingReader.cs:15",
         "Modules/Orders/SiblingReader.cs:21",
+        "Modules/Orders/SiblingReader.cs:32",
+        "Modules/Orders/SiblingReader.cs:38",
+        "Modules/Orders/SiblingReader.cs:44",
         "Modules/Orders/SiblingReader.cs:9",
         // A struct-only file: once, at the struct.
         "Modules/Orders/StatusCopy.cs:4",
@@ -332,24 +360,33 @@ test("MER-RV-007 flags every app-written RivetResult extension named like an ada
         "Modules/Orders/TargetTypedRelay.cs:4",
         // A typed Results<…> union, spaces in its generics.
         "Modules/Orders/TypedResultExtensions.cs:1",
-        // A local reassigned from itself (after a lambda's block too), assigned only on a condition (in an if's
-        // braces or after else), and redeclared only inside a lambda.
+        // A local reassigned from itself (after a lambda's block in its arguments or in an initializer's braces too),
+        // assigned only on a condition (in an if's braces or after else), and redeclared only inside a lambda; and a
+        // lambda's own local read from the adapter after the outer one, read off a cast, is followed.
+        "Modules/Orders/WindowEnds.cs:106",
         "Modules/Orders/WindowEnds.cs:18",
         "Modules/Orders/WindowEnds.cs:34",
         "Modules/Orders/WindowEnds.cs:4",
         "Modules/Orders/WindowEnds.cs:46",
-        "Modules/Orders/WindowEnds.cs:59",
-        "Modules/Orders/WindowEnds.cs:73",
+        "Modules/Orders/WindowEnds.cs:64",
+        "Modules/Orders/WindowEnds.cs:77",
+        "Modules/Orders/WindowEnds.cs:91",
         // A top-level statement in Program.cs, at its own line, one calling a top-level local function that returns
-        // a read, and one calling a static helper of a type in the same file.
+        // a read, one calling a static helper of a type in the same file and one calling an instance's.
         "Program.cs:3",
         "Program.cs:4",
         "Program.cs:5",
+        "Program.cs:6",
+        // The adapter's output under the project's .csproj <Using> alias of Rivet's namespace, and a bridge off
+        // RivetResult under its alias of that.
+        "Relay/RelayTerminalExtensions.cs:10",
+        "Relay/RelayTerminalExtensions.cs:4",
         // The adapter's output under an alias only its own project's .csproj <Using> declares.
         "Relay/WrappedRelay.cs:4",
     ]);
     const copies = [...output.matchAll(/^MER-RV-007\twarn\t(\S+)\t(.+?) copies the StatusCode or Value of RivetActionResult/gm)].map((match) => `${match[1]} ${match[2]}`).sort();
     assert.deepEqual(copies, [
+        "Host/HostExtensions.cs:10 NamespaceAliasedHostRelay",
         "Host/Program.cs:5 This line",
         "Modules/Common/AdapterStatus.cs:1 AdapterStatus",
         "Modules/Common/CastRelay.cs:4 CastRelay",
@@ -368,7 +405,8 @@ test("MER-RV-007 flags every app-written RivetResult extension named like an ada
         "Modules/Orders/CaseLabels.cs:20 GuardedLabelStatus",
         "Modules/Orders/CaseLabels.cs:36 PatternLabelStatus",
         "Modules/Orders/CaseLabels.cs:4 CaseLabelStatus",
-        "Modules/Orders/CaseLabels.cs:52 DefaultLabelStatus",
+        "Modules/Orders/CaseLabels.cs:52 NullableLabelStatus",
+        "Modules/Orders/CaseLabels.cs:68 DefaultLabelStatus",
         "Modules/Orders/ConstructedAdapter.cs:4 ConstructedAdapter",
         "Modules/Orders/DerivedRelays.cs:21 EnvelopeFilter",
         "Modules/Orders/DerivedRelays.cs:33 LocalResponseFilter",
@@ -376,9 +414,12 @@ test("MER-RV-007 flags every app-written RivetResult extension named like an ada
         "Modules/Orders/GenericPattern.cs:4 GenericPattern",
         "Modules/Orders/GuardedArm.cs:4 GuardedArm",
         "Modules/Orders/HeldRelay.cs:4 HeldRelay",
+        "Modules/Orders/LambdaArgumentResult.cs:10 LambdaArgumentReturn",
+        "Modules/Orders/LambdaArgumentResult.cs:4 LambdaArgumentJson",
         "Modules/Orders/LocalCopyFilter.cs:4 LocalCopyFilter",
         "Modules/Orders/MemberHelpers.cs:14 PickedOverloadStatus",
         "Modules/Orders/MemberHelpers.cs:4 MemberLocalStatus",
+        "Modules/Orders/NamespaceAliasRelay.cs:6 NamespaceAliasRelay",
         "Modules/Orders/NestedReader.cs:15 NestedLocalReader",
         "Modules/Orders/NestedReader.cs:4 NestedReader",
         "Modules/Orders/NestedReaders.cs:15 CastNestedReader",
@@ -395,6 +436,9 @@ test("MER-RV-007 flags every app-written RivetResult extension named like an ada
         "Modules/Orders/ResultStatusFilter.cs:4 ResultStatusFilter",
         "Modules/Orders/SiblingReader.cs:15 NamespacedSiblingReader",
         "Modules/Orders/SiblingReader.cs:21 GlobalSiblingReader",
+        "Modules/Orders/SiblingReader.cs:32 SiblingInstanceReader",
+        "Modules/Orders/SiblingReader.cs:38 InjectedSiblingReader",
+        "Modules/Orders/SiblingReader.cs:44 ConditionalSiblingReader",
         "Modules/Orders/SiblingReader.cs:9 SiblingReader",
         "Modules/Orders/StatusCopy.cs:4 StatusCopy",
         "Modules/Orders/StatusHelper.cs:4 StatusHelper",
@@ -402,15 +446,19 @@ test("MER-RV-007 flags every app-written RivetResult extension named like an ada
         "Modules/Orders/TargetTypedRelay.cs:23 TargetTypedAsync",
         "Modules/Orders/TargetTypedRelay.cs:33 TargetTypedGlobal",
         "Modules/Orders/TargetTypedRelay.cs:4 TargetTypedLocal",
+        "Modules/Orders/WindowEnds.cs:106 CastFirstLambdaStatus",
         "Modules/Orders/WindowEnds.cs:18 ConditionalStatus",
         "Modules/Orders/WindowEnds.cs:34 LambdaLocalStatus",
         "Modules/Orders/WindowEnds.cs:4 ClampedStatus",
         "Modules/Orders/WindowEnds.cs:46 LambdaArgumentStatus",
-        "Modules/Orders/WindowEnds.cs:59 BracedConditionStatus",
-        "Modules/Orders/WindowEnds.cs:73 ElseStatus",
+        "Modules/Orders/WindowEnds.cs:64 InitializerLambdaStatus",
+        "Modules/Orders/WindowEnds.cs:77 BracedConditionStatus",
+        "Modules/Orders/WindowEnds.cs:91 ElseStatus",
         "Program.cs:3 This line",
         "Program.cs:4 This line",
         "Program.cs:5 This line",
+        "Program.cs:6 This line",
+        "Relay/RelayTerminalExtensions.cs:10 NamespaceAliasedRelay",
         "Relay/WrappedRelay.cs:4 WrappedRelay",
     ]);
     assert.match(output, /FunctionResultExtensions\.cs:1\tFunctionResultExtensions hand-writes an HTTP-result bridge off RivetResult \(ToResponse, Rebuild, ToHttp, OneArm\)/);
@@ -418,6 +466,13 @@ test("MER-RV-007 flags every app-written RivetResult extension named like an ada
     assert.match(output, /AdapterStatus\.cs:1\tAdapterStatus copies the StatusCode or Value of RivetActionResult, the output of Rivet's \.ToActionResult\(\) adapter, into an HTTP result or response of its own — a hand-written bridge; return \.ToResult\(\)\/\.ToActionResult\(\) directly \(in a filter, let Rivet write the response\), and at most read its StatusCode or Value\trivet\.md#controller-or-functions-aspnet-integration$/m);
     assert.match(output, /AliasedResultExtensions\.cs:8\tAliasedResultExtensions hand-writes an HTTP-result bridge off RivetResult \(ToHttp\)/);
     assert.match(output, /BridgeThenStruct\.cs:1\tStructBridgeExtensions hand-writes an HTTP-result bridge off RivetResult \(ToHttp\)/);
+    assert.match(output, /StatusWriterExtensions\.cs:7\tStatusWriterExtensions hand-writes an HTTP-result bridge off RivetResult \(ToHttp\)/);
+    assert.match(output, /StatusWriterExtensions\.cs:18\tAliasedStatusWriterExtensions hand-writes an HTTP-result bridge off RivetResult \(ToHttp\)/);
+    assert.match(output, /NamespaceAliasRelay\.cs:12\tNamespaceAliasExtensions hand-writes an HTTP-result bridge off RivetResult \(ToHttp\)/);
+    assert.match(output, /QualifiedResultExtensions\.cs:4\tQualifiedResultExtensions hand-writes an HTTP-result bridge off RivetResult \(ToHttp\)/);
+    assert.match(output, /QualifiedResultExtensions\.cs:10\tGlobalQualifiedResultExtensions hand-writes an HTTP-result bridge off RivetResult \(ToHttp\)/);
+    assert.match(output, /RelayTerminalExtensions\.cs:4\tRelayTerminalExtensions hand-writes an HTTP-result bridge off RivetResult \(ToHttp\)/);
+    assert.match(output, /HostExtensions\.cs:4\tHostTerminalExtensions hand-writes an HTTP-result bridge off RivetResult \(ToHttp\)/);
     assert.match(output, /HttpResultExtensions\.cs:1\tHttpResultExtensions hand-writes an HTTP-result bridge off RivetResult \(ToHttpResult, Respond\) — delete it and use Rivet's first-party \.ToResult\(\)\/\.ToActionResult\(\) adapters\trivet\.md#minimal-apis$/m);
 });
 

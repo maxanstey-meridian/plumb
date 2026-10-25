@@ -29,7 +29,9 @@ defineProps<{ active: boolean }>();
     <AcmeCrmPanel v-bind="{ 'export': true, ['csv']: active }" />
     <AcmeCrmPanel v-on="active ? { 'acme-crm': () => {} } : {}" />
     <AcmeCrmPanel v-bind="{ email: 'export' }" />
-    <AcmeCrmPanel :data-kind="{ path: 'export' }" />
-    <AcmeCrmPanel :data-logos="{ 'acme-crm': '/logos/acme.svg' }" />
+    <AcmeCrmPanel :meta="{ path: 'export' }" />
+    <AcmeCrmPanel :logos="{ 'acme-crm': '/logos/acme.svg' }" />
+    <AcmeCrmPanel :labels="{ 'acme-crm': $t('crm.title') }" />
+    <span :title="'format=export'" />
   </section>
 </template>

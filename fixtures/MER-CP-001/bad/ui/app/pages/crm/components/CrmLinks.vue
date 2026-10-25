@@ -16,4 +16,19 @@
   <span v-bind="{ to: { path: 'text/acme-probe' } }" />
   <NuxtLink :to="`text/acme-crm${tab}`">CRM</NuxtLink>
   <a v-bind="{ href: 'text/acme-connector' }">Connector</a>
+  <NuxtLink :to="{ name: 'crm', params: { integration: 'acme-crm' } }">CRM</NuxtLink>
+  <NuxtLink :to="{ name: 'crm', query: { connector: 'acme-connector' } }">Connector</NuxtLink>
+  <NuxtLink to="/crm?integration=acme-crm">CRM</NuxtLink>
+  <a :href="'/crm?tab=1&handler=acme-webhook'">Webhook</a>
+  <button type="button" @click="$router.push('acme-probe')">Probe</button>
+  <span v-bind="{ to: { name: 'crm', params: { slug: ['acme-connector'] } } }" />
+  <NuxtLink to="?integration=acme-crm">CRM</NuxtLink>
+  <NuxtLink :to="{ path: '/crm', hash: '#acme-connector' }">Connector</NuxtLink>
+  <a href="#acme-webhook">Webhook</a>
+  <button type="button" @click="open('acme-probe')">Probe</button>
+  <NuxtLink :to="`?tab=${tab}&integration=acme-crm`">CRM</NuxtLink>
 </template>
+
+<script setup lang="ts">
+const { push: open } = useRouter();
+</script>

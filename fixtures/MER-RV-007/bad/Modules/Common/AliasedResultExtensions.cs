@@ -1,6 +1,6 @@
 using Terminal = Rivet.RivetResult;
 using GlobalTerminal = global::Rivet.RivetResult;
-using OrderTerminal = Rivet.RivetResult<Order>;
+using OrderTerminal = Rivet.RivetResult<Order>; // The legacy generic form, kept: old pinned Rivet versions still bridge off it.
 
 namespace App.Modules.Common;
 

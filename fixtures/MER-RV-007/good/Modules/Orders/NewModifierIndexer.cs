@@ -16,7 +16,7 @@ public sealed class NewModifierIndexer : StatusTable
 
 public class StatusLog
 {
-    public virtual IResult Show(RivetActionResult adapted) => Results.Ok();
+    public IResult Show(RivetActionResult adapted) => Results.Ok();
 }
 
 // The `new` modifier on a method constructs nothing either: its block's statements are its own, so a read logged in

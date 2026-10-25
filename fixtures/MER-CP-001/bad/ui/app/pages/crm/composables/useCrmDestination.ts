@@ -7,5 +7,10 @@ export const useCrmDestination = () => {
   const load = async () => {
     destination.value = await crmClient.getDestination();
   };
-  return { destination, picked, load };
+  const r = useRouter();
+  const { push, replace: go } = useRouter();
+  const openCrm = () => r.push("acme-crm");
+  const openConnector = () => push({ path: "acme-connector" });
+  const openWebhook = () => go("acme-webhook");
+  return { destination, picked, load, openCrm, openConnector, openWebhook };
 };

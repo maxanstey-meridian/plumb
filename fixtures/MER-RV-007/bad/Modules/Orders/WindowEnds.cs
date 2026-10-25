@@ -55,6 +55,24 @@ public sealed class LambdaArgumentStatus
     private static int Pick(Func<int> fallback, int current) => current;
 }
 
+public sealed record PickOptions(object? Seed)
+{
+    public Func<int>? OnError { get; init; }
+}
+
+// So does one after a lambda's block inside an object initializer's braces.
+public sealed class InitializerLambdaStatus
+{
+    public IResult Send(RivetActionResult adapted)
+    {
+        var status = adapted.StatusCode;
+        status = Pick(new PickOptions(null) { OnError = () => { return 1; } }, status);
+        return Results.StatusCode(status);
+    }
+
+    private static int Pick(PickOptions options, int current) => current;
+}
+
 // An assignment inside an if's braces may not run either.
 public sealed class BracedConditionStatus : IResultFilter
 {
@@ -81,4 +99,16 @@ public sealed class ElseStatus(ILogger<ElseStatus> logger) : IResultFilter
     }
 
     public void OnResultExecuted(ResultExecutedContext context) { }
+}
+
+// A lambda's own local of the same name hides only its own uses: a later declaration in that lambda, read from the
+// adapter again, is followed too.
+public sealed class CastFirstLambdaStatus(ILogger<CastFirstLambdaStatus> logger)
+{
+    public IEnumerable<IResult> Send(IActionResult result, RivetActionResult adapted, List<int> items)
+    {
+        var status = ((RivetActionResult)result).StatusCode;
+        logger.LogInformation("adapted {Status}", status);
+        return items.Select(i => { var status = adapted.StatusCode; return Results.StatusCode(status); });
+    }
 }

@@ -319,13 +319,14 @@ async function scanAttempt(r, { allPacks = false, selectedRule = ruleFilter } = 
   degraded.push(...inProcess.diagnostics);
   timings.counters = snapshot.counters;
   let found = [...runAstGrep(r, selectedYaml, allYaml), ...inProcess.findings, ...runChecks(r, selectedScripts, rivet.variant)]
-    .filter((f) => visibleFinding(r, visibility, f));
+    .filter((f) => visiblePath(r, visibility, f.loc.replace(/:\d+$/, "")));
   if (packs) found = found.filter((f) => packs.has(f.id.split("-")[1]));
   found = found.filter((f) => ruleSelected(f.id));
   found.sort((a, b) => SEV[b.sev] - SEV[a.sev] || a.id.localeCompare(b.id) || a.loc.localeCompare(b.loc));
-  // Whether a finding at this path would have got through, so the baseline can tell which of its entries ran.
-  const visibleAt = (file) => visibleFinding(r, visibility, { loc: `${file}:0` });
-  return { findings: found, visibleAt };
+  // Whether --exclude took this path out of the run, so the baseline can tell which of its entries ran.
+  const narrowed = new Set(inventory.excluded.map((file) => path.resolve(r, file)));
+  const excludedAt = (file) => narrowed.has(path.resolve(r, file));
+  return { findings: found, excludedAt };
   } finally {
     if (previousManifest === undefined) delete process.env.PLUMB_FILE_MANIFEST;
     else process.env.PLUMB_FILE_MANIFEST = previousManifest;
@@ -335,8 +336,7 @@ async function scanAttempt(r, { allPacks = false, selectedRule = ruleFilter } = 
   }
 }
 
-function visibleFinding(root, visibility, finding) {
-  const rel = finding.loc.replace(/:\d+$/, "");
+function visiblePath(root, visibility, rel) {
   if (!rel || rel === ".") return true;
   const abs = path.resolve(root, rel);
   try {
@@ -386,8 +386,8 @@ if (!fs.existsSync(abs)) { console.error(`plumb: no such directory ${abs}`); pro
 // --write-baseline applies none.
 const DEFAULT_BASELINE = path.join(abs, ".plumb-baseline.json");
 if (!baselineFile && !noBaseline && !writeBaselineFile && fs.existsSync(DEFAULT_BASELINE)) baselineFile = DEFAULT_BASELINE;
-let findings, visibleAt;
-try { ({ findings, visibleAt } = await scan(abs)); }
+let findings, excludedAt;
+try { ({ findings, excludedAt } = await scan(abs)); }
 catch (error) { console.error(`plumb: scan failed: ${error.message}`); process.exit(2); }
 
 // --baseline ratchet (contract §5, 2026-06-11): count-per-(rule,path) allowance,
@@ -398,13 +398,13 @@ const bKey = (f) => `${f.id}\t${f.loc.replace(/:\d+$/, "")}`;
 // rule the catalogue no longer has, whose entries can only go.
 const ciOnly = (id) => catalogue.byRule.get(id)?.ciOnly ?? false;
 const ran = (id) => ruleSelected(id) && (ci || !ciOnly(id));
-// The baseline entries this run checked: a rule that ran, at a path where its finding would have got through. That's
-// the filter findings pass: a file .plumbignore or --exclude left out of the inventory is hidden, but a directory or
-// a missing file never is, so its entries count as checked whatever the patterns say. A write replaces these, and
-// only these can show a shrink.
+// The baseline entries this run checked: a rule that ran, at any path but a file --exclude took out of this run. A
+// file a persistent exclusion hides (.gitignore, a fallback skip folder, .plumbignore) is checked: no run can report a
+// finding there, so its entries can only go. A directory or a missing file is never excluded, so its entries count as
+// checked whatever the patterns say. A write replaces these, and only these can show a shrink.
 const checked = (key) => {
   const [id, file] = key.split("\t");
-  return ran(id) && visibleAt(file);
+  return ran(id) && !excludedAt(file);
 };
 if (writeBaselineFile) {
   // An incomplete analysis can miss findings, so writing would drop the entries of the ones it missed.
@@ -449,11 +449,16 @@ if (baselineFile) {
 // The baseline by its path inside the checked root (`.plumb-baseline.json`), or as given when it's elsewhere.
 const baselineName = baselineFile && (/^\.\.(?:[\\/]|$)/.test(path.relative(abs, path.resolve(baselineFile))) ? baselineFile : path.relative(abs, path.resolve(baselineFile)));
 // The baseline shrank when an entry this run checked didn't all come back. An entry it didn't check (a rule it left
-// out, a file .plumbignore or --exclude hid) can't tell, nor can a degraded run. The same run with --write-baseline ratchets down,
-// narrowed or not, since a write replaces only the entries it checked.
+// out, a file --exclude hid) can't tell, nor can a degraded run. The same run with --write-baseline ratchets down,
+// narrowed or not, since a write replaces only the entries it checked. The hint names the file as this shell can reach
+// it: as given to --baseline, or the discovered one by its path from here (absolute when it's outside).
+const discoveredFromHere = path.relative(process.cwd(), DEFAULT_BASELINE);
+const ratchet = parsed.values.baseline
+  ? `re-run with --write-baseline ${parsed.values.baseline} in place of --baseline`
+  : `re-run with --write-baseline ${/^\.\.(?:[\\/]|$)/.test(discoveredFromHere) ? DEFAULT_BASELINE : discoveredFromHere}`;
 const baselineNote = baselineFile
   ? `+${baselined} baselined by ${baselineName}, baseline holds ${baselineTotal}` +
-    (shrunk && !degraded.length ? " — shrunk; re-run --write-baseline to ratchet down" : "")
+    (shrunk && !degraded.length ? ` — shrunk; ${ratchet} to ratchet down` : "")
   : null;
 const renderStarted = performance.now();
 if (json) {

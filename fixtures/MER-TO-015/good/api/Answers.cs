@@ -6,6 +6,8 @@ public static class Answers
     /// is wrapped by hand
     /// https://example.com/a/very/long/path/that/cannot/be/broken/anywhere/because/it/is/one/single/token/of/text
     public const int Value = 42;
+    // ReSharper disable once UnusedMember.Global -- a lint directive is read from its one line, so it stays unwrapped
+    public const int Unused = 0;
     public const int Trailing = 1; // a comment after code shares the code's line, which CSharpier owns, so it isn't measured
 
     public const string Script = """

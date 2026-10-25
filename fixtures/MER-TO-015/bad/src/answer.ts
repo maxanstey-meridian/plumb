@@ -15,3 +15,4 @@ export const linked = 3;
 export const late = 4; /* a block comment that starts after code still has comment-only middle lines,
    and this middle one runs on past the line width of the file, so it is checked like any other comment-only line
 */
+// prose that names eslint-disable-next-line partway through is still prose, so wrap it like any other long comment line

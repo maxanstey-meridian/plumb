@@ -8,3 +8,8 @@ export const y = 2; /* a block comment opening after code is out of scope on tha
    while its short middle line is measured
 */
 export const owned = "a code line the formatter owns: it keeps code to its width, so plumb never measures code lines, however long";
+// eslint-disable-next-line @typescript-eslint/no-explicit-any -- a lint directive is read from its one line, so its reason can't wrap
+export const loose: any = answer;
+/* oxlint-disable no-console -- nor can a block directive's, however far past the width the reason runs on this line */
+// @ts-expect-error a TypeScript directive applies to the next line, so its reason stays on this one however long it is
+export const wrong: string = answer;

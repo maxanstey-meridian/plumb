@@ -44,12 +44,13 @@ test("TO-015 flags exactly the comment-only lines past the width in bad, as info
     "src/answer.ts:1",
     "src/answer.ts:12",
     "src/answer.ts:16",
+    "src/answer.ts:18",
     "src/answer.ts:5",
     "src/answer.ts:9",
   ]);
 });
 
-test("TO-015 leaves good alone: wrapped, unbreakable, trailing, generated, code and configured-width lines", () => {
+test("TO-015 leaves good alone: wrapped, unbreakable, trailing, generated, code, lint-directive and configured-width lines", () => {
   assert.deepEqual(findings(path.join(HOME, "fixtures", RULE, "good")), []);
 });
 

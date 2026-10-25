@@ -16,3 +16,11 @@ export const late = 4; /* a block comment that starts after code still has comme
    and this middle one runs on past the line width of the file, so it is checked like any other comment-only line
 */
 // prose that names eslint-disable-next-line partway through is still prose, so wrap it like any other long comment line
+/**
+ * eslint-disable-next-line at the start of a doc comment's later line is prose to ESLint, so it is wrapped like any other
+ */
+/* a block comment's later line is prose too, even when it starts with the directive word:
+   eslint-disable-next-line here is read by no tool at all, so this line is measured like any other comment line
+*/
+// ts-ignore without its at sign is not a directive TypeScript reads, so this long line is measured and reported too
+// eslint-disable-next-line-ish is not a directive ESLint reads either, so this long line is measured and reported too

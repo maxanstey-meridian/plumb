@@ -45,6 +45,10 @@ test("TO-015 flags exactly the comment-only lines past the width in bad, as info
     "src/answer.ts:12",
     "src/answer.ts:16",
     "src/answer.ts:18",
+    "src/answer.ts:20",
+    "src/answer.ts:23",
+    "src/answer.ts:25",
+    "src/answer.ts:26",
     "src/answer.ts:5",
     "src/answer.ts:9",
   ]);

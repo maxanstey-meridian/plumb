@@ -197,7 +197,7 @@ test("enclosing types and type references come from the resolver's scan", () => 
       "        public static class Inner\n        {\n            public const string AId = \"a\";\n        }\n        public const string BId = \"b\";\n    }\n}\n"],
     ["api/Refs.cs", "using App.Ids;\nnamespace App.Refs;\npublic sealed record Refs(global::App.Ids.Outer<Refs>.Inner Value, List<Outer<Refs>> Items)\n{\n" +
       "    public int Count => Items?.Count ?? this.Value.ToString().Length; // Outer in a comment\n" +
-      "    public object[] Copy => [.. Seeds, ..Spare];\n}\npublic enum Reason { [Display(Name = Cap)] Inner, Spent = Done }\n"],
+      "    public object[] Copy => [.. Seeds, ..Spare];\n}\npublic enum Reason { [Display(Name = Cap)] Inner, Spent = Done,\n#if DEBUG\n    Probe,\n#endif\n    [Kind(typeof(int[]))] Wide, Both = Inner | Spent }\n"],
   ]), [Capability.CSHARP]);
   const { csharp } = f.context;
   const ids = f.context.file("api/Ids.cs"), text = ids.text();
@@ -215,7 +215,10 @@ test("enclosing types and type references come from the resolver's scan", () => 
   for (const name of ["App", "App.Ids", "global::App.Ids.Outer", "Refs", "List", "Outer", "Items", "Value", "Seeds", "Spare", "Display", "Done"]) {
     assert.ok(written.includes(name), name);
   }
-  for (const name of ["App.Refs", "ToString", "Length", "Reason", "Inner", "Spent"]) assert.ok(!written.includes(name), name);
+  // A member after a preprocessor line or a nested-bracket attribute is declared too, and so is a sibling an
+  // initializer names.
+  for (const name of ["App.Refs", "ToString", "Length", "Reason", "Inner", "Spent", "Probe", "Wide"]) assert.ok(!written.includes(name), name);
+  assert.ok(written.includes("Kind"));
   assert.equal(written.filter((name) => name === "Refs").length, 2);
   assert.equal(written.filter((name) => name === "Outer").length, 1);
   const reference = csharp.typeReferences(refs).find((value) => value.written === "global::App.Ids.Outer");

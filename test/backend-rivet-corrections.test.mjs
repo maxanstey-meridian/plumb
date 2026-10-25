@@ -134,18 +134,34 @@ test("MER-BE-006 reads every part of a partial type, and never reports a type th
 test("MER-BE-006 counts a call to a static class's extension member where the class's namespace is in scope, and never an enum member's name", () => {
     const findings = scan("MER-BE-006", {
         "Common/Roles.cs": "namespace Acme.Common;\npublic enum Role { Admin, Member }\npublic static class RoleRules\n{\n" +
-            "    public static bool IsAtLeast(this Role role, Role minimum) => role >= minimum;\n}\npublic sealed record Quota(int Limit);\n",
-        // A C# 14 extension block's members are extension members too.
+            "    public static bool IsAtLeast(this Role role, Role minimum) => role >= minimum;\n}\npublic sealed record Quota(int Limit);\n" +
+            // Users' own Doubling class doesn't hide this one's extension method from it.
+            "public static class Doubling { public static int Twice(this int value) => value * 2; }\n" +
+            // StaffAccess, which both modules use, calls Grading's extension method, so Grading is shared.
+            "public static class Grading { public static int Grade(this Role role) => (int)role; }\n" +
+            "public static class StaffAccess { public static bool Allows(Role role) => role.Grade() > 0; }\n",
+        // A C# 14 extension block's members are extension members too: an expression-bodied property, a property with
+        // an accessor body, and a tuple-returning method on a tuple receiver.
         "Common/Lists/ListRules.cs": "namespace Acme.Common.Lists;\npublic static class ListRules\n{\n    extension(System.Collections.Generic.List<int> list)\n    {\n" +
-            "        public bool Empty => list.Count == 0;\n    }\n}\n",
+            "        public bool Empty => list.Count == 0;\n        public bool Blank { get => list.Count == 0; }\n    }\n}\n",
+        "Common/Spans/SpanRules.cs": "namespace Acme.Common.Spans;\npublic static class SpanRules\n{\n    extension((int Low, int High) span)\n    {\n" +
+            "        public (int Low, int High) Around(int width) => (span.Low - width, span.High + width);\n    }\n}\n",
         "Common/Text/TextRules.cs": "namespace Acme.Common.Text;\npublic static class TextRules { public static string Shout(this string text) => text; }\n",
-        "Modules/Forms/Forms.cs": "using Acme.Common;\nusing Acme.Common.Lists;\nusing Acme.Common.Text;\nnamespace Acme.Modules.Forms;\n" +
-            "public sealed class Forms { public Quota? Quota { get; init; } public bool Check(Role role, System.Collections.Generic.List<int> items) => " +
-            "role.IsAtLeast(Role.Admin) && items.Empty && \"x\".Shout() != \"\"; }\n",
+        // The host's only use of FormsSetup is an extension call, which makes Limit, its body's, shared too.
+        "Common/Setup/FormsSetup.cs": "namespace Acme.Common.Setup;\npublic static class FormsSetup\n{\n" +
+            "    public static T AddFormsLimits<T>(this T services) { _ = new Acme.Common.Limit(1); return services; }\n}\n",
+        "Common/Limit.cs": "namespace Acme.Common;\npublic sealed record Limit(int Value);\n",
+        "Program.cs": "using Acme.Common.Setup;\nvar services = new object();\nservices.AddFormsLimits();\n",
+        "Modules/Forms/Forms.cs": "using Acme.Common;\nusing Acme.Common.Lists;\nusing Acme.Common.Spans;\nusing Acme.Common.Text;\nnamespace Acme.Modules.Forms;\n" +
+            "public sealed class Forms { public Quota? Quota { get; init; } public Limit? Limit { get; init; } public System.Type Spans => typeof(SpanRules); " +
+            "public bool Check(Role role, System.Collections.Generic.List<int> items) => " +
+            "role.IsAtLeast(Role.Admin) && items.Empty && \"x\".Shout() != \"\" && 3.Twice() > role.Grade() && (1, 2).Around(3).Low < 0 && StaffAccess.Allows(role); }\n",
         // Users has no using for TextRules' namespace, so its own .Shout() is not TextRules'; its Quota is an enum member.
-        "Modules/Users/Users.cs": "using Acme.Common;\nusing Acme.Common.Lists;\nnamespace Acme.Modules.Users;\npublic enum UsersBlocker { Quota, Other }\n" +
+        "Modules/Users/Users.cs": "using Acme.Common;\nusing Acme.Common.Lists;\nusing Acme.Common.Spans;\nnamespace Acme.Modules.Users;\n" +
+            "public enum UsersBlocker { Quota, Other }\npublic sealed class Doubling { }\n" +
             "public sealed class Users { public bool Check(Role role, System.Collections.Generic.List<int> items, Speaker speaker) => " +
-            "role.IsAtLeast(Role.Member) && items.Empty && speaker.Shout(); }\npublic sealed class Speaker { public bool Shout() => true; }\n",
+            "role.IsAtLeast(Role.Member) && items.Blank && speaker.Shout() && 3.Twice() > 0 && (1, 2).Around(3).High > 0 && StaffAccess.Allows(role); }\n" +
+            "public sealed class Speaker { public bool Shout() => true; }\n",
     });
     assert.deepEqual(findings.map((finding) => finding.replace(/ — review.*/, "")), [
         "Common/Roles.cs:0\tCommon type Quota is referenced only by module Forms",

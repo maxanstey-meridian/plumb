@@ -451,11 +451,13 @@ const baselineName = baselineFile && (/^\.\.(?:[\\/]|$)/.test(path.relative(abs,
 // The baseline shrank when an entry this run checked didn't all come back. An entry it didn't check (a rule it left
 // out, a file --exclude hid) can't tell, nor can a degraded run. The same run with --write-baseline ratchets down,
 // narrowed or not, since a write replaces only the entries it checked. The hint names the file as this shell can reach
-// it: as given to --baseline, or the discovered one by its path from here (absolute when it's outside).
+// it: as given to --baseline, or the discovered one by its path from here (absolute when it's outside), quoted for a
+// POSIX shell so it pastes as one argument.
+const shellQuote = (p) => /^[\w@%+=:,./-]+$/.test(p) ? p : `'${p.replace(/'/g, "'\\''")}'`;
 const discoveredFromHere = path.relative(process.cwd(), DEFAULT_BASELINE);
 const ratchet = parsed.values.baseline
-  ? `re-run with --write-baseline ${parsed.values.baseline} in place of --baseline`
-  : `re-run with --write-baseline ${/^\.\.(?:[\\/]|$)/.test(discoveredFromHere) ? DEFAULT_BASELINE : discoveredFromHere}`;
+  ? `re-run with --write-baseline ${shellQuote(parsed.values.baseline)} in place of --baseline`
+  : `re-run with --write-baseline ${shellQuote(/^\.\.(?:[\\/]|$)/.test(discoveredFromHere) ? DEFAULT_BASELINE : discoveredFromHere)}`;
 const baselineNote = baselineFile
   ? `+${baselined} baselined by ${baselineName}, baseline holds ${baselineTotal}` +
     (shrunk && !degraded.length ? ` — shrunk; ${ratchet} to ratchet down` : "")

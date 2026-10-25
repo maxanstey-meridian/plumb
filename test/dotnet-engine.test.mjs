@@ -196,7 +196,8 @@ test("enclosing types and type references come from the resolver's scan", () => 
     ["api/Ids.cs", "namespace App.Ids\n{\n    public static class Outer<T> where T : class\n    {\n        public sealed record Done(int A);\n" +
       "        public static class Inner\n        {\n            public const string AId = \"a\";\n        }\n        public const string BId = \"b\";\n    }\n}\n"],
     ["api/Refs.cs", "using App.Ids;\nnamespace App.Refs;\npublic sealed record Refs(global::App.Ids.Outer<Refs>.Inner Value, List<Outer<Refs>> Items)\n{\n" +
-      "    public int Count => Items?.Count ?? this.Value.ToString().Length; // Outer in a comment\n}\n"],
+      "    public int Count => Items?.Count ?? this.Value.ToString().Length; // Outer in a comment\n" +
+      "    public object[] Copy => [.. Seeds, ..Spare];\n}\n"],
   ]), [Capability.CSHARP]);
   const { csharp } = f.context;
   const ids = f.context.file("api/Ids.cs"), text = ids.text();
@@ -208,8 +209,9 @@ test("enclosing types and type references come from the resolver's scan", () => 
 
   const refs = f.context.file("api/Refs.cs");
   const written = csharp.typeReferences(refs).map((reference) => reference.written);
-  // Each segment of a dotted name, no declared names (the namespace, the record), no member accesses, no comments.
-  for (const name of ["App", "App.Ids", "global::App.Ids.Outer", "Refs", "List", "Outer", "Items", "Value"]) assert.ok(written.includes(name), name);
+  // Each segment of a dotted name, no declared names (the namespace, the record), no member accesses, no comments;
+  // a collection spread's operand (`[.. Seeds]`) is a name, not a member access.
+  for (const name of ["App", "App.Ids", "global::App.Ids.Outer", "Refs", "List", "Outer", "Items", "Value", "Seeds", "Spare"]) assert.ok(written.includes(name), name);
   for (const name of ["App.Refs", "ToString", "Length"]) assert.ok(!written.includes(name), name);
   assert.equal(written.filter((name) => name === "Refs").length, 2);
   assert.equal(written.filter((name) => name === "Outer").length, 1);

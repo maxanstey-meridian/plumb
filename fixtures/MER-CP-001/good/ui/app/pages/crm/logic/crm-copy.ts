@@ -61,3 +61,19 @@ export const entryLabels = Object.fromEntries([["acme-crm", "Acme CRM"]]);
 export const queueExport = (steps: string[]) => steps.push("export");
 export const queueStep = (push: (step: string) => number) => push("export");
 export const appendExport = (form: FormData) => form.append("format", "export");
+// A query parameter's name is no id, unless its value is one too; neither is anything past a `#`, which only scrolls.
+declare const navigateTo: (to: string) => void;
+export const invite = (address: string) => navigateTo(`/invite?email=${address}`);
+export const reportLink = "/reports?export=1";
+export const inviteQuery = (url: URL, address: string) => url.searchParams.set("email", address);
+export const invitedEmail = () => new URLSearchParams(location.search).get("email");
+export const inviteParams = (address: string) => new URLSearchParams({ email: address, "csv": address, ["export"]: address });
+export const inviteEntries = (address: string) => new URLSearchParams([["email", address]]);
+export const sectionLink = (tab: string) => `/crm#${tab}/export`;
+// A query parameter's name with no value at all is a name too, in a URL or a URLSearchParams string.
+export const reportFlag = "/reports?export";
+export const reportTabs = "/reports?tab=1&csv";
+export const reportQuery = () => new URLSearchParams("export&tab=1");
+// Asking whether a parameter is there, or for all its values, names it too.
+export const hasExport = (url: URL) => url.searchParams.has("export");
+export const csvValues = (url: URL) => url.searchParams.getAll("csv");

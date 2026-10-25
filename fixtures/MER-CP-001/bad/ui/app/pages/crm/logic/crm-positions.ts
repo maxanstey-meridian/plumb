@@ -87,7 +87,7 @@ export const setRoutes = (routes: Map<string, string>) => routes.set("acme-crm",
 export const indexRoutes = (routes: Record<string, string>) => { routes["acme-connector"] = "acme-probe"; };
 type RouteTo = string | { path?: string; name?: string; params?: Record<string, string>; query?: Record<string, string> };
 declare const router: { push: (to: RouteTo) => void; replace: (to: RouteTo) => void };
-export const openCrm = () => navigateTo("acme-crm");
+export const openCrm = () => navigateTo({ path: "/crm", query: { integration: "acme-crm" } });
 export const openConnector = () => router.push("acme-connector");
 export const openWebhook = () => router.replace({ path: "acme-webhook" });
 export const openProbe = () => router.push({ name: "crm", params: { probe: "acme-probe" }, query: { integration: "acme-crm" } });
@@ -96,3 +96,9 @@ export const objectQuery = () => new URLSearchParams({ target: "acme-webhook" })
 export const entryQuery = () => new URLSearchParams([["probe", "acme-probe"]]);
 export const stringQuery = () => new URLSearchParams("integration=acme-crm");
 export const boundQuery = () => { const params = new URLSearchParams(); params.append("integration", "acme-connector"); return params; };
+export const idQuery = (url: URL) => url.searchParams.set("csv", "export");
+export const idEntryQuery = () => new URLSearchParams([["email", "acme-crm"]]);
+export const fetchCrm = () => $fetch("/api/crm", { query: { integration: "acme-crm" } });
+export const useCrm = () => useFetch("/api/crm", { query: { connector: "acme-connector" } });
+export const fetchProbe = () => $fetch("/api/crm", { params: { probe: "acme-probe" } });
+export const hashRoutes = { "acme-crm": "#/settings/crm" };

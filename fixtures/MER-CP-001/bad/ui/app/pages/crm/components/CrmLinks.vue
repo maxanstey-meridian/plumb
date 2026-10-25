@@ -23,10 +23,11 @@
   <button type="button" @click="$router.push('acme-probe')">Probe</button>
   <span v-bind="{ to: { name: 'crm', params: { slug: ['acme-connector'] } } }" />
   <NuxtLink to="?integration=acme-crm">CRM</NuxtLink>
-  <NuxtLink :to="{ path: '/crm', hash: '#acme-connector' }">Connector</NuxtLink>
-  <a href="#acme-webhook">Webhook</a>
+  <NuxtLink :to="{ path: '/crm/acme-connector', hash: '#acme-crm' }">Connector</NuxtLink>
+  <a href="/crm?handler=acme-webhook#acme-crm">Webhook</a>
   <button type="button" @click="open('acme-probe')">Probe</button>
   <NuxtLink :to="`?tab=${tab}&integration=acme-crm`">CRM</NuxtLink>
+  <a href="#/crm/acme-crm">CRM</a>
 </template>
 
 <script setup lang="ts">

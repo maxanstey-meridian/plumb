@@ -93,6 +93,33 @@ test(".plumbignore and explicit excludes use gitignore pattern semantics", () =>
   assert.deepEqual(inventory.files, [".plumbignore", "src/keep.generated.ts", "src/main.ts"]);
 });
 
+test("excluded lists only what the run's excludes took out of the files the persistent exclusions left in", () => {
+  const root = temporaryRepository();
+  write(root, ".plumbignore", "ignored.ts\nboth.ts\n");
+  for (const file of ["main.ts", "plain.ts", "ignored.ts", "both.ts", "dir/f.ts", "dir/g.ts", "glob/f.ts", "glob/g.ts", "node_modules/pkg/index.ts"]) {
+    write(root, file);
+  }
+  const inventory = createRepositoryInventory(root, {
+    excludes: ["plain.ts", "!ignored.ts", "both.ts", "dir/", "!dir/f.ts", "glob/**", "!glob/f.ts", "node_modules/"],
+  });
+  assert.equal(inventory.mode, "fallback");
+  // `!ignored.ts` brings a .plumbignore'd file back, so it's scanned and wasn't excluded; `both.ts` was hidden anyway;
+  // `!dir/f.ts` can't re-include a file under an excluded folder, where `!glob/f.ts` can under `glob/**`; and the
+  // fallback skip folder was never in the set.
+  assert.deepEqual(inventory.files, [".plumbignore", "glob/f.ts", "ignored.ts", "main.ts"]);
+  assert.deepEqual(inventory.excluded, ["dir/f.ts", "dir/g.ts", "glob/g.ts", "plain.ts"]);
+
+  const repository = temporaryRepository();
+  spawnSync("git", ["init", "-q"], { cwd: repository });
+  write(repository, "tracked.ts");
+  write(repository, "kept.ts");
+  assert.equal(spawnSync("git", ["add", "tracked.ts", "kept.ts"], { cwd: repository }).status, 0);
+  const tracked = createRepositoryInventory(repository, { excludes: ["tracked.ts"] });
+  assert.equal(tracked.mode, "git");
+  assert.deepEqual(tracked.files, ["kept.ts"]);
+  assert.deepEqual(tracked.excluded, ["tracked.ts"]);
+});
+
 test("manifest traversal retains dot-dot-prefixed names and excludes file symlinks", () => {
   const root = temporaryRepository();
   write(root, "..config.ts");

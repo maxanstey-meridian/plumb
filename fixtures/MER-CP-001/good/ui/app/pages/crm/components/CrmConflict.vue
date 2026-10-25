@@ -33,5 +33,10 @@ defineProps<{ active: boolean }>();
     <AcmeCrmPanel :logos="{ 'acme-crm': '/logos/acme.svg' }" />
     <AcmeCrmPanel :labels="{ 'acme-crm': $t('crm.title') }" />
     <span :title="'format=export'" />
+    <a href="#export">Jump to export</a>
+    <NuxtLink :to="{ path: '/crm', hash: '#export' }">Export</NuxtLink>
+    <svg><use href="#csv" /></svg>
+    <svg><use :href="'#export'" /></svg>
+    <Teleport to="#export"><span>Export</span></Teleport>
   </section>
 </template>

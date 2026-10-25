@@ -883,10 +883,17 @@ const scripts = fs.readdirSync(CHECKS, { withFileTypes: true })
   .filter((e) => e.isFile() && !e.name.startsWith(".") && !e.name.startsWith("_"))
   .map((e) => e.name);
 
+// MER-RV-024 drives go-task itself, so its producer run and its own test below need it. Another tool can own the name
+// (Taskwarrior is `task` too, and both print a bare version), so go-task is known by its help naming the Taskfile, as
+// the check knows it.
+const taskHelp = spawnSync("task", ["--help"], { encoding: "utf8" });
+const goTask = /\bTaskfile\b/.test(`${taskHelp.stdout ?? ""}${taskHelp.stderr ?? ""}`);
+
 for (const s of scripts) {
   const id = s.match(/^MER-[A-Z]{2}-\d{3}/)?.[0];
   const fixture = id && fs.existsSync(path.join(FIX, id, "bad")) ? id : null;
-  test(`producer ${s}: exits 0, emits §3 five-field lines, fires on bad / not good`, { skip: !fixture && "no own fixture (family member)" }, () => {
+  const skip = (!fixture && "no own fixture (family member)") || (id === "MER-RV-024" && !goTask && "go-task (task) not on PATH");
+  test(`producer ${s}: exits 0, emits §3 five-field lines, fires on bad / not good`, { skip }, () => {
     const env = { ...process.env, PLUMB_CI: "1" };
     const bad = spawnProducer(path.join(CHECKS, s), path.join(FIX, fixture, "bad"), { encoding: "utf8", env });
     assert.equal(bad.status, 0, `bad run exit ${bad.status}: ${bad.stderr}`);
@@ -1194,11 +1201,6 @@ if (process.argv[2].endsWith("bad")) console.log("MER-TO-910\\twarn\\tresult.txt
   assert.match(out.stdout, /^self-test: 2\/3 failing — degraded: 2 analyses incomplete \(see above\)$/m);
 });
 
-// MER-RV-024's test drives go-task itself. Another tool can own the name (Taskwarrior is `task` too, and both print a
-// bare version), so go-task is known by its help naming the Taskfile, as the check knows it.
-const taskHelp = spawnSync("task", ["--help"], { encoding: "utf8" });
-const goTask = /\bTaskfile\b/.test(`${taskHelp.stdout ?? ""}${taskHelp.stderr ?? ""}`);
-
 test("MER-RV-024: a convention it can't check exits 2 with a reason, so a --ci baseline can't read it as a shrink", { skip: !goTask && "go-task (task) not on PATH" }, () => {
   const check = path.join(CHECKS, "MER-RV-024-stale-generated.mjs");
   const run = (r, env = {}) => spawnProducer(check, r, { encoding: "utf8", env: { PLUMB_CI: "1", ...env } });
@@ -1276,6 +1278,17 @@ test("baseline: shrinking is reported and suggests ratcheting down", () => {
   assert.ok(plumb(r).stdout.includes(` — shrunk; re-run with --write-baseline ${bl} to ratchet down)\n`));
   const inside = spawnSync(PLUMB, ["."], { cwd: r, encoding: "utf8" });
   assert.ok(inside.stdout.includes(" — shrunk; re-run with --write-baseline .plumb-baseline.json to ratchet down)\n"), inside.stdout);
+  // Either way the path is quoted for the shell, so one with a space or a quote pastes back as the one argument.
+  const spaced = path.join(repo(), "my repo's");
+  fs.cpSync(r, spaced, { recursive: true });
+  const spacedBaseline = path.join(spaced, ".plumb-baseline.json");
+  const pasted = (out) => {
+    const hint = out.stdout.match(/ — shrunk; re-run with --write-baseline (.+?)(?: in place of --baseline)? to ratchet down\)\n/)?.[1];
+    assert.ok(hint, out.stdout);
+    return spawnSync("sh", ["-c", `printf %s ${hint}`], { encoding: "utf8" }).stdout;
+  };
+  assert.equal(pasted(plumb(spaced, "--baseline", spacedBaseline)), spacedBaseline);
+  assert.equal(pasted(plumb(spaced)), spacedBaseline);
   // A narrowed run compares only the entries of the rules it ran, and the same hint holds: a narrowed
   // --write-baseline keeps every other rule's entries.
   const focused = plumb(r, "--baseline", bl, "--rule", "MER-BE-001");
@@ -1383,14 +1396,18 @@ test("baseline identity and suppression are unchanged for migrated findings", ()
 // flagged, an ordering or a limit alike, since a limit is a rule. Line 61's "export" is meant as a label, but a
 // value is judged by whether it equals an id, so "csv" mapped to it is flagged too: the accepted trade-off, as route
 // tables are the real harm. Navigating from script (90-93: `navigateTo`, `router.push`/`.replace`, with a path, a
-// route location's `path`, `params` or `query`; useCrmDestination.ts:12-14, a router and its methods bound by name
-// from `useRouter()`) builds a link like `to` does, and so does a query built with `URLSearchParams` (94-98: a URL's
-// `searchParams.set`/`.append`, `new URLSearchParams` from an object, entries or a string, and a name bound to one).
+// route location's `path`, `params` or `query`; useCrmDestination.ts:12-16, a router and its methods bound by name
+// from `useRouter()` or from a router bound to it, one taking a bare string) builds a link like `to` does, and so
+// does a query built with `URLSearchParams` (94-98: a URL's `searchParams.set`/`.append`, `new URLSearchParams` from
+// an object, entries or a string, and a name bound to one), whose parameter names count only beside an id value
+// (99, 100), and a request's `query` or ofetch's `params` (101-103: `$fetch`, `useFetch`).
 // A link's MIME-shaped value (CrmLinks.vue:12-18: static, bound, a template, a bare `v-bind` object's `to` or `href`,
 // and a route location's `path`) is a relative path, a nested object in a `v-bind` (11) is data, not attributes, and a link's route
 // location `params` and `query` values (19, 20, 24, also in an array), its query string (21, 22, and 25 and 29
-// without a `/`), its `hash` (26), an in-page `href` (27), a `$router.push` in a handler (23), and a `push` bound from
-// `useRouter()` in the script (28) build the link from an id. The good fixture's server declares
+// without a `/`), the path (26) and query (27) before a fragment, whose `#…` is not read, a `$router.push` in a
+// handler (23), and a `push` bound from `useRouter()` in the script (28) build the link from an id. Only a table's
+// key (a quoted, computed or unquoted key, a Map entry's, `.set`'s or an index assigned to) gets the message's note
+// that a table may map the id to labels. The good fixture's server declares
 // ExportId = "export", and its crm-copy.ts and CrmConflict.vue use "export" as wording and stay clean: `noun:`,
 // `title:`, `typeLabel:`, a native element's `class=`, `title=`, `data-testid=` and `id=`, a component's `id=`/`:id=`
 // and `noun=`/`:noun=`, the `id` and `type` keys of an argument-less `v-bind` object (attributes, like
@@ -1409,10 +1426,13 @@ test("baseline identity and suppression are unchanged for migrated findings", ()
 // (`{ email: true }`, `{ csv: "Comma separated" }`), a branched `v-on` object's keys are events, a `path` in a
 // non-link prop (`:meta`) is no link, nor is a query-shaped `:title` without a `/`, `.push` onto a list, a `push`
 // not bound from `useRouter()` and a form's `.append` aren't links, and "text/csv" is a MIME type, not a path to the
-// "csv" id.
+// "csv" id. A query parameter's name beside a value that isn't an id (`?email=${address}`, `?export=1`, a search
+// params `.set`/`.get`, an initial object's keys or entry's name) is no copy, and a fragment only scrolls (`href="#export"`
+// beside `id="export"`, a route location's `hash`, `<use href="#csv">`, `<Teleport to="#export">`, a template's
+// text past a `#`).
 test("MER-CP-001 names each copied id's qualified owner at its exact location", () => {
   const findings = JSON.parse(plumb(path.join(FIX, "MER-CP-001", "bad"), "--rule", "MER-CP-001", "--json").stdout);
-  const owner = (finding) => finding.message.match(/copies the server's (\S+) —/)?.[1];
+  const owner = (finding) => finding.message.match(/is the server's (\S+);/)?.[1];
   assert.deepEqual(findings.map((finding) => [finding.location, owner(finding)]), [
     ["ui/app/pages/crm/components/CrmLinks.vue:10", "CrmIntegration.ExportId"], // v-bind object, a link's `to`
     ["ui/app/pages/crm/components/CrmLinks.vue:11", "CrmIntegration.Webhooks.HandlerId"], // nested object in a v-bind, id-named key
@@ -1431,12 +1451,13 @@ test("MER-CP-001 names each copied id's qualified owner at its exact location", 
     ["ui/app/pages/crm/components/CrmLinks.vue:23", "TestCrmConnectionUseCase.ProbeId"], // `$router.push` in a handler
     ["ui/app/pages/crm/components/CrmLinks.vue:24", "CrmConnector.ConnectorId"], // a listed `params` value in a v-bind link
     ["ui/app/pages/crm/components/CrmLinks.vue:25", "CrmIntegration.IntegrationId"], // a query-only link, no `/`
-    ["ui/app/pages/crm/components/CrmLinks.vue:26", "CrmConnector.ConnectorId"], // a link's route-location `hash`
-    ["ui/app/pages/crm/components/CrmLinks.vue:27", "CrmIntegration.Webhooks.HandlerId"], // an in-page `href` fragment
+    ["ui/app/pages/crm/components/CrmLinks.vue:26", "CrmConnector.ConnectorId"], // a route location's `path` beside a `hash`, not read
+    ["ui/app/pages/crm/components/CrmLinks.vue:27", "CrmIntegration.Webhooks.HandlerId"], // a query before a fragment, not read
     ["ui/app/pages/crm/components/CrmLinks.vue:28", "TestCrmConnectionUseCase.ProbeId"], // `push` bound from useRouter() in the script
     ["ui/app/pages/crm/components/CrmLinks.vue:29", "CrmIntegration.IntegrationId"], // a query-only template link
     ["ui/app/pages/crm/components/CrmLinks.vue:3", "CrmConnector.ConnectorId"], // id-named static attributes
     ["ui/app/pages/crm/components/CrmLinks.vue:3", "CrmIntegration.Webhooks.HandlerId"],
+    ["ui/app/pages/crm/components/CrmLinks.vue:30", "CrmIntegration.IntegrationId"], // a hash-mode route is a route, not a fragment
     ["ui/app/pages/crm/components/CrmLinks.vue:4", "CrmIntegration.Webhooks.HandlerId"], // id-named bound attributes
     ["ui/app/pages/crm/components/CrmLinks.vue:4", "CrmIntegration.IntegrationId"],
     ["ui/app/pages/crm/components/CrmLinks.vue:5", "CrmIntegration.IntegrationId"], // under an id-named key in a bound object
@@ -1444,9 +1465,12 @@ test("MER-CP-001 names each copied id's qualified owner at its exact location", 
     ["ui/app/pages/crm/components/CrmLinks.vue:7", "CrmIntegration.Webhooks.HandlerId"], // v-bind object, id-named key
     ["ui/app/pages/crm/components/CrmLinks.vue:8", "CrmIntegration.EmailChannelId"], // an HTML type on a component that isn't an input
     ["ui/app/pages/crm/components/CrmLinks.vue:9", "CrmIntegration.IntegrationId"], // v-bind object, a component's `type`
-    ["ui/app/pages/crm/composables/useCrmDestination.ts:12", "CrmIntegration.IntegrationId"], // a router bound from useRouter()
-    ["ui/app/pages/crm/composables/useCrmDestination.ts:13", "CrmConnector.ConnectorId"], // a destructured `push`
-    ["ui/app/pages/crm/composables/useCrmDestination.ts:14", "CrmIntegration.Webhooks.HandlerId"], // a renamed `replace`
+    ["ui/app/pages/crm/composables/useCrmDestination.ts:12", "CrmIntegration.IntegrationId"], // a router bound from useRouter(), a bare string
+    ["ui/app/pages/crm/composables/useCrmDestination.ts:13", "CrmIntegration.IntegrationId"], // a destructured `push`'s `params`
+    ["ui/app/pages/crm/composables/useCrmDestination.ts:14", "CrmConnector.ConnectorId"], // a renamed `replace`'s `query`
+    ["ui/app/pages/crm/composables/useCrmDestination.ts:16", "TestCrmConnectionUseCase.ProbeId"], // destructured from a bound router
+    ["ui/app/pages/crm/composables/useCrmDestination.ts:17", "CrmIntegration.IntegrationId"], // a hash-mode route, `#/…`
+    ["ui/app/pages/crm/composables/useCrmDestination.ts:18", "CrmConnector.ConnectorId"], // a hash-mode route after the URL, `/#/…`
     ["ui/app/pages/crm/composables/useCrmDestination.ts:6", "CrmIntegration.IntegrationId"], // ref(…)'s initial value, held by a variable
     ["ui/app/pages/crm/index.vue:12", "CrmIntegration.IntegrationId"], // compared against a literal-typed value
     ["ui/app/pages/crm/index.vue:13", "CrmIntegration.IntegrationId"], // hand-built /api/ URL
@@ -1458,6 +1482,12 @@ test("MER-CP-001 names each copied id's qualified owner at its exact location", 
     ["ui/app/pages/crm/index.vue:7", "CrmIntegration.IntegrationId"],
     ["ui/app/pages/crm/index.vue:8", "CrmConnector.ConnectorId"],
     ["ui/app/pages/crm/index.vue:9", "CrmIntegration.Webhooks.HandlerId"],
+    ["ui/app/pages/crm/logic/crm-positions.ts:100", "CrmIntegration.EmailChannelId"], // an entry's name beside an id value
+    ["ui/app/pages/crm/logic/crm-positions.ts:100", "CrmIntegration.IntegrationId"],
+    ["ui/app/pages/crm/logic/crm-positions.ts:101", "CrmIntegration.IntegrationId"], // $fetch's `query`
+    ["ui/app/pages/crm/logic/crm-positions.ts:102", "CrmConnector.ConnectorId"], // useFetch's `query`
+    ["ui/app/pages/crm/logic/crm-positions.ts:103", "TestCrmConnectionUseCase.ProbeId"], // $fetch's `params`, ofetch's alias for `query`
+    ["ui/app/pages/crm/logic/crm-positions.ts:104", "CrmIntegration.IntegrationId"], // a route table to a hash-mode route, `#/…`
     ["ui/app/pages/crm/logic/crm-positions.ts:15", "CrmIntegration.IntegrationId"], // .includes( argument
     ["ui/app/pages/crm/logic/crm-positions.ts:15", "CrmConnector.ConnectorId"], // .has( argument
     ["ui/app/pages/crm/logic/crm-positions.ts:15", "CrmIntegration.Webhooks.HandlerId"], // .indexOf( argument
@@ -1563,7 +1593,7 @@ test("MER-CP-001 names each copied id's qualified owner at its exact location", 
     ["ui/app/pages/crm/logic/crm-positions.ts:86", "CrmIntegration.Webhooks.HandlerId"],
     ["ui/app/pages/crm/logic/crm-positions.ts:87", "CrmConnector.ConnectorId"], // an id assigned at an id's index
     ["ui/app/pages/crm/logic/crm-positions.ts:87", "TestCrmConnectionUseCase.ProbeId"],
-    ["ui/app/pages/crm/logic/crm-positions.ts:90", "CrmIntegration.IntegrationId"], // navigateTo(…)
+    ["ui/app/pages/crm/logic/crm-positions.ts:90", "CrmIntegration.IntegrationId"], // navigateTo(…)'s `query`
     ["ui/app/pages/crm/logic/crm-positions.ts:91", "CrmConnector.ConnectorId"], // router.push(…)
     ["ui/app/pages/crm/logic/crm-positions.ts:92", "CrmIntegration.Webhooks.HandlerId"], // router.replace({ path })
     ["ui/app/pages/crm/logic/crm-positions.ts:93", "TestCrmConnectionUseCase.ProbeId"], // router.push's `params` and `query`
@@ -1574,7 +1604,24 @@ test("MER-CP-001 names each copied id's qualified owner at its exact location", 
     ["ui/app/pages/crm/logic/crm-positions.ts:96", "TestCrmConnectionUseCase.ProbeId"], // new URLSearchParams([[…]])
     ["ui/app/pages/crm/logic/crm-positions.ts:97", "CrmIntegration.IntegrationId"], // new URLSearchParams("…")
     ["ui/app/pages/crm/logic/crm-positions.ts:98", "CrmConnector.ConnectorId"], // .append on a name bound to URLSearchParams
+    ["ui/app/pages/crm/logic/crm-positions.ts:99", "CrmIntegration.CsvFormatId"], // a search params name beside an id value
+    ["ui/app/pages/crm/logic/crm-positions.ts:99", "CrmIntegration.ExportId"],
   ]);
+  assert.equal(findings.find((finding) => finding.location === "ui/app/pages/crm/logic/crm-positions.ts:19").message,
+    '"acme-crm" is the server\'s CrmIntegration.IntegrationId; keep no copy of it in the UI (comparing, holding, keying on or ' +
+      "building a URL from it) — have the DTO carry the answer: availableActions, a named flag, the route, or the id itself.");
+  const tableNote = " A table keyed on it may map it only to labels, colours or icons.";
+  assert.deepEqual(findings.filter((finding) => finding.message.endsWith(tableNote)).map((finding) => [finding.location, owner(finding)]), [
+    ...[[104, "IntegrationId"], // sorted as text, so ahead of line 21
+      [21, "IntegrationId"], [31, "ConnectorId"], [36, "ConnectorId"], [51, "IntegrationId"], [52, "ConnectorId"], [53, "ConnectorId"],
+      [56, "IntegrationId"], [57, "IntegrationId"], [58, "ConnectorId"], [59, "Webhooks.HandlerId"], [61, "CsvFormatId"],
+      [62, "IntegrationId"], [64, "IntegrationId"], [65, "ConnectorId"], [66, "IntegrationId"], [67, "IntegrationId"], [67, "ConnectorId"],
+      [68, "Webhooks.HandlerId"], [69, "IntegrationId"], [69, "ConnectorId"], [70, "CsvFormatId"], [70, "EmailChannelId"],
+      [71, "IntegrationId"], [72, "IntegrationId"], [73, "IntegrationId"], [73, "ConnectorId"], [74, "IntegrationId"], [74, "ConnectorId"],
+      [75, "IntegrationId"], [75, "ConnectorId"], [76, "IntegrationId"], [77, "Webhooks.HandlerId"], [78, "IntegrationId"],
+      [79, "CsvFormatId"], [80, "CsvFormatId"], [81, "EmailChannelId"], [82, "CsvFormatId"], [83, "IntegrationId"], [83, "ConnectorId"],
+      [84, "IntegrationId"], [84, "ConnectorId"], [84, "ProbeId"], [85, "IntegrationId"], [86, "IntegrationId"], [87, "ConnectorId"]],
+  ].map(([line, id]) => [`ui/app/pages/crm/logic/crm-positions.ts:${line}`, `${id === "ProbeId" ? "TestCrmConnectionUseCase" : id === "ConnectorId" ? "CrmConnector" : "CrmIntegration"}.${id}`]));
   const good = JSON.parse(plumb(path.join(FIX, "MER-CP-001", "good"), "--rule", "MER-CP-001", "--json").stdout);
   assert.deepEqual(good, []);
 });
@@ -1639,7 +1686,7 @@ test("MER-CP-001 reads constrained generics and `new` consts, and test paths rel
     "tests/fixtures/basic/pages/index.vue": '<script setup lang="ts">\nconst id = "a-id";\n</script>\n',
   });
   const findings = JSON.parse(plumb(r, "--rule", "MER-CP-001", "--json").stdout);
-  assert.deepEqual(findings.map((finding) => [finding.location, finding.message.match(/copies the server's (\S+) —/)?.[1]]), [
+  assert.deepEqual(findings.map((finding) => [finding.location, finding.message.match(/is the server's (\S+);/)?.[1]]), [
     ["src/web/pages/index.vue:2", "Handlers.AId"],
     ["src/web/pages/index.vue:2", "Handlers.BId"],
   ]);
@@ -1657,5 +1704,5 @@ test("MER-CP-001 takes no server ids from a test project, known by metadata, and
     "app/pages/index.vue": '<script setup lang="ts">\nconst ids = ["fixture-id", "hook-id", "crm-id"];\n</script>\n',
   });
   const findings = JSON.parse(plumb(r, "--rule", "MER-CP-001", "--json").stdout);
-  assert.deepEqual(findings.map((finding) => finding.message.match(/copies the server's (\S+) —/)?.[1]), ["Crm.Hooks.HookId", "Crm.CrmId"]);
+  assert.deepEqual(findings.map((finding) => finding.message.match(/is the server's (\S+);/)?.[1]), ["Crm.Hooks.HookId", "Crm.CrmId"]);
 });

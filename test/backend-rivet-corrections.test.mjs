@@ -208,7 +208,8 @@ test("MER-RV-007 flags every app-written RivetResult extension named like an ada
     // Good: result filters that log or record the adapter's status in an app's own AuditResult/ValidationResult
     // or audit.Results, and set context.Result in a statement of their own; an attribute's typeof() on a
     // controller that calls Problem() elsewhere; another project's own `record Adapted` beside App's global alias
-    // of that name; a Verification/ project whose <IsTestProject> alone makes it test code; a pattern's `{ }` that
+    // of that name; a Verification/ project whose <IsTestProject> alone makes it test code (its RivetResult helper may write the
+    // adapter's output to the response); a pattern's `{ }` that
     // ends no member, a named argument's label, a reassigned local and a lambda parameter that shadows one; and
     // helpers and a nested reader handing back the adapter's output only to a log. Also: the `new` modifier on an
     // indexer, which constructs nothing; a call that picks the overload returning no read; a block- or
@@ -222,8 +223,9 @@ test("MER-RV-007 flags every app-written RivetResult extension named like an ada
     // RivetActionResult or RivetResult of the app's own, under another qualifier, global:: alone or an alias of one
     // (an extension off an alias of the app's RivetResult is no bridge), or bare where the app's own type of that
     // name is in scope (declared around the code, or in its namespace in another file). Also: a qualifier or a
-    // receiver whose dot ends a line, which still names another type's namesake or another object's member; a helper that reads and logs the adapter's output and
-    // returns the adapter; Match arms under a nullable type argument; and a lambda's block in a logging statement,
+    // receiver whose dot ends a line, which still names another type's namesake or another object's member; a helper that adapts once, reads and logs the adapter's output and
+    // returns the local holding it; helpers that set a filter context's Result to the adapter's output or an app's
+    // own auditContext.Result, then return the adapter's; a nested type of a type around the code, which hides a top-level one of its name; Match arms under a nullable type argument; and a lambda's block in a logging statement,
     // whose result is the lambda's own.
     assert.equal(run("MER-RV-007", "good"), "");
     const output = run("MER-RV-007", "bad");
@@ -260,13 +262,23 @@ test("MER-RV-007 flags every app-written RivetResult extension named like an ada
         "Modules/Common/QualifiedResultExtensions.cs:4",
         "Modules/Common/ResultExtensions.Actions.cs:1",
         "Modules/Common/ResultExtensions.cs:1",
+        // A returned local reassigned after the adapter's result, assigned it only in a lambda's block or on one
+        // arm of a ?:, or written again by a deconstruction.
+        "Modules/Common/ReturnedNameExtensions.cs:15",
+        "Modules/Common/ReturnedNameExtensions.cs:25",
+        "Modules/Common/ReturnedNameExtensions.cs:35",
+        "Modules/Common/ReturnedNameExtensions.cs:4",
         // An app's own `namespace Rivet.Shims`: only `Rivet` itself is Rivet's.
         "Modules/Common/RivetNamedShim.cs:4",
         // The app namespace after a `namespace Rivet { }` block; the shim itself is Rivet's.
         "Modules/Common/Shims.cs:12",
-        // Helpers that return the adapter on every path but write its status to the response, read bare or under
-        // an alias.
+        // Helpers that return the adapter on every path but write its output to the response, read bare, under an
+        // alias, through a property pattern's binding, in an interpolated string's hole or through an extension
+        // helper.
         "Modules/Common/StatusWriterExtensions.cs:18",
+        "Modules/Common/StatusWriterExtensions.cs:29",
+        "Modules/Common/StatusWriterExtensions.cs:39",
+        "Modules/Common/StatusWriterExtensions.cs:50",
         "Modules/Common/StatusWriterExtensions.cs:7",
         // A record after a class, its reference in the record's parameter list.
         "Modules/Common/WrapperRecord.cs:9",
@@ -327,6 +339,10 @@ test("MER-RV-007 flags every app-written RivetResult extension named like an ada
         // A shadowing lambda that ends at its argument's `,`, before the local is used.
         "Modules/Orders/NonLastLambda.cs:6",
         "Modules/Orders/OrderResultExtensions.cs:1",
+        // The bare names under `using Rivet;`, where Billing's own RivetActionResult is out of scope and Tools'
+        // global-namespace namesakes are in a project App doesn't reference: a copy and a bridge.
+        "Modules/Orders/OutOfScopeNamesake.cs:13",
+        "Modules/Orders/OutOfScopeNamesake.cs:7",
         // The outer class's method, after a nested class.
         "Modules/Orders/OuterRelay.cs:3",
         // A property pattern's braces end no member.
@@ -340,6 +356,8 @@ test("MER-RV-007 flags every app-written RivetResult extension named like an ada
         "Modules/Orders/ResponseWritingFilter.cs:4",
         // An endpoint filter's `is global::Rivet.RivetActionResult` pattern rebuilt as Results.Json.
         "Modules/Orders/ResultStatusFilter.cs:4",
+        // A nested reader called from its sibling, which the type around both declares.
+        "Modules/Orders/SiblingNestedReader.cs:11",
         // A sibling type's helper that returns a read: static, bare, after a suffix of its namespace or after
         // global::; through an instance constructed in place or handed in; and in a ?:'s arm.
         "Modules/Orders/SiblingReader.cs:15",
@@ -348,6 +366,12 @@ test("MER-RV-007 flags every app-written RivetResult extension named like an ada
         "Modules/Orders/SiblingReader.cs:38",
         "Modules/Orders/SiblingReader.cs:44",
         "Modules/Orders/SiblingReader.cs:9",
+        // A spread's `..`, which is no member access: of a local, a member call, a sibling's static helper and a
+        // nested reader bound to a name.
+        "Modules/Orders/SpreadRelay.cs:14",
+        "Modules/Orders/SpreadRelay.cs:29",
+        "Modules/Orders/SpreadRelay.cs:35",
+        "Modules/Orders/SpreadRelay.cs:4",
         // A struct-only file: once, at the struct.
         "Modules/Orders/StatusCopy.cs:4",
         // An expression-bodied helper that returns a read.
@@ -427,6 +451,7 @@ test("MER-RV-007 flags every app-written RivetResult extension named like an ada
         "Modules/Orders/NestedReaders.cs:39 GrandchildReader",
         "Modules/Orders/NestedReaders.cs:4 StaticNestedReader",
         "Modules/Orders/NonLastLambda.cs:6 NonLastLambda",
+        "Modules/Orders/OutOfScopeNamesake.cs:7 OutOfScopeNamesake",
         "Modules/Orders/OuterRelay.cs:3 OuterRelay",
         "Modules/Orders/PatternRelay.cs:4 PatternRelay",
         "Modules/Orders/PropertyHelper.cs:12 InitializedProperty",
@@ -434,12 +459,17 @@ test("MER-RV-007 flags every app-written RivetResult extension named like an ada
         "Modules/Orders/RelayController.cs:4 RelayController",
         "Modules/Orders/ResponseWritingFilter.cs:4 ResponseWritingFilter",
         "Modules/Orders/ResultStatusFilter.cs:4 ResultStatusFilter",
+        "Modules/Orders/SiblingNestedReader.cs:11 Inner",
         "Modules/Orders/SiblingReader.cs:15 NamespacedSiblingReader",
         "Modules/Orders/SiblingReader.cs:21 GlobalSiblingReader",
         "Modules/Orders/SiblingReader.cs:32 SiblingInstanceReader",
         "Modules/Orders/SiblingReader.cs:38 InjectedSiblingReader",
         "Modules/Orders/SiblingReader.cs:44 ConditionalSiblingReader",
         "Modules/Orders/SiblingReader.cs:9 SiblingReader",
+        "Modules/Orders/SpreadRelay.cs:14 SpreadMemberRelay",
+        "Modules/Orders/SpreadRelay.cs:29 SpreadStaticRelay",
+        "Modules/Orders/SpreadRelay.cs:35 SpreadBoundRelay",
+        "Modules/Orders/SpreadRelay.cs:4 SpreadLocalRelay",
         "Modules/Orders/StatusCopy.cs:4 StatusCopy",
         "Modules/Orders/StatusHelper.cs:4 StatusHelper",
         "Modules/Orders/TargetTypedRelay.cs:14 TargetTypedReturn",
@@ -468,6 +498,10 @@ test("MER-RV-007 flags every app-written RivetResult extension named like an ada
     assert.match(output, /BridgeThenStruct\.cs:1\tStructBridgeExtensions hand-writes an HTTP-result bridge off RivetResult \(ToHttp\)/);
     assert.match(output, /StatusWriterExtensions\.cs:7\tStatusWriterExtensions hand-writes an HTTP-result bridge off RivetResult \(ToHttp\)/);
     assert.match(output, /StatusWriterExtensions\.cs:18\tAliasedStatusWriterExtensions hand-writes an HTTP-result bridge off RivetResult \(ToHttp\)/);
+    assert.match(output, /StatusWriterExtensions\.cs:29\tPatternStatusWriterExtensions hand-writes an HTTP-result bridge off RivetResult \(ToHttp\)/);
+    assert.match(output, /StatusWriterExtensions\.cs:39\tInterpolatedValueWriterExtensions hand-writes an HTTP-result bridge off RivetResult \(ToHttp\)/);
+    assert.match(output, /StatusWriterExtensions\.cs:50\tHelperStatusWriterExtensions hand-writes an HTTP-result bridge off RivetResult \(ToHttp\)/);
+    assert.match(output, /OutOfScopeNamesake\.cs:13\tOutOfScopeBridge hand-writes an HTTP-result bridge off RivetResult \(ToHttp\)/);
     assert.match(output, /NamespaceAliasRelay\.cs:12\tNamespaceAliasExtensions hand-writes an HTTP-result bridge off RivetResult \(ToHttp\)/);
     assert.match(output, /QualifiedResultExtensions\.cs:4\tQualifiedResultExtensions hand-writes an HTTP-result bridge off RivetResult \(ToHttp\)/);
     assert.match(output, /QualifiedResultExtensions\.cs:10\tGlobalQualifiedResultExtensions hand-writes an HTTP-result bridge off RivetResult \(ToHttp\)/);

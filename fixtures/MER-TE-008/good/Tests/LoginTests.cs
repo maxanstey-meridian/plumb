@@ -11,4 +11,7 @@ namespace App.Tests
     }
 
     public sealed class InlineObjectOptionalityTests { }
+
+    // A file-local double can't be reused.
+    file sealed class FakeLocal { }
 }

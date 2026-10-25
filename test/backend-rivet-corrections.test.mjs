@@ -111,6 +111,29 @@ test("MER-BE-006 counts a module only where a name it writes resolves to the Com
         [...onlyClock, "Common/Money.cs:0\tCommon type Rate is referenced only by module Rota"]);
 });
 
+test("MER-BE-006 reads every part of a partial type, and never reports a type that moves with its file or outer type", () => {
+    const findings = scan("MER-BE-006", {
+        "Common/Money.cs": "namespace Acme.Common;\npublic sealed record Money(decimal Amount);\n",
+        // Settings' second part names Money, so Users, through Settings, is Money's second consumer.
+        "Common/Settings.A.cs": "namespace Acme.Common;\npublic sealed partial class Settings { }\n",
+        "Common/Settings.B.cs": "namespace Acme.Common;\npublic sealed partial class Settings { public Money? Floor { get; init; } }\n",
+        // A private nested interface makes no port file: RateGate is still a candidate.
+        "Common/RateGate.cs": "namespace Acme.Common;\npublic sealed class RateGate { private interface ITick { } private ITick? tick; }\n",
+        // Only a protected internal nested type, of these, can be named outside Holder or its file.
+        "Common/Holder.cs": "namespace Acme.Common;\npublic sealed class Holder\n{\n    protected sealed record Guarded(int A);\n" +
+            "    protected internal sealed record Shared(int A);\n    private sealed class Inner { public sealed record Deep(int A); private Deep? deep; }\n" +
+            "    private Guarded? guarded;\n    private Inner? inner;\n    public int Size() => new Local().GetHashCode();\n}\nfile sealed class Local { }\n",
+        "Modules/Forms/Forms.cs": "namespace Acme.Modules.Forms;\npublic sealed record Forms(Acme.Common.Settings Settings, Acme.Common.Money Money, Acme.Common.RateGate Gate, " +
+            "Acme.Common.Holder Holder, Acme.Common.Holder.Shared Shared);\n",
+        "Modules/Users/Users.cs": "namespace Acme.Modules.Users;\npublic sealed record Users(Acme.Common.Settings Settings);\n",
+    });
+    assert.deepEqual(findings.map((finding) => finding.replace(/ — review.*/, "")).sort(), [
+        "Common/Holder.cs:0\tCommon type Holder is referenced only by module Forms",
+        "Common/Holder.cs:0\tCommon type Shared is referenced only by module Forms",
+        "Common/RateGate.cs:0\tCommon type RateGate is referenced only by module Forms",
+    ]);
+});
+
 test("MER-BE-007 reports the domain type a port's name resolves to, not a namesake", () => {
     // good: IFormLister's FormSnapshot is the Ports namespace's own record, despite the Forms.Domain using.
     assert.equal(run("MER-BE-007", "good"), "");
@@ -822,6 +845,7 @@ test("MER-RV-027 reads .Returns<T> only in a [RivetContract], and a conditional 
 test("MER-TE-008 checks a TypeScript API's test/ tree and accepts doubles in its support/ folder", () => {
     assertFindings("MER-TE-008", "bad", [
         ["Tests/FakeClock.cs:3", "top-level test double FakeClock lives outside TestSupport/<Module>"],
+        ["Tests/InMemoryOutbox.cs:5", "top-level test double InMemoryOutbox lives outside TestSupport/<Module>"],
         ["api/test/orders/fake-quote-store.ts:2", "exported test double FakeQuoteStore is outside the test tree's support/ folder — move reusable doubles into that support/ folder"],
     ]);
     const findings = scan("MER-TE-008", {

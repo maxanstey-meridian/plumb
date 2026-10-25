@@ -204,13 +204,14 @@ test("MER-RV-006 finds multiline implicit-private behavior only in the attribute
     assert.match(output, /OrdersContract\.cs:4\t.*may contain only/);
 });
 
-test("MER-RV-007 flags every app-written RivetResult extension named like an adapter or returning an HTTP result, and app code whose one statement copies RivetActionResult's StatusCode or Value into a result or the response, by the type it's declared in, and leaves Rivet's own adapters, helpers that call them, filters that only read it, tests and mentions in comments, strings or attributes", () => {
+test("MER-RV-007 flags every app-written RivetResult extension named like an adapter or returning an HTTP result, and app code whose one statement copies RivetActionResult's StatusCode or Value into a result or the response, by the type it's declared in, and leaves Rivet's own adapters, helpers that call them, filters that only read it, test code other than its namesakes, and mentions in comments, strings or attributes", () => {
     // Good: result filters that log or record the adapter's status in an app's own AuditResult/ValidationResult or
     // audit.Results, and set context.Result in a statement of their own; an attribute's typeof() on a controller
     // that calls Problem() elsewhere; another project's own `record Adapted` beside App's global alias of that name;
-    // a Verification/ project whose <IsTestProject> alone makes it test code (its RivetResult helper may write the
-    // adapter's output to the response); a pattern's `{ }` that ends no member, a named argument's label, a
-    // reassigned local and a lambda parameter that shadows one; and helpers and a nested reader handing back the
+    // a Verification/ project whose <IsTestProject> alone makes it test code, exempt from the bridge check (its
+    // RivetResult helpers may write the adapter's output to the response or build a result of their own); a
+    // pattern's `{ }` that ends no member, a named argument's label, a reassigned local and a lambda parameter that
+    // shadows one; and helpers and a nested reader handing back the
     // adapter's output only to a log. Also: the `new` modifier on an indexer, which constructs nothing; a call that
     // picks the overload returning no read; a block- or expression-bodied local function, a typed lambda, one of
     // several lambda parameters and a lambda's own local that shadow the local; and a local whose block ends before
@@ -419,6 +420,8 @@ test("MER-RV-007 flags every app-written RivetResult extension named like an ada
         "Relay/RelayTerminalExtensions.cs:4",
         // The adapter's output under an alias only its own project's .csproj <Using> declares.
         "Relay/WrappedRelay.cs:4",
+        // A ToResult namesake in test code: no bridge there, but it still shadows Rivet's adapter.
+        "Verification/TestNamesakes.cs:4",
     ]);
     const copies = [...output.matchAll(/^MER-RV-007\twarn\t(\S+)\t(.+?) copies the StatusCode or Value of RivetActionResult/gm)].map((match) => `${match[1]} ${match[2]}`).sort();
     assert.deepEqual(copies, [
@@ -519,6 +522,7 @@ test("MER-RV-007 flags every app-written RivetResult extension named like an ada
     assert.match(output, /QualifiedResultExtensions\.cs:10\tGlobalQualifiedResultExtensions hand-writes an HTTP-result bridge off RivetResult \(ToHttp\)/);
     assert.match(output, /RelayTerminalExtensions\.cs:4\tRelayTerminalExtensions hand-writes an HTTP-result bridge off RivetResult \(ToHttp\)/);
     assert.match(output, /HostExtensions\.cs:4\tHostTerminalExtensions hand-writes an HTTP-result bridge off RivetResult \(ToHttp\)/);
+    assert.match(output, /TestNamesakes\.cs:4\tTestNamesakes declares its own ToResult off RivetResult, so a handler's call may bind to it instead of Rivet's first-party adapter — rename or delete it\trivet\.md#minimal-apis$/m);
     assert.match(output, /HttpResultExtensions\.cs:1\tHttpResultExtensions hand-writes an HTTP-result bridge off RivetResult \(ToHttpResult, Respond\) — delete it and use Rivet's first-party \.ToResult\(\)\/\.ToActionResult\(\) adapters\trivet\.md#minimal-apis$/m);
 });
 

@@ -41,17 +41,22 @@ test("MER-BE-005 rejects sibling published Contracts in Domain but permits Appli
     assert.match(run("MER-BE-005", "bad"), /^MER-BE-005\t.*Modules\/Auth\/Domain\/UsesFormsContract\.cs:1\t/m);
 });
 
-test("MER-BE-006 propagates consumers through real nested declaration bodies", () => {
+test("MER-BE-006 propagates consumers through real nested declaration bodies, and counts the host as a consumer", () => {
     const output = run("MER-BE-006", "good");
     for (const type of ["SubmissionAudit", "SubmissionState", "SubmissionDetails", "SubmissionItem"]) {
         assert.doesNotMatch(output, new RegExp(`Common type ${type} `));
     }
+    // One module each, plus the host: Program.cs (ClientAddress), Middleware/ (RequestQuota), and Program.cs
+    // through HostSettings, which names RetryWindow. HostSettings has only the host, which is no single owner.
+    assert.equal(output, "");
 });
 
 test("MER-BE-006 counts a module only where a name it writes resolves to the Common type", () => {
-    // Users declares its own Paging: a namesake, not a consumer of Acme.Common.Paging.
+    // Users declares its own Paging: a namesake, not a consumer of Acme.Common.Paging. A host test project's use of
+    // RetryBudget is not the host's.
     assertFindings("MER-BE-006", "bad", [
         ["Common/Paging.cs:0", "Common type Paging is referenced only by module Forms"],
+        ["Common/RetryBudget.cs:0", "Common type RetryBudget is referenced only by module Forms"],
         ["Common/SlugRules.cs:0", "Common type SlugRules is referenced only by module Forms"],
     ]);
     const findings = scan("MER-BE-006", {
@@ -63,6 +68,8 @@ test("MER-BE-006 counts a module only where a name it writes resolves to the Com
         "Modules/Rota/Shift.cs": "namespace Acme.Modules.Rota;\n// Rate and Clock live in Common.\npublic sealed record Shift(string Note = \"Rate\");\n",
         // Rate's only consumer is Rota, through a qualified name; Rate names Money, so Rota consumes Money too.
         "Modules/Rota/Pay.cs": "namespace Acme.Modules.Rota;\npublic sealed record Pay(Acme.Common.Rate Rate);\n",
+        // A feature's transport contract is not the host.
+        "Contracts/Rota/RotaContract.cs": "namespace Acme.Contracts.Rota;\npublic sealed record RotaPay(Acme.Common.Rate Rate);\n",
     });
     assert.deepEqual(findings.map((finding) => finding.replace(/ — review.*/, "")).sort(), [
         "Common/Clock.cs:0\tCommon type Clock is referenced only by module Payroll",

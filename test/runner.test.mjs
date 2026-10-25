@@ -269,6 +269,27 @@ test("MER-FE-041 matches shell basename and composables-segment semantics", () =
   assert.deepEqual(findings.map((finding) => finding.location), ["app/composables/nested/use-bad-name.ts:0"]);
 });
 
+test("MER-FE-031 and MER-FE-022 count consumers through shared items, per feature, and app-wide", () => {
+  // Good: consumers reached through a shared component, two features, app-wide consumers and a shared cycle.
+  for (const id of ["MER-FE-031", "MER-FE-022"]) {
+    assert.deepEqual(focusedFindings(path.join(FIX, id, "good"), id).findings, [], `${id} good`);
+  }
+  const bad = (id) => focusedFindings(path.join(FIX, id, "bad"), id).findings.map((finding) => [finding.location, finding.message]);
+  const item = (owner) => `only one subtree (${owner}) consumes this shared item — review ownership; consumer count alone does not prove misplacement`;
+  const composable = (owner) => `shared composable is consumed only by ${owner} — composables live at their composition root; move it into that subtree`;
+  assert.deepEqual(bad("MER-FE-031"), [
+    ["app/shared/components/Chart.vue:0", item("pages/index")],
+    ["app/shared/logic/conditions.ts:0", item("features/alpha")],
+    ["app/shared/logic/format.ts:0", item("pages/index")],
+    ["app/shared/logic/redirect.ts:0", item("middleware")],
+    ["app/shared/logic/scale.ts:0", item("pages/index")],
+  ]);
+  assert.deepEqual(bad("MER-FE-022"), [
+    ["app/shared/composables/use-clock.ts:0", composable("pages/index")],
+    ["app/shared/composables/use-ticker.ts:0", composable("pages/index")],
+  ]);
+});
+
 test("MER-TE-006 preserves Nuxt root depth and per-directory deduplication", () => {
   const r = repo([], {
     "a/b/c/d/e/nuxt.config.ts": "export default {}\n",

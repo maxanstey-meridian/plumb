@@ -44,19 +44,25 @@ test("MER-BE-005 rejects sibling published Contracts in Domain but permits Appli
 test("MER-BE-006 propagates consumers through real nested declaration bodies, and counts the host as a consumer", () => {
     const output = run("MER-BE-006", "good");
     // One module each, plus the host: Program.cs (ClientAddress), Middleware/ (RequestQuota), and Program.cs
-    // through HostSettings, which names RetryWindow. HostSettings has only the host, which is no single owner.
+    // through HostSettings, which names RetryWindow. HostSettings has only the host, which is no single owner. Forms
+    // plus a transport contract's server: Rota through its contract class (ShiftWindow) and through a Conditions DTO
+    // (RuleKind), Reference serving Contracts/ReferenceData (ListColumn), and the host serving Contracts/Health (BuildStamp).
     assert.equal(output, "");
 });
 
 test("MER-BE-006 counts a module only where a name it writes resolves to the Common type", () => {
     // Users declares its own Paging: a namesake, not a consumer of Acme.Common.Paging. A host test project's use of
-    // RetryBudget is not the host's.
+    // RetryBudget, directly or through a contract it references, is not the host's. Rota serving its own wire keeps
+    // RotaSlot Rota's, and makes WireColour, which only that wire names, Rota's; an unserved contract leaves Ledger Forms'.
     assertFindings("MER-BE-006", "bad", [
+        ["Common/Ledger.cs:0", "Common type Ledger is referenced only by module Forms"],
         ["Common/Paging.cs:0", "Common type Paging is referenced only by module Forms"],
         ["Common/RetryBudget.cs:0", "Common type RetryBudget is referenced only by module Forms"],
+        ["Common/RotaSlot.cs:0", "Common type RotaSlot is referenced only by module Rota"],
         ["Common/SlugRules.cs:0", "Common type SlugRules is referenced only by module Forms"],
+        ["Common/WireColour.cs:0", "Common type WireColour is referenced only by module Rota"],
     ]);
-    const findings = scan("MER-BE-006", {
+    const files = {
         "Common/Money.cs": "namespace Acme.Common;\npublic sealed record Money(decimal Amount);\npublic sealed record Rate(Money PerHour);\n",
         "Common/Clock.cs": "namespace Acme.Common;\npublic static class Clock { public static int Now => 0; }\n",
         // A using, an alias and a `using static` each make a consumer; a comment and a string do not.
@@ -65,12 +71,20 @@ test("MER-BE-006 counts a module only where a name it writes resolves to the Com
         "Modules/Rota/Shift.cs": "namespace Acme.Modules.Rota;\n// Rate and Clock live in Common.\npublic sealed record Shift(string Note = \"Rate\");\n",
         // Rate's only consumer is Rota, through a qualified name; Rate names Money, so Rota consumes Money too.
         "Modules/Rota/Pay.cs": "namespace Acme.Modules.Rota;\npublic sealed record Pay(Acme.Common.Rate Rate);\n",
-        // A feature's transport contract is not the host.
         "Contracts/Rota/RotaContract.cs": "namespace Acme.Contracts.Rota;\npublic sealed record RotaPay(Acme.Common.Rate Rate);\n",
-    });
+    };
+    const serving = (module) => ({ [`Modules/${module}/RotaEndpoints.cs`]: `namespace Acme.Modules.${module};\npublic sealed class RotaEndpoints { public Acme.Contracts.Rota.RotaPay? Pay { get; set; } }\n` });
+    // An unserved transport contract passes nothing on, and isn't the host.
+    const findings = scan("MER-BE-006", files);
     assert.deepEqual(findings.map((finding) => finding.replace(/ — review.*/, "")).sort(), [
         "Common/Clock.cs:0\tCommon type Clock is referenced only by module Payroll",
         "Common/Money.cs:0\tCommon type Rate is referenced only by module Rota",
+    ]);
+    // Rota serving its own contract adds no second consumer: Rate stays Rota's.
+    assert.deepEqual(scan("MER-BE-006", { ...files, ...serving("Rota") }), findings);
+    // Payroll serving it consumes the Rate the contract names, so Rate is shared.
+    assert.deepEqual(scan("MER-BE-006", { ...files, ...serving("Payroll") }).map((finding) => finding.replace(/ — review.*/, "")), [
+        "Common/Clock.cs:0\tCommon type Clock is referenced only by module Payroll",
     ]);
 });
 

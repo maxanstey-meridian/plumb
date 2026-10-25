@@ -41,7 +41,7 @@ test("MER-BE-005 rejects sibling published Contracts in Domain but permits Appli
     assert.match(run("MER-BE-005", "bad"), /^MER-BE-005\t.*Modules\/Auth\/Domain\/UsesFormsContract\.cs:1\t/m);
 });
 
-test("MER-BE-006 propagates consumers through real nested declaration bodies, and counts the host as a consumer", () => {
+test("MER-BE-006 propagates consumers through real nested declaration bodies and the transport contracts a module or the host references, and counts the host as a consumer", () => {
     const output = run("MER-BE-006", "good");
     // One module each, plus the host: Program.cs (ClientAddress), Middleware/ (RequestQuota), and Program.cs
     // through HostSettings, which names RetryWindow. HostSettings has only the host, which is no single owner. Forms
@@ -50,7 +50,7 @@ test("MER-BE-006 propagates consumers through real nested declaration bodies, an
     assert.equal(output, "");
 });
 
-test("MER-BE-006 counts a module only where a name it writes resolves to the Common type", () => {
+test("MER-BE-006 counts a module only where a name it writes resolves to the Common type or to a transport contract naming it", () => {
     // Users declares its own Paging: a namesake, not a consumer of Acme.Common.Paging. A host test project's use of
     // RetryBudget, directly or through a contract it references, is not the host's. Rota serving its own wire keeps
     // RotaSlot Rota's, and makes WireColour, which only that wire names, Rota's; an unserved contract leaves Ledger Forms'.
@@ -82,10 +82,28 @@ test("MER-BE-006 counts a module only where a name it writes resolves to the Com
     ]);
     // Rota serving its own contract adds no second consumer: Rate stays Rota's.
     assert.deepEqual(scan("MER-BE-006", { ...files, ...serving("Rota") }), findings);
-    // Payroll serving it consumes the Rate the contract names, so Rate is shared.
-    assert.deepEqual(scan("MER-BE-006", { ...files, ...serving("Payroll") }).map((finding) => finding.replace(/ — review.*/, "")), [
-        "Common/Clock.cs:0\tCommon type Clock is referenced only by module Payroll",
-    ]);
+    // Payroll serving it consumes the Rate the contract names, so Rate is shared: whether the contract writes Rate, or
+    // an alias of its own, and whether Payroll writes RotaPay or a global alias of it. A global using static of the
+    // contract makes it, and so Rate, shared. Only Clock is left.
+    const onlyClock = ["Common/Clock.cs:0\tCommon type Clock is referenced only by module Payroll"];
+    const findingsOf = (extra) => scan("MER-BE-006", { ...files, ...extra }).map((finding) => finding.replace(/ — review.*/, ""));
+    assert.deepEqual(findingsOf(serving("Payroll")), onlyClock);
+    assert.deepEqual(findingsOf({ ...serving("Payroll"),
+        "Contracts/Rota/RotaContract.cs": "using Hourly = Acme.Common.Rate;\nnamespace Acme.Contracts.Rota;\npublic sealed record RotaPay(Hourly Rate);\n" }), onlyClock);
+    assert.deepEqual(findingsOf({ "GlobalUsings.cs": "global using RotaApi = Acme.Contracts.Rota.RotaPay;\n",
+        "Modules/Payroll/RotaUse.cs": "namespace Acme.Modules.Payroll;\npublic sealed record RotaUse(RotaApi? Pay);\n" }), onlyClock);
+    assert.deepEqual(findingsOf({ "GlobalUsings.cs": "global using static Acme.Contracts.Rota.RotaPay;\n" }), onlyClock);
+    // A contract's own using static names the type for every declaration in its file: Rota serving it consumes Clock.
+    assert.deepEqual(findingsOf({ ...serving("Rota"),
+        "Contracts/Rota/RotaStamp.cs": "using static Acme.Common.Clock;\nnamespace Acme.Contracts.Rota;\npublic sealed record RotaStamp(int At) { public static RotaStamp Stamp() => new(Now); }\n",
+        "Modules/Rota/RotaStamps.cs": "namespace Acme.Modules.Rota;\npublic sealed record RotaStamps(Acme.Contracts.Rota.RotaStamp Last);\n" }),
+        ["Common/Money.cs:0\tCommon type Rate is referenced only by module Rota"]);
+    // Inside a namespace block it reaches only that block: Rota serving the other block's DTO doesn't consume Clock.
+    assert.deepEqual(findingsOf({ ...serving("Rota"),
+        "Contracts/Rota/RotaStamp.cs": "namespace Acme.Contracts.Rota.Stamps { using static Acme.Common.Clock; public sealed record RotaStamp(int At) { public static RotaStamp Stamp() => new(Now); } }\n" +
+            "namespace Acme.Contracts.Rota.Notes { public sealed record RotaNote(string Text); }\n",
+        "Modules/Rota/RotaNotes.cs": "namespace Acme.Modules.Rota;\npublic sealed record RotaNotes(Acme.Contracts.Rota.Notes.RotaNote Last);\n" }),
+        [...onlyClock, "Common/Money.cs:0\tCommon type Rate is referenced only by module Rota"]);
 });
 
 test("MER-BE-007 reports the domain type a port's name resolves to, not a namesake", () => {

@@ -1788,6 +1788,7 @@ test("MER-CP-002 reports each missing field, unknown or repeated rule ID, misrea
     ["api/Modules/Billing/INVARIANTS.md:16", "cites `Modules/Gone/`"],
     ["api/Modules/Billing/INVARIANTS.md:16", "cites `Gone.Method`"],
     ["api/Modules/Billing/INVARIANTS.md:16", "cites `gone.bicep`"],
+    ["api/Modules/Billing/INVARIANTS.md:16", "cites `refuse_deleted_change`"], // an Owner's lower-case name is code, so it is checked
     ["api/Modules/Billing/INVARIANTS.md:18", "cites `GoneTests`"],
     ["api/Modules/Billing/INVARIANTS.md:18", "cites `InvoiceDeciderTests.A_deleted_test`"],
     ["api/Modules/Billing/INVARIANTS.md:18", "cites `Gone.feature`"],

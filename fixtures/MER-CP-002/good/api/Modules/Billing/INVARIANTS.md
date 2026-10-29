@@ -22,7 +22,8 @@ psql -f refuse.sql
 records its part in its own `INVARIANTS.md`.
 
 **Proof:** `InvoiceDeciderTests.A_paid_invoice_cannot_change`; `InvoiceDeciderTests`;
-`Invoicing.feature`; `invoice.spec.ts` (no "current_timestamp" is read).
+`Invoicing.feature`; `invoice.spec.ts` (no `now()`, `clock_timestamp()`, `statement_timestamp()` or
+`current_timestamp` anywhere in the server's code outside its migrations).
 
 ### PAY-001 depends on this
 

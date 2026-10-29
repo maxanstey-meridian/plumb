@@ -13,7 +13,7 @@ The trigger can be applied by hand where a migration can't run:
 psql -f refuse.sql
 ```
 
-**Owner:** `InvoiceDecider.Removed`; `GoneService`; `Modules/Gone/`; `Gone.Method()`; `gone.bicep`
+**Owner:** `InvoiceDecider.Removed`; `GoneService`; `Modules/Gone/`; `Gone.Method()`; `gone.bicep`; `refuse_deleted_change`
 
 **Proof:** `GoneTests`; `InvoiceDeciderTests.A_deleted_test`; `Gone.feature`; `gone.spec.ts`;
 `A_deleted_test_method`; `invoice.spec.ts`

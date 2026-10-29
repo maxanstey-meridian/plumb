@@ -35,7 +35,8 @@ PAY-001 settles each invoice once, and this module keeps it unchanged afterwards
 
 ## SHA-256 Hashes
 
-Each stored PDF is checked against its SHA-256 hash when it is read back.
+Each stored PDF is checked against its SHA-256 hash when it is read back, and is encrypted with AES-256 at rest.
+Its emailed copy carries RFC-822 dates and the customer's language as an ISO-639 code.
 
 ## MER-BE-005 Coverage
 

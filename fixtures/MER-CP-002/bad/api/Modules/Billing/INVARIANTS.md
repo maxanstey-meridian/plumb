@@ -32,8 +32,6 @@ psql -f refuse.sql
 
 ## BILL-004 — A Heading Written Another Way
 
-**Rule:** This entry isn't read as a rule.
+**Rule:** A dash after the ID still heads a rule, so its missing Proof is reported.
 
 **Owner:** `InvoiceDecider`
-
-**Proof:** `InvoiceDeciderTests`

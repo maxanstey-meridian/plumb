@@ -2,8 +2,8 @@
 
 ## FORM-001 — A Form Is Submitted Once
 
-**Rule:** A submitted form never takes a second submission. This entry isn't read as a rule, so nothing in it is checked.
+**Rule:** A submitted form never takes a second submission. A dash after the ID still heads a rule, so its names are checked. It leans on FORM-009 (FORM-009 is cited twice, and reported once).
 
-**Owner:** `InvoiceDecider`
+**Owner:** `FormSubmitter`, and nothing but `FormSubmitter`, which is cited twice and reported once
 
 **Proof:** `InvoiceDeciderTests`

@@ -16,7 +16,7 @@ psql -f refuse.sql
 **Owner:** `InvoiceDecider.Removed`; `GoneService`; `Modules/Gone/`; `Gone.Method()`; `gone.bicep`; `refuse_deleted_change`
 
 **Proof:** `GoneTests`; `InvoiceDeciderTests.A_deleted_test`; `Gone.feature`; `gone.spec.ts`;
-`A_deleted_test_method`; `invoice.spec.ts`
+`A_deleted_test_method`; `invoice.spec.ts`; `gone.bicep`; `invoiceGoneTests`
 
 ## BILL-002: An Invoice Has No Proof
 

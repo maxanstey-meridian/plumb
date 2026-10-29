@@ -1795,6 +1795,8 @@ test("MER-CP-002 reports each missing field, unknown or repeated rule ID, misrea
     ["api/Modules/Billing/INVARIANTS.md:18", "cites `gone.spec.ts`"],
     ["api/Modules/Billing/INVARIANTS.md:19", "cites `A_deleted_test_method`"],
     ["api/Modules/Billing/INVARIANTS.md:19", "cites `invoice.spec.ts`, which matches 2 files"],
+    ["api/Modules/Billing/INVARIANTS.md:19", "cites `gone.bicep`"], // a Proof's lower-case name with a file's ending is checked as a file
+    ["api/Modules/Billing/INVARIANTS.md:19", "cites `invoiceGoneTests`"], // a Proof's lower-case `…Tests` name is a test class, so it is checked
     ["api/Modules/Billing/INVARIANTS.md:21", "BILL-002 has no Proof"],
     ["api/Modules/Billing/INVARIANTS.md:27", "BILL-003 has no Owner"],
     ["api/Modules/Billing/INVARIANTS.md:27", "rule BILL-077"],

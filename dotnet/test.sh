@@ -1,7 +1,7 @@
 #!/bin/bash
-# Self-test for Meridian.Analyzers — the dotnet-side analogue of plumb --self-test
-# (FABLE_CONTRACT.md §8/§11.4). Separate from plumb --self-test on purpose: it
-# needs the dotnet SDK and real builds, which the default self-test must not.
+# Self-test for Meridian.Analyzers — the dotnet-side analogue of plumb --self-test.
+# Separate from plumb --self-test on purpose: it needs the dotnet SDK and real
+# builds, which the default self-test must not.
 # fixtures/bad must FAIL its build with all mirrored diagnostics;
 # fixtures/good must build clean with the same analyzer attached.
 set -u

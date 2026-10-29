@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Runner harness per FABLE_CONTRACT.md §8 — run: node --test test/
+// Runner harness — run: node --test test/
 // Near-metal per the skill's testing philosophy: plumb is invoked as a real
 // subprocess against synthetic temp repos built from the rule fixtures. No
 // mocks, no test deps beyond node:test. Pack gating is the headline coverage —
@@ -1777,23 +1777,38 @@ test("MER-CP-001 takes no server ids from a test project, known by metadata, and
   assert.deepEqual(findings.map((finding) => finding.message.match(/is the server's (\S+);/)?.[1]), ["Crm.Hooks.HookId", "Crm.CrmId"]);
 });
 
-test("MER-CP-002 reports each missing field, unknown or repeated rule ID, and cited name that no longer exists", () => {
+test("MER-CP-002 reports each missing field, unknown or repeated rule ID, misread heading, file with no rule, and cited name that isn't in the code", () => {
   const findings = JSON.parse(plumb(path.join(FIX, "MER-CP-002", "bad"), "--rule", "MER-CP-002", "--json").stdout);
-  const cited = (finding) => finding.message.match(/cites `([^`]+)`/)?.[1] ?? finding.message.match(/^\S+ has no \*\*\w+:\*\*|rule [A-Z-]+\d+|already defined/)?.[0];
+  const cited = (finding) => finding.message.match(/cites `([^`]+)`(?:, which matches \d+ files)?/)?.[0] ??
+    finding.message.match(/^\S+ has no \w+|rule [A-Z-]+\d+|already defined|^\S+ heading isn't read as a rule|^defines no rule/)?.[0];
   assert.deepEqual(findings.map((finding) => [finding.location, cited(finding)]), [
-    ["api/Modules/Billing/INVARIANTS.md:11", "BILL-002 has no **Proof:**"],
-    ["api/Modules/Billing/INVARIANTS.md:17", "BILL-003 has no **Owner:**"],
+    // The `### Notes` subheading and the fenced `# a shell comment` above them leave BILL-001's names checked.
+    ["api/Modules/Billing/INVARIANTS.md:16", "cites `InvoiceDecider.Removed`"], // the type exists, and only a comment names its member
+    ["api/Modules/Billing/INVARIANTS.md:16", "cites `GoneService`"],
+    ["api/Modules/Billing/INVARIANTS.md:16", "cites `Modules/Gone/`"],
+    ["api/Modules/Billing/INVARIANTS.md:16", "cites `Gone.Method`"],
+    ["api/Modules/Billing/INVARIANTS.md:16", "cites `gone.bicep`"],
+    ["api/Modules/Billing/INVARIANTS.md:18", "cites `GoneTests`"],
+    ["api/Modules/Billing/INVARIANTS.md:18", "cites `InvoiceDeciderTests.A_deleted_test`"],
+    ["api/Modules/Billing/INVARIANTS.md:18", "cites `Gone.feature`"],
+    ["api/Modules/Billing/INVARIANTS.md:18", "cites `gone.spec.ts`"],
+    ["api/Modules/Billing/INVARIANTS.md:19", "cites `A_deleted_test_method`"],
+    ["api/Modules/Billing/INVARIANTS.md:19", "cites `invoice.spec.ts`, which matches 2 files"],
+    ["api/Modules/Billing/INVARIANTS.md:21", "BILL-002 has no Proof"],
+    ["api/Modules/Billing/INVARIANTS.md:27", "BILL-003 has no Owner"],
+    ["api/Modules/Billing/INVARIANTS.md:27", "rule BILL-077"],
+    ["api/Modules/Billing/INVARIANTS.md:33", "BILL-004's heading isn't read as a rule"],
     ["api/Modules/Billing/INVARIANTS.md:5", "rule BILL-009"],
-    ["api/Modules/Billing/INVARIANTS.md:7", "InvoiceDecider.Removed"], // the type exists; its member doesn't
-    ["api/Modules/Billing/INVARIANTS.md:7", "GoneService"],
-    ["api/Modules/Billing/INVARIANTS.md:7", "Modules/Gone/"],
-    ["api/Modules/Billing/INVARIANTS.md:9", "GoneTests"],
-    ["api/Modules/Billing/INVARIANTS.md:9", "InvoiceDeciderTests.A_deleted_test"],
-    ["api/Modules/Billing/INVARIANTS.md:9", "Gone.feature"],
-    ["api/Modules/Billing/INVARIANTS.md:9", "gone.spec.ts"],
+    // Its only entry is headed `## FORM-001 — …`, and FORM is no defined rule's family, so the file itself is reported.
+    ["api/Modules/Forms/INVARIANTS.md:1", "defines no rule"],
     ["api/Modules/Payments/INVARIANTS.md:3", "already defined"],
   ]);
-  // The good twin cites a SQL trigger, a folder, a file, the platform's namespace and, in a Proof's
-  // explanation, a SQL keyword the code never names.
-  assert.equal(JSON.parse(plumb(path.join(FIX, "MER-CP-002", "good"), "--rule", "MER-CP-002", "--json").stdout).length, 0);
+});
+
+test("MER-CP-002 judges a cited name against the whole repository, so excluding the code it names changes nothing", () => {
+  const run = (twin, ...excludes) => JSON.parse(plumb(path.join(FIX, "MER-CP-002", twin), "--rule", "MER-CP-002", "--json", "--no-baseline",
+    ...excludes.flatMap((pattern) => ["--exclude", pattern])).stdout);
+  const narrowed = ["ui/", "api.tests/", "api/Migrations/", "api/Modules/Billing/*.cs"];
+  assert.deepEqual(run("bad", ...narrowed), run("bad"));
+  assert.deepEqual(run("good", ...narrowed), []);
 });

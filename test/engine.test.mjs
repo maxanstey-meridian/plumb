@@ -47,6 +47,17 @@ test("snapshot interns files and memoizes successful and failed physical reads",
   assert.equal(broken.counters.textReads, 1);
 });
 
+test("files out of the run's scope are readable through repositoryFiles but never scanned or looked up", () => {
+  const snapshot = createRepositorySnapshot({ ...inventory(["b.ts"]), outOfScope: ["a.ts", "c/d.ts"] }, { readFile(file) { return path.basename(file); } });
+  assert.deepEqual(snapshot.files.map((file) => file.path), ["b.ts"]);
+  assert.deepEqual(snapshot.repositoryFiles.map((file) => file.path), ["a.ts", "b.ts", "c/d.ts"]);
+  assert.equal(snapshot.file("a.ts"), undefined);
+  const repository = createRepositoryContext(snapshot, []);
+  assert.deepEqual(repository.context.files.map((file) => file.path), ["b.ts"]);
+  assert.equal(repository.context.repositoryFiles[1], repository.context.file("b.ts"));
+  assert.equal(repository.context.repositoryFiles[0].text(), "a.ts");
+});
+
 test("line maps preserve LF, CRLF, and terminal-newline offsets", () => {
   const lf = createLineMap("a\nb");
   assert.deepEqual(lf.lines, ["a", "b"]);

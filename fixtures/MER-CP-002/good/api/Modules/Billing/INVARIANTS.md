@@ -2,13 +2,40 @@
 
 ## BILL-001: A Paid Invoice Never Changes
 
-**Rule:** Once an invoice is paid, nothing about it changes.
+**Rule:** Once an invoice is paid, nothing about it changes. Its PDF is stored with its SHA-256 hash, and plumb's
+MER-BE-005 keeps other modules out of Billing's internals.
 
 **Why:** A paid invoice is what the customer was charged; changing it rewrites history.
 
-**Owner:** `InvoiceDecider.Refusal` refuses the change, and the `invoices_immutable` trigger
-(`Migrations/`) refuses it in storage; `BannedSymbols.txt` keeps the clock honest, and .NET's
-`System.Net.Http` is never called here. Payments leans on it (PAY-001).
+### Notes
+
+The trigger can be applied by hand where a migration can't run:
+
+```sh
+# a shell comment
+psql -f refuse.sql
+```
+
+**Owner:** `InvoiceDecider.Refusal()` refuses the change, and the `invoices_immutable` trigger
+(`Migrations/`) refuses it in storage, which `bin/release.sh` applies; `BannedSymbols.txt` keeps the clock honest,
+`app.bicep` deploys it, and .NET's `System.Net.Http` is never called here. Payments leans on it (`PAY-001`) and
+records its part in its own `INVARIANTS.md`.
 
 **Proof:** `InvoiceDeciderTests.A_paid_invoice_cannot_change`; `InvoiceDeciderTests`;
-`Invoicing.feature`; `invoice.spec.ts` (no `current_timestamp` is read).
+`Invoicing.feature`; `invoice.spec.ts` (no "current_timestamp" is read).
+
+### PAY-001 depends on this
+
+Finance calls a paid invoice `settled_once`; that is their word, not a name in the code.
+
+## Notes on PAY-001
+
+PAY-001 settles each invoice once, and this module keeps it unchanged afterwards.
+
+## SHA-256 Hashes
+
+Each stored PDF is checked against its SHA-256 hash when it is read back.
+
+## MER-BE-005 Coverage
+
+plumb's MER-BE-005 keeps other modules out of Billing's internals, so only this module writes an invoice.

@@ -108,6 +108,8 @@ test("excluded lists only what the run's excludes took out of the files the pers
   // fallback skip folder was never in the set.
   assert.deepEqual(inventory.files, [".plumbignore", "glob/f.ts", "ignored.ts", "main.ts"]);
   assert.deepEqual(inventory.excluded, ["dir/f.ts", "dir/g.ts", "glob/g.ts", "plain.ts"]);
+  // Out of scope is everything .plumbignore and the excludes took out, the persistently hidden `both.ts` included.
+  assert.deepEqual(inventory.outOfScope, ["both.ts", "dir/f.ts", "dir/g.ts", "glob/g.ts", "plain.ts"]);
 
   const repository = temporaryRepository();
   spawnSync("git", ["init", "-q"], { cwd: repository });
@@ -118,6 +120,7 @@ test("excluded lists only what the run's excludes took out of the files the pers
   assert.equal(tracked.mode, "git");
   assert.deepEqual(tracked.files, ["kept.ts"]);
   assert.deepEqual(tracked.excluded, ["tracked.ts"]);
+  assert.deepEqual(tracked.outOfScope, ["tracked.ts"]);
 });
 
 test("manifest traversal retains dot-dot-prefixed names and excludes file symlinks", () => {

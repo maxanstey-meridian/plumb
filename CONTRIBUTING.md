@@ -23,7 +23,7 @@ For an ast-grep-shaped single-file check, add a YAML rule under `rules/<pack>/` 
 
 Use `defineFileRule` when each file can be decided independently and `defineRepositoryRule` for cross-file policy. The engine passes file rules `(file, context)` and repository rules `(context)`.
 
-Repository context exposes `root`, `files`, `rivet`, `file(path)`, static configuration inputs, owner-scoped `report()`, and planned analysis services. File contexts expose `path`, `name`, `directory`, `text()`, `lineMap()`, `json()`, and `config(parser)`.
+Repository context exposes `root`, `files`, `repositoryFiles` (`files` plus those `.plumbignore` and `--exclude` left out of the run, for asking whether something exists in the repository, never for reporting on it), `rivet`, `file(path)`, static configuration inputs, owner-scoped `report()`, and planned analysis services. File contexts expose `path`, `name`, `directory`, `text()`, `lineMap()`, `json()`, and `config(parser)`.
 
 Basic file, text, line, JSON, and configuration access needs no capability declaration. Declare the narrowest sufficient heavyweight requirement from `Capability`:
 

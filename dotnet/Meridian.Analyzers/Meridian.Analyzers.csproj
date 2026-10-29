@@ -13,7 +13,7 @@
     <PackageId>Meridian.Analyzers</PackageId>
     <Version>0.1.0</Version>
     <Authors>Meridian</Authors>
-    <Description>Build-time semantic mirror of Plumb's Meridian dependency, published-contract, and Rivet payload ownership rules. Source of truth: ~/Sites/plumb.</Description>
+    <Description>Build-time semantic mirror of Plumb's Meridian dependency, published-contract, and Rivet payload ownership rules. Source of truth: Plumb.</Description>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
   </PropertyGroup>
 

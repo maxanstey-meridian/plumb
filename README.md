@@ -4,7 +4,7 @@ Plumb is Meridian's multi-language architecture and tooling policy checker.
 
 It builds one invocation-scoped model of a repository, then runs rule families over shared TypeScript, Vue, C#, .NET project, configuration, and dependency-graph analysis. Most rules execute in process; ast-grep handles declarative syntax checks, and two checks still execute as isolated producers.
 
-Check mode does not retain source changes. `--write-baseline` writes the requested baseline, while the CI-only freshness check temporarily regenerates output from a snapshot and restores it before returning. `plumb init` is a separate repository composer that creates files, initializes Git, and runs Plumb against the result.
+Check mode does not retain source changes. `--write-baseline` writes the requested baseline, while the CI-only freshness check temporarily regenerates output from a snapshot and restores it before returning.
 
 ## Scope
 
@@ -131,18 +131,6 @@ One scan creates a repository snapshot that interns visible files and memoizes t
 - `dotnet/` contains the optional build-time Roslyn analyzer and its independent test harness.
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for the rule API, capability model, finding contract, and fixture workflow.
-
-## Create A Repository
-
-`plumb init` composes a new repository, initializes Git, creates the first commit when Git identity is available, and runs Plumb against the result:
-
-```sh
-./plumb init /path/to/new-repo --name example --ts-backend
-./plumb init /path/to/new-repo --name example --dotnet-backend
-./plumb init /path/to/new-repo --name example --no-api
-```
-
-The TypeScript backend is the default. `--force` passes forced creation through to the underlying scaffold command. `MERIDIAN_RIVET_TS` and `MERIDIAN_GOLDEN` override the default Rivet scaffold and .NET exemplar locations.
 
 ## Verify Plumb
 

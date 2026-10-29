@@ -13,7 +13,8 @@ import { spawnProducer } from "./helpers/run-producer.mjs";
 const HOME = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const CHECKS = path.join(HOME, "checks");
 const FIXTURES = path.join(HOME, "fixtures");
-const REFERENCES = path.join(os.homedir(), ".config/opencode/skills/meridian/references");
+const DEFAULT_REFERENCES = path.join(os.homedir(), ".claude/skills/meridian/references");
+const REFERENCES = process.env.MERIDIAN_REFERENCES || DEFAULT_REFERENCES;
 const ownersByRule = () => loadRuleOwners(CHECKS, path.join(HOME, "rules"), inProcessRules).byRule;
 
 function githubHeadingSlugs(markdown) {
@@ -94,6 +95,10 @@ test("every implemented ID has exactly one owner and a fixture pair", () => {
 });
 
 test("each owner emits its declared ID on bad, not on good, with a valid severity and a resolvable docRef", () => {
+  assert.ok(
+    fs.existsSync(REFERENCES),
+    `Meridian references not found at ${REFERENCES}: set MERIDIAN_REFERENCES to the meridian skill's references folder, or install the skill at ${DEFAULT_REFERENCES}`,
+  );
   const slugCache = new Map();
   const findingFailures = [];
   for (const [id, owner] of ownersByRule()) {

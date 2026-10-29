@@ -33,7 +33,7 @@ const MIGRATED = [
   "MER-FE-013", "MER-FE-014", "MER-FE-015", "MER-FE-020", "MER-FE-021", "MER-FE-022",
   "MER-FE-030", "MER-FE-031", "MER-FE-032", "MER-FE-040", "MER-FE-044", "MER-FE-045",
   "MER-RV-001", "MER-RV-002", "MER-RV-003", "MER-RV-006", "MER-RV-007", "MER-RV-008", "MER-RV-009", "MER-RV-010", "MER-RV-011",
-  "MER-RV-020", "MER-RV-021", "MER-RV-025", "MER-RV-026", "MER-RV-027", "MER-CP-001",
+  "MER-RV-020", "MER-RV-021", "MER-RV-025", "MER-RV-026", "MER-RV-027", "MER-CP-001", "MER-CP-002",
   "MER-TE-001", "MER-TE-002", "MER-TE-003", "MER-TE-005", "MER-TE-006", "MER-TE-007", "MER-TE-008", "MER-TE-009",
   "MER-TO-001", "MER-TO-002", "MER-TO-003", "MER-TO-004", "MER-TO-005", "MER-TO-010", "MER-TO-011", "MER-TO-012", "MER-TO-014", "MER-TO-015",
 ];
@@ -1775,4 +1775,25 @@ test("MER-CP-001 takes no server ids from a test project, known by metadata, and
   });
   const findings = JSON.parse(plumb(r, "--rule", "MER-CP-001", "--json").stdout);
   assert.deepEqual(findings.map((finding) => finding.message.match(/is the server's (\S+);/)?.[1]), ["Crm.Hooks.HookId", "Crm.CrmId"]);
+});
+
+test("MER-CP-002 reports each missing field, unknown or repeated rule ID, and cited name that no longer exists", () => {
+  const findings = JSON.parse(plumb(path.join(FIX, "MER-CP-002", "bad"), "--rule", "MER-CP-002", "--json").stdout);
+  const cited = (finding) => finding.message.match(/cites `([^`]+)`/)?.[1] ?? finding.message.match(/^\S+ has no \*\*\w+:\*\*|rule [A-Z-]+\d+|already defined/)?.[0];
+  assert.deepEqual(findings.map((finding) => [finding.location, cited(finding)]), [
+    ["api/Modules/Billing/INVARIANTS.md:11", "BILL-002 has no **Proof:**"],
+    ["api/Modules/Billing/INVARIANTS.md:17", "BILL-003 has no **Owner:**"],
+    ["api/Modules/Billing/INVARIANTS.md:5", "rule BILL-009"],
+    ["api/Modules/Billing/INVARIANTS.md:7", "InvoiceDecider.Removed"], // the type exists; its member doesn't
+    ["api/Modules/Billing/INVARIANTS.md:7", "GoneService"],
+    ["api/Modules/Billing/INVARIANTS.md:7", "Modules/Gone/"],
+    ["api/Modules/Billing/INVARIANTS.md:9", "GoneTests"],
+    ["api/Modules/Billing/INVARIANTS.md:9", "InvoiceDeciderTests.A_deleted_test"],
+    ["api/Modules/Billing/INVARIANTS.md:9", "Gone.feature"],
+    ["api/Modules/Billing/INVARIANTS.md:9", "gone.spec.ts"],
+    ["api/Modules/Payments/INVARIANTS.md:3", "already defined"],
+  ]);
+  // The good twin cites a SQL trigger, a folder, a file, the platform's namespace and, in a Proof's
+  // explanation, a SQL keyword the code never names.
+  assert.equal(JSON.parse(plumb(path.join(FIX, "MER-CP-002", "good"), "--rule", "MER-CP-002", "--json").stdout).length, 0);
 });

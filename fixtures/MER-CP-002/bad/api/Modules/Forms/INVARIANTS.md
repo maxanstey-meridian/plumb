@@ -7,3 +7,11 @@
 **Owner:** `FormSubmitter`, and nothing but `FormSubmitter`, which is cited twice and reported once
 
 **Proof:** `InvoiceDeciderTests`
+
+## FORM-D-001 A Form Draft Is Kept
+
+**Rule:** A listed word (D) in the middle of an ID doesn't make a heading prose, so its names are checked.
+
+**Owner:** `FormDGone`
+
+**Proof:** `InvoiceDeciderTests`

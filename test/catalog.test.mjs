@@ -82,9 +82,9 @@ function verifyFinding(owner, finding, slugCache) {
   const ref = finding.docRef?.match(/^([^#]+\.md)#(.+)$/);
   assert.ok(ref, `${owner.source} emitted invalid docRef ${JSON.stringify(finding.docRef)}`);
   const reference = path.join(REFERENCES, ref[1]);
-  assert.ok(fs.existsSync(reference), `${owner.source} docRef file does not exist: ${finding.docRef}`);
+  assert.ok(fs.existsSync(reference), `${owner.source} docRef ${finding.docRef}: file does not exist: ${reference}`);
   if (!slugCache.has(reference)) slugCache.set(reference, githubHeadingSlugs(fs.readFileSync(reference, "utf8")));
-  assert.ok(slugCache.get(reference).has(ref[2]), `${owner.source} docRef anchor does not exist: ${finding.docRef}`);
+  assert.ok(slugCache.get(reference).has(ref[2]), `${owner.source} docRef ${finding.docRef}: anchor #${ref[2]} does not exist in ${reference}`);
 }
 
 test("every implemented ID has exactly one owner and a fixture pair", () => {

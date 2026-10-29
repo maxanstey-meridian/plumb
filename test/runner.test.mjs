@@ -1777,10 +1777,10 @@ test("MER-CP-001 takes no server ids from a test project, known by metadata, and
   assert.deepEqual(findings.map((finding) => finding.message.match(/is the server's (\S+);/)?.[1]), ["Crm.Hooks.HookId", "Crm.CrmId"]);
 });
 
-test("MER-CP-002 reads a rule from any level-2 heading that starts with its ID, and reports each missing field, unknown or repeated rule ID, rule headed at another level, file with no rule, and cited name that isn't in the code", () => {
+test("MER-CP-002 reads a rule from any level-2 heading that starts with its ID, and reports each missing field or title, unknown or repeated rule ID, rule headed at another level, ID without three digits, file with no rule, and cited name that isn't in the code", () => {
   const findings = JSON.parse(plumb(path.join(FIX, "MER-CP-002", "bad"), "--rule", "MER-CP-002", "--json").stdout);
   const cited = (finding) => finding.message.match(/cites `([^`]+)`(?:, which matches \d+ files)?/)?.[0] ??
-    finding.message.match(/^\S+ has no \w+|rule [A-Z-]+\d+|already defined|^\S+ is headed at level \d|^defines no rule/)?.[0];
+    finding.message.match(/^\S+ has no \w+|rule [A-Z-]+\d+|already defined|^\S+ is headed at level \d|^\S+ isn't a rule ID|^defines no rule/)?.[0];
   assert.deepEqual(findings.map((finding) => [finding.location, cited(finding)]), [
     // The `### Notes` subheading and the fenced `# a shell comment` above them leave BILL-001's names checked.
     ["api/Modules/Billing/INVARIANTS.md:16", "cites `InvoiceDecider.Removed`"], // the type exists, and only a comment names its member
@@ -1801,10 +1801,20 @@ test("MER-CP-002 reads a rule from any level-2 heading that starts with its ID, 
     ["api/Modules/Billing/INVARIANTS.md:27", "BILL-003 has no Owner"],
     ["api/Modules/Billing/INVARIANTS.md:27", "rule BILL-077"],
     ["api/Modules/Billing/INVARIANTS.md:33", "BILL-004 has no Proof"], // headed `## BILL-004 — …`, so it is still a rule
+    ["api/Modules/Billing/INVARIANTS.md:43", "cites `SpacedGone`"], // headed `## BILL-005 A …`, so its names are checked
+    ["api/Modules/Billing/INVARIANTS.md:47", "BILL-006 has no title"], // headed bare `## BILL-006`, a rule with no title
     ["api/Modules/Billing/INVARIANTS.md:5", "rule BILL-009"],
+    ["api/Modules/Billing/INVARIANTS.md:51", "cites `BareGone`"], // ...whose names are still checked
+    ["api/Modules/Billing/INVARIANTS.md:55", "BILL-008 has no title"], // `## BILL-008:`, a colon and nothing after it
+    // `# BILL-007: …` and `## BILL-01: …` are reported, and the names under them aren't checked; `## SHA-1 Notes` is prose.
+    ["api/Modules/Billing/INVARIANTS.md:63", "BILL-007 is headed at level 1"],
+    ["api/Modules/Billing/INVARIANTS.md:69", "BILL-01 isn't a rule ID"],
+    // Headed `## FORM-D-001 A …`: a heading's ID is prose only by its first word, so a listed D inside it is still a rule.
+    ["api/Modules/Forms/INVARIANTS.md:15", "cites `FormDGone`"],
     // Headed `## FORM-001 — …`, so its names are checked; each is cited twice on its line and reported once.
     ["api/Modules/Forms/INVARIANTS.md:5", "rule FORM-009"],
     ["api/Modules/Forms/INVARIANTS.md:7", "cites `FormSubmitter`"],
+    ["api/Modules/Payments/INVARIANTS.md:15", "cites `CurrencyGone`"], // `## ISO-001: …` is a rule though ISO-639 is prose
     ["api/Modules/Payments/INVARIANTS.md:3", "already defined"],
     ["api/Modules/Payments/INVARIANTS.md:5", "rule GONE-001"], // no defined rule starts GONE, and it is still a reference
     // Its only entry is headed `### REFUND-001: …`, so the file defines no rule and the heading is reported.

@@ -7,3 +7,11 @@
 **Owner:** `InvoiceDecider`
 
 **Proof:** `InvoiceDeciderTests`
+
+## ISO-001: A Payment's Currency Is A Three-Letter Code
+
+**Rule:** A colon heading defines a rule whatever its prefix, so its names are checked.
+
+**Owner:** `CurrencyGone`
+
+**Proof:** `InvoiceDeciderTests`

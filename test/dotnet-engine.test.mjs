@@ -28,6 +28,44 @@ test("C# masks preserve offsets and lines for comments and literal forms", () =>
   assert.match(delimiters, /MapGet\("\s+", Handler\)/);
 });
 
+test("C# masks keep an interpolated string's hole as code and its text, format clause, and escaped braces as text", () => {
+  // [source, masked, masked with keepStrings, masked with preserveStringDelimiters]
+  const cases = [
+    // A hole's code, and a string in a hole, which no longer ends the outer string.
+    ['$"x {Pdf.Listed(u.Chars)}."', '$    Pdf.Listed(u.Chars)   ', '$ x  Pdf.Listed(u.Chars) . ', '$"   Pdf.Listed(u.Chars)  "'],
+    ['$"a {Foo("b")} c"; D', '$    Foo(   )    ; D', '$ a  Foo( b )  c ; D', '$"   Foo(" ")   "; D'],
+    // A nested interpolated string, with a string in its own hole, and a comment in a hole.
+    ['$"{F(/* c */ a)} {G($"in {H("s")}")}"', '$  F(        a)   G($     H(   )  )  ', '$  F(        a)   G($ in  H( s )  )  ', '$" F(        a)   G($"    H(" ") ") "'],
+    ['$"{x // c\n}"; Y', '$  x     \n  ; Y', '$  x     \n  ; Y', '$" x     \n "; Y'],
+    // Escaped braces are text; the first of each pair is blanked like an escape backslash.
+    ['$"{{lit}} {X} }}"', '$          X     ', '$  {lit }  X   } ', '$"         X    "'],
+    // A format clause after a top-level `:` is text; an alignment, a parenthesised conditional, `::`, a named
+    // argument, and a lambda's initializer braces are code.
+    ['$"{x:N2} {y,10} {z,-5:D3}"', '$  x      y,10   z,-5     ', '$  x N2   y,10   z,-5 D3  ', '$" x      y,10   z,-5    "'],
+    ['$"{(a ? b : c)} {global::M(q: 1)}"', '$  (a ? b : c)   global::M(q: 1)  ', '$  (a ? b : c)   global::M(q: 1)  ', '$" (a ? b : c)   global::M(q: 1) "'],
+    ['$"{xs.Select(x => new { A = x }).Count()}"', '$  xs.Select(x => new { A = x }).Count()  ', '$  xs.Select(x => new { A = x }).Count()  ', '$" xs.Select(x => new { A = x }).Count() "'],
+    // A character literal's brace, in a hole, doesn't close it.
+    ["$\"{'}'}\" W", "$        W", "$   }    W", '$"     " W'],
+    // Verbatim either way round: a backslash is text and `""` an escaped quote.
+    ['@$"a\\{X}"" b"; C', '@$    X      ; C', '@$ a\\ X    b ; C', '@$"   X     "; C'],
+    ['$@"a\\{X}"" b"; C', '$@    X      ; C', '$@ a\\ X    b ; C', '$@"   X     "; C'],
+    // Raw strings: one `$` opens a hole on one brace; with `$$` fewer than two braces are text, and of three the
+    // first is text. A raw string without `$` has no holes.
+    ['$"""a {X} "b" """; C', '$      X         ; C', '$   a  X  "b"    ; C', '$      X         ; C'],
+    ['$$"""{a} {{X}} {{{Y}}}"""', '$$         X      Y      ', '$$   {a}   X   {  Y  }   ', '$$         X      Y      '],
+    ['"""raw {x}"""; Z', '             ; Z', '   raw {x}   ; Z', '             ; Z'],
+    // `@"""` is a verbatim string opening with an escaped quote, not a raw one.
+    ['@"""x"; @class', '@     ; @class', '@   x ; @class', '@"   "; @class'],
+  ];
+  for (const [source, masked, kept, delimited] of cases) {
+    for (const [options, expected] of [[{}, masked], [{ keepStrings: true }, kept], [{ preserveStringDelimiters: true }, delimited]]) {
+      const actual = maskCSharpText(source, options);
+      assert.equal(actual.length, source.length, `${source} ${JSON.stringify(options)}`);
+      assert.equal(actual, expected, `${source} ${JSON.stringify(options)}`);
+    }
+  }
+});
+
 test("C# balanced delimiter matching supports nested generic and block shapes", () => {
   const generic = "RouteDefinition<List<FormDto>>";
   assert.equal(matchingCSharpDelimiter(generic, generic.indexOf("<"), "<", ">"), generic.length - 1);

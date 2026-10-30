@@ -131,6 +131,22 @@ test("MER-BE-006 reads every part of a partial type, and never reports a type th
     ]);
 });
 
+test("MER-BE-006 counts a name in an interpolated string's hole, and never one in its text, a string in a hole, or a format clause", () => {
+    const findings = scan("MER-BE-006", {
+        "Common/Clock.cs": "namespace Acme.Common;\npublic static class Clock { public static int Now => 0; }\n",
+        "Common/Labels.cs": "namespace Acme.Common;\npublic static class Labels { public static string Of(int value) => \"\"; }\n",
+        "Modules/Forms/Forms.cs": "namespace Acme.Modules.Forms;\npublic sealed class Forms { public string Show() => Acme.Common.Labels.Of(Acme.Common.Clock.Now); }\n",
+        // Users names Clock only in holes, after a string in an earlier hole and in a raw `$$` hole; it names Labels
+        // only as text: in a string in a hole, a format clause, `{{…}}`, and a raw `$$` string's single braces.
+        "Modules/Users/Users.cs": "namespace Acme.Modules.Users;\npublic sealed class Users\n{\n" +
+            "    public string Show(string name) => $\"{name.Replace(\"x\", \"Labels\")} at {Acme.Common.Clock.Now:Labels} {{Acme.Common.Labels}}\";\n" +
+            "    public string Raw() => $$\"\"\"{Acme.Common.Labels} {{Acme.Common.Clock.Now}}\"\"\";\n}\n",
+    });
+    assert.deepEqual(findings.map((finding) => finding.replace(/ — review.*/, "")), [
+        "Common/Labels.cs:0\tCommon type Labels is referenced only by module Forms",
+    ]);
+});
+
 test("MER-BE-006 counts a call to a static class's extension member where the class's namespace is in scope, and never an enum member's name", () => {
     const findings = scan("MER-BE-006", {
         "Common/Roles.cs": "namespace Acme.Common;\npublic enum Role { Admin, Member }\npublic static class RoleRules\n{\n" +

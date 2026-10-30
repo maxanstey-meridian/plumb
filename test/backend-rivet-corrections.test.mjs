@@ -465,8 +465,10 @@ test("MER-RV-007 flags every app-written RivetResult extension named like an ada
         "Modules/Orders/LambdaArgumentResult.cs:4",
         // Copied through a local, then built into a result.
         "Modules/Orders/LocalCopyFilter.cs:4",
-        // An overload picked by its argument count, and a member's local function, returning a read.
+        // An overload picked by its argument count (an interpolated string's alignment comma isn't one), and a
+        // member's local function, returning a read.
         "Modules/Orders/MemberHelpers.cs:14",
+        "Modules/Orders/MemberHelpers.cs:24",
         "Modules/Orders/MemberHelpers.cs:4",
         // The adapter's output under a file's alias of Rivet's namespace, and a bridge off RivetResult qualified by
         // it through `::`.
@@ -589,6 +591,7 @@ test("MER-RV-007 flags every app-written RivetResult extension named like an ada
         "Modules/Orders/LambdaArgumentResult.cs:4 LambdaArgumentJson",
         "Modules/Orders/LocalCopyFilter.cs:4 LocalCopyFilter",
         "Modules/Orders/MemberHelpers.cs:14 PickedOverloadStatus",
+        "Modules/Orders/MemberHelpers.cs:24 AlignedOverloadStatus",
         "Modules/Orders/MemberHelpers.cs:4 MemberLocalStatus",
         "Modules/Orders/NamespaceAliasRelay.cs:6 NamespaceAliasRelay",
         "Modules/Orders/NestedReader.cs:15 NestedLocalReader",

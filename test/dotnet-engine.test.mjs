@@ -39,9 +39,11 @@ test("C# masks keep an interpolated string's hole as code and its text, format c
     ['$"{x // c\n}"; Y', '$  x     \n  ; Y', '$  x     \n  ; Y', '$" x     \n "; Y'],
     // Escaped braces are text; the first of each pair is blanked like an escape backslash.
     ['$"{{lit}} {X} }}"', '$          X     ', '$  {lit }  X   } ', '$"         X    "'],
-    // A format clause after a top-level `:` is text; an alignment, a parenthesised conditional, `::`, a named
-    // argument, and a lambda's initializer braces are code.
-    ['$"{x:N2} {y,10} {z,-5:D3}"', '$  x      y,10   z,-5     ', '$  x N2   y,10   z,-5 D3  ', '$" x      y,10   z,-5    "'],
+    // A format clause after a top-level `:` is text; an alignment's expression, a parenthesised conditional, `::`, a
+    // named argument, and a lambda's initializer braces are code. The alignment's `,` is blanked like the hole's
+    // braces, so it splits no call around the string: F(...) here has one argument at its top level.
+    ['$"{x:N2} {y,10} {z,-5:D3}"', '$  x      y 10   z -5     ', '$  x N2   y 10   z -5 D3  ', '$" x      y 10   z -5    "'],
+    ['F($"{a,10}")', 'F($  a 10  )', 'F($  a 10  )', 'F($" a 10 ")'],
     ['$"{(a ? b : c)} {global::M(q: 1)}"', '$  (a ? b : c)   global::M(q: 1)  ', '$  (a ? b : c)   global::M(q: 1)  ', '$" (a ? b : c)   global::M(q: 1) "'],
     ['$"{xs.Select(x => new { A = x }).Count()}"', '$  xs.Select(x => new { A = x }).Count()  ', '$  xs.Select(x => new { A = x }).Count()  ', '$" xs.Select(x => new { A = x }).Count() "'],
     // A character literal's brace, in a hole, doesn't close it.
@@ -56,6 +58,19 @@ test("C# masks keep an interpolated string's hole as code and its text, format c
     ['"""raw {x}"""; Z', '             ; Z', '   raw {x}   ; Z', '             ; Z'],
     // `@"""` is a verbatim string opening with an escaped quote, not a raw one.
     ['@"""x"; @class', '@     ; @class', '@   x ; @class', '@"   "; @class'],
+    // A directive's line is code, so a quote in its free text opens no literal; a `//` on it is a comment.
+    ["#region A's\nX", "#region A's\nX", "#region A's\nX", "#region A's\nX"],
+    ["  #error Don't // it's \"x\"\r\nclass A { char c = 'x'; }", "  #error Don't            \r\nclass A { char c =    ; }", "  #error Don't            \r\nclass A { char c =  x ; }", "  #error Don't            \r\nclass A { char c =    ; }"],
+    // After a byte-order mark it's still first on its line; an unpaired quote stays code; a comment's astral
+    // character keeps the length (two UTF-16 units, two blanks).
+    ["\uFEFF#region A's\nX", "\uFEFF#region A's\nX", "\uFEFF#region A's\nX", "\uFEFF#region A's\nX"],
+    ['#error Say "hi\nX', '#error Say "hi\nX', '#error Say "hi\nX', '#error Say "hi\nX'],
+    ["#region Launch // \u{1F680} go\nclass A {}", "#region Launch         \nclass A {}", "#region Launch         \nclass A {}", "#region Launch         \nclass A {}"],
+    // A quoted file name (`#line`, `#pragma checksum`) is a string, and a `//` in it starts no comment.
+    ['#line 1 "A.cs"', '#line 1       ', '#line 1  A.cs ', '#line 1 "    "'],
+    ['#line 1 "a//b.cs" // c', '#line 1               ', '#line 1  a//b.cs      ', '#line 1 "       "     '],
+    // A `#` first on a line inside a string is text.
+    ["@\"a\n#b's\"; C", "@  \n     ; C", "@ a\n#b's ; C", "@\" \n    \"; C"],
   ];
   for (const [source, masked, kept, delimited] of cases) {
     for (const [options, expected] of [[{}, masked], [{ keepStrings: true }, kept], [{ preserveStringDelimiters: true }, delimited]]) {

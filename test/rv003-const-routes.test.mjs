@@ -6,6 +6,8 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { restoreProjects } from "./helpers/dotnet-restore.mjs";
+import { rivetResultStubs, rivetStubs } from "./helpers/rivet-stubs.mjs";
 
 const HOME = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const FIXTURES = path.join(HOME, "fixtures", "MER-RV-003");
@@ -18,14 +20,65 @@ function findings(root) {
     return JSON.parse(result.stdout).map((finding) => `${finding.location}\t${finding.message}`).sort();
 }
 
-// A throwaway repo holding `files`, deleted when test `t` ends.
-function repo(t, files) {
+// The package-free net10.0 project the rule's facts need: the compiler binds the contract names written in the files. It
+// is a library on the Web SDK, so the controllers compile, and it brings in the implicit usings and MVC's namespace.
+const project = `<Project Sdk="Microsoft.NET.Sdk.Web">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <OutputType>Library</OutputType>
+    <ImplicitUsings>enable</ImplicitUsings>
+  </PropertyGroup>
+  <ItemGroup>
+    <Using Include="Microsoft.AspNetCore.Mvc" />
+  </ItemGroup>
+</Project>
+`;
+
+// What the sources name without declaring: the DTOs, and the `useCase` and `endpoint` the controllers call, which a
+// static using brings in for a simple name.
+const appStubs = `global using App;
+global using static App.UseCases;
+
+namespace App;
+
+public sealed record OrderDto;
+
+public sealed record AdminOrderDto;
+
+public sealed record InviteMemberRequest;
+
+public sealed record InviteMemberResponse;
+
+public sealed class UseCase
+{
+    public OrderDto Execute(Guid id) => new();
+
+    public OrderDto Get(Guid id) => new();
+
+    public OrderDto[] Lines(Guid id) => [];
+
+    public OrderDto[] List() => [];
+
+    public InviteMemberResponse Invite(InviteMemberRequest request) => new();
+}
+
+public static class UseCases
+{
+    public static readonly UseCase useCase = new();
+
+    public static readonly RouteDefinition<OrderDto> endpoint = Define.Get<OrderDto>("/api/orders/{id}");
+}
+`;
+
+// A throwaway repo holding `files` in one project, restored unless `restore` is false, deleted when test `t` ends.
+function repo(t, files, { restore = true } = {}) {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "plumb-rv003-"));
     t.after(() => fs.rmSync(root, { recursive: true, force: true }));
-    for (const [file, text] of Object.entries(files)) {
+    for (const [file, text] of Object.entries({ "App.csproj": project, ...rivetStubs(), ...rivetResultStubs(), "Stubs/App.cs": appStubs, ...files })) {
         fs.mkdirSync(path.dirname(path.join(root, file)), { recursive: true });
         fs.writeFileSync(path.join(root, file), text);
     }
+    if (restore) restoreProjects(root);
     return root;
 }
 
@@ -161,8 +214,17 @@ public sealed class MembersController : ControllerBase
 }
 `;
     const open = [`Modules/Orders/MembersController.cs:7\thandler route references MembersContract.InviteRoute ${unbound} any MembersContract field`];
-    // A module class that happens to share the name is not the contract the controller imports.
+    // A module class that happens to share the name is not the contract the controller imports. The contract it imports
+    // is outside the scan (.plumbignore) but compiled.
     assert.deepEqual(findings(repo(t, {
+        ".plumbignore": "Outside/\n",
+        "Outside/MembersContract.cs": `namespace App.Contracts.Members;
+
+public static class MembersContract
+{
+    public const string InviteRoute = "/api/members";
+}
+`,
         "Modules/Members/MembersContract.cs": "namespace App.Modules.Members;\n\npublic sealed class MembersContract\n{\n}\n",
         "Modules/Orders/MembersController.cs": controller,
     })), open);
@@ -181,6 +243,24 @@ public static class MembersContract
     })), open);
 });
 
+test("MER-RV-003 judges no handler in a project the compiler's facts could not read", (t) => {
+    const files = {
+        "Contracts/Orders/OrdersContract.cs": contract,
+        "Modules/Orders/OrdersController.cs": `public sealed class OrdersController : ControllerBase
+{
+    [HttpGet(OrdersContract.GetRoute)]
+    public IActionResult Get(Guid id) => Ok(useCase.Execute(id));
+}
+`,
+    };
+    assert.equal(findings(repo(t, files)).length, 1);
+    // Not restored, the project loads no facts: the contract can't be told from one outside the source, so no handler
+    // is judged, and the run says why.
+    const degraded = spawnSync(PLUMB, [repo(t, files, { restore: false }), "--rule", "MER-RV-003", "--ci", "--json"], { encoding: "utf8" });
+    assert.match(degraded.stderr, /C# facts incomplete for App\.csproj: not restored/);
+    assert.deepEqual(JSON.parse(degraded.stdout), []);
+});
+
 test("MER-RV-003 reads fields only from the contract the name resolves to, not a namesake in another namespace", (t) => {
     const root = repo(t, {
         "Contracts/Orders/OrdersContract.cs": `namespace App.Contracts.Orders;
@@ -189,6 +269,7 @@ test("MER-RV-003 reads fields only from the contract the name resolves to, not a
 public static class OrdersContract
 {
     public const string ItemRoute = "/api/orders/{id}";
+    public const string PurgeRoute = "/api/orders/{id}/purge";
 
     public static readonly RouteDefinition<OrderDto> Get = Define.Get<OrderDto>(ItemRoute);
 }
@@ -213,7 +294,7 @@ namespace App.Modules.Admin;
 public sealed class AdminOrdersController : ControllerBase
 {
     [HttpGet(OrdersContract.ItemRoute)]
-    public IActionResult Get(Guid id) => OrdersContract.Get.Success(useCase.Get(id)).ToActionResult();
+    public IActionResult Get(Guid id) => App.Contracts.Orders.OrdersContract.Get.Success(useCase.Get(id)).ToActionResult();
 
     [HttpGet(OrdersContract.ItemRoute)]
     public IActionResult Detail(Guid id) => OrdersContract.Detail.Success(useCase.Get(id)).ToActionResult();

@@ -5,6 +5,7 @@
 The test suite and `./plumb --self-test` use every one of Plumb's [requirements](README.md#requirements), with its Node dependencies installed:
 
 - ast-grep on `PATH`
+- the .NET 10 SDK on `PATH`, and `pnpm build:csharp` run once after install (and again after a change under `dotnet/Plumb.CSharpFacts/`): it builds the C# facts tool and restores the fixtures of every rule that reads its facts. The C# facts tests restore their own temp repositories through `test/helpers/dotnet-restore.mjs`
 - go-task (`task`) on `PATH`: without it two `MER-RV-024` runner tests are skipped (the one that runs its check script against its fixtures, `producer MER-RV-024-stale-generated.mjs: …`, and the one for conventions it can't check, `MER-RV-024: a convention it can't check exits 2 …`) and its self-test fixture fails, since the self-test runs the CI-only checks
 
 The test suite also needs the `meridian` skill from [workflow-skills](https://github.com/maxanstey-meridian/workflow-skills), which `./plumb --self-test` doesn't: the catalog test checks every finding's docRef against its `references/` folder, read from `MERIDIAN_REFERENCES` when set, else `~/.claude/skills/meridian/references`
@@ -15,7 +16,7 @@ The test suite also needs the `meridian` skill from [workflow-skills](https://gi
 2. Use an executable producer under `checks/` only when process isolation or an external tool boundary is required.
 3. Declare every owned rule ID and any heavyweight analysis capability it requires.
 4. Report findings through the owner-scoped context. Executable producers emit only five-field finding lines on stdout and send diagnostics to stderr.
-5. Add `fixtures/MER-XX-NNN/bad` and `fixtures/MER-XX-NNN/good`.
+5. Add `fixtures/MER-XX-NNN/bad` and `fixtures/MER-XX-NNN/good`. A rule that reads C# facts needs each fixture's projects to compile, because a project that doesn't gives no facts and fails the fixture: declare what the code names in `Stubs/`, and bring in a name meant to be outside the scan from a file `.plumbignore` leaves out.
 6. Ensure the relevant pack is detected or add a runner harness case.
 7. Run `node --test "test/*.test.mjs"` and `./plumb --self-test`.
 
@@ -34,6 +35,7 @@ Basic file, text, line, JSON, and configuration access needs no capability decla
 - `FRONTEND_GRAPH`
 - `CSHARP`
 - `DOTNET_PROJECTS`
+- `CSHARP_FACTS` (`context.csharpFacts`: what Roslyn says each name, alias, attribute, extension call, and inferred type refers to, from the tool under `dotnet/Plumb.CSharpFacts/`)
 
 Dependencies close transitively, analysis services initialize lazily, and shared results are memoized for one invocation. Accessing an unplanned analysis capability fails immediately.
 

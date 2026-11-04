@@ -2,10 +2,14 @@
   "name": "plumb-deps",
   "private": true,
   "packageManager": "pnpm@11.5.2",
+  "scripts": {
+    "build:csharp": "node scripts/build-csharp.mjs"
+  },
   "engines": {
     "node": ">=20"
   },
   "dependencies": {
+    "@dagrejs/graphlib": "4.0.5",
     "@vue/compiler-sfc": "^3.5.39",
     "braces": "^3.0.3",
     "dependency-cruiser": "^16.10.4",

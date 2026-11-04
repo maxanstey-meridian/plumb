@@ -6,10 +6,20 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { restoreProjects } from "./helpers/dotnet-restore.mjs";
+import { rivetStubs } from "./helpers/rivet-stubs.mjs";
 
 const HOME = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const FIXTURES = path.join(HOME, "fixtures");
 const PLUMB = path.join(HOME, "plumb");
+
+// A package-free net10.0 project, as the rules that read C# facts need (`scan` restores it with `restore`).
+const net10 = (properties = "", items = "") => `<Project Sdk="Microsoft.NET.Sdk"><PropertyGroup><TargetFramework>net10.0</TargetFramework><ImplicitUsings>enable</ImplicitUsings><Nullable>enable</Nullable>${properties}</PropertyGroup>${items}</Project>\n`;
+
+// A repository for a rule that reads C# facts: one restored net10.0 project over the files (an executable when it has
+// top-level statements in Program.cs).
+const scanOnFacts = (rule, files) =>
+    scan(rule, { "App.csproj": net10("Program.cs" in files ? "<OutputType>Exe</OutputType>" : ""), ...files }, undefined, { restore: true });
 
 function run(rule, fixture) {
     const selected = rule === "MER-BE-005" ? ["MER-BE-003", "MER-BE-004", "MER-BE-005"] : [rule];
@@ -24,7 +34,27 @@ function run(rule, fixture) {
 
 test("MER-BE-001 applies forbidden global usings to a backend containing Domain", () => {
     assert.equal(run("MER-BE-001", "good"), "");
-    assert.match(run("MER-BE-001", "bad"), /MER-BE-001\terror\tGlobalUsings\.cs:1\t/);
+    const output = run("MER-BE-001", "bad");
+    assert.match(output, /MER-BE-001\terror\tGlobalUsings\.cs:1\t/);
+    // A framework type is judged where it is used, however it came into scope: a global using in another file
+    // (ILogger), or an alias (Ef.DbContext, which HEAD's text match saw only at the alias line).
+    assert.match(output, /^MER-BE-001\terror\tModules\/Users\/Domain\/GlobalUsingDependency\.cs:4\t.*\(Microsoft\.Extensions\.Logging\.ILogger\)/m);
+    assert.match(output, /^MER-BE-001\terror\tModules\/Users\/Domain\/AliasDependency\.cs:4\t.*\(Microsoft\.EntityFrameworkCore\.DbContext\)/m);
+});
+
+// Every dotted name a using holds is judged, a framework name inside its type arguments included, and a type named
+// `Application` is a higher layer's by its full name.
+test("MER-BE-001 judges a framework name inside a using's type arguments and a type named Application", () => {
+    assert.deepEqual(scanOnFacts("MER-BE-001", {
+        "Stubs/Ef.cs": "namespace Microsoft.EntityFrameworkCore;\npublic class DbContext { }\n",
+        "Wire/Page.cs": "namespace Wire;\npublic sealed class Page<T> { }\n",
+        "Modules/Users/Application.cs": "namespace Acme.Modules.Users;\npublic sealed class Application { }\n",
+        "Modules/Users/Domain/Uses.cs": "using Paged = Wire.Page<Microsoft.EntityFrameworkCore.DbContext>;\nusing Acme.Modules.Users;\nnamespace Acme.Modules.Users.Domain;\n" +
+            "public sealed class Uses { public Application? Owner { get; init; } }\n",
+    }), [
+        "Modules/Users/Domain/Uses.cs:1\tDomain depends on nothing outside itself — remove this reference (Microsoft.EntityFrameworkCore.DbContext)",
+        "Modules/Users/Domain/Uses.cs:4\tDomain depends on nothing outside itself — remove this reference (Acme.Modules.Users.Application)",
+    ]);
 });
 
 test("MER-BE-005 prevents Common from depending on feature-owned namespaces", () => {
@@ -34,6 +64,39 @@ test("MER-BE-005 prevents Common from depending on feature-owned namespaces", ()
     assert.match(output, /^MER-BE-004\t.*Common\/UsesFeatureInternals\.cs:2\t/m);
     assert.match(output, /^MER-BE-005\t.*Common\/UsesFeatureInternals\.cs:3\t/m);
     assert.match(output, /^MER-BE-005\t.*Common\/UsesFeatureInternals\.cs:4\t/m);
+    // A name written in full, with no using, is judged where it is written.
+    assert.match(output, /^MER-BE-005\t.*Modules\/Auth\/Application\/U\.cs:4\t/m);
+});
+
+// A global using puts the module in every file of its project: from a host file, even of a Contracts namespace,
+// and from a module's own folder.
+test("MER-BE-005 flags a global using of a module's namespace wherever it is written, a module's own included", () => {
+    const output = run("MER-BE-005", "bad");
+    assert.match(output, /^MER-BE-005\terror\tapi\/Integration\/GlobalUsings\.cs:1\tglobal using of Forms\.Contracts puts module Forms in every file of the project/m);
+    assert.match(output, /^MER-BE-005\terror\tapi\/Modules\/Forms\/GlobalUsings\.cs:1\tglobal using of Forms\.Domain puts module Forms in every file of the project/m);
+});
+
+// An MSBuild <Using> item is a global using too: reported once at the project file's line; a test-only item is not.
+test("MER-BE-005 flags an MSBuild <Using> of a module's namespace at the project file's line, and skips a test-only item", () => {
+    const files = {
+        "api/Api.csproj": net10("", `
+  <ItemGroup>
+    <Using Include="App.Modules.Forms.Contracts" />
+    <Using Include="App.Modules.Forms.Domain" Condition="'$(IsTestProject)' == 'true'" />
+  </ItemGroup>`),
+        "api/Common/.keep": "",
+        // A test project's own <Using> reaches only test code.
+        "api/Modules/Forms/Checks/Forms.Checks.csproj": net10("<IsTestProject>true</IsTestProject>", '\n  <ItemGroup>\n    <Using Include="App.Modules.Forms.Domain" />\n  </ItemGroup>'),
+        "api/Modules/Forms/Contracts/FormSummary.cs": "namespace App.Modules.Forms.Contracts;\npublic sealed record FormSummary(Guid Id);\n",
+        "api/Modules/Forms/Domain/Form.cs": "namespace App.Modules.Forms.Domain;\npublic sealed class Form { }\n",
+        // A module's root namespace has no layer segment, so its message says so.
+        "api/Modules/Forms/FormsModule.cs": "namespace App.Modules.Forms;\npublic static class FormsModule { }\n",
+        "api/Common/UsesRoot.cs": "using App.Modules.Forms;\nnamespace App.Common;\npublic sealed class UsesRoot;\n",
+    };
+    assert.deepEqual(scan("MER-BE-005", files, undefined, { restore: true }), [
+        "api/Api.csproj:3\tglobal using of Forms.Contracts puts module Forms in every file of the project — use it only in the files that need it",
+        "api/Common/UsesRoot.cs:1\tmodule outside module must not use Forms's root namespace types — publish a contract under Forms.Contracts or define a consumer-owned required port",
+    ]);
 });
 
 test("MER-BE-005 rejects sibling published Contracts in Domain but permits Application and integration consumers", () => {
@@ -72,7 +135,8 @@ test("MER-BE-006 counts a module only where a name it writes resolves to the Com
         "Common/Clock.cs": "namespace Acme.Common;\npublic static class Clock { public static int Now => 0; }\n",
         // A using, an alias and a `using static` each make a consumer; a comment and a string do not.
         "Modules/Billing/Invoice.cs": "using Acme.Common;\nnamespace Acme.Modules.Billing;\npublic sealed record Invoice(Money Total);\n",
-        "Modules/Payroll/Payslip.cs": "using Cash = Acme.Common.Money;\nusing static Acme.Common.Clock;\nnamespace Acme.Modules.Payroll;\npublic sealed record Payslip(Cash Net);\n",
+        // Payslip uses `Now`, so the `using static` makes Payroll a consumer of Clock: an unused directive makes none.
+        "Modules/Payroll/Payslip.cs": "using Cash = Acme.Common.Money;\nusing static Acme.Common.Clock;\nnamespace Acme.Modules.Payroll;\npublic sealed record Payslip(Cash Net) { public int At => Now; }\n",
         "Modules/Rota/Shift.cs": "namespace Acme.Modules.Rota;\n// Rate and Clock live in Common.\npublic sealed record Shift(string Note = \"Rate\");\n",
         // Rate's only consumer is Rota, through a qualified name; Rate names Money, so Rota consumes Money too.
         "Modules/Rota/Pay.cs": "namespace Acme.Modules.Rota;\npublic sealed record Pay(Acme.Common.Rate Rate);\n",
@@ -80,24 +144,28 @@ test("MER-BE-006 counts a module only where a name it writes resolves to the Com
     };
     const serving = (module) => ({ [`Modules/${module}/RotaEndpoints.cs`]: `namespace Acme.Modules.${module};\npublic sealed class RotaEndpoints { public Acme.Contracts.Rota.RotaPay? Pay { get; set; } }\n` });
     // An unserved transport contract passes nothing on, and isn't the host.
-    const findings = scan("MER-BE-006", files);
+    const findings = scanOnFacts("MER-BE-006", files);
     assert.deepEqual(findings.map((finding) => finding.replace(/ — review.*/, "")).sort(), [
         "Common/Clock.cs:0\tCommon type Clock is referenced only by module Payroll",
         "Common/Money.cs:0\tCommon type Rate is referenced only by module Rota",
     ]);
     // Rota serving its own contract adds no second consumer: Rate stays Rota's.
-    assert.deepEqual(scan("MER-BE-006", { ...files, ...serving("Rota") }), findings);
+    assert.deepEqual(scanOnFacts("MER-BE-006", { ...files, ...serving("Rota") }), findings);
     // Payroll serving it consumes the Rate the contract names, so Rate is shared: whether the contract writes Rate, or
     // an alias of its own, and whether Payroll writes RotaPay or a global alias of it. A global using static of the
     // contract makes it, and so Rate, shared. Only Clock is left.
     const onlyClock = ["Common/Clock.cs:0\tCommon type Clock is referenced only by module Payroll"];
-    const findingsOf = (extra) => scan("MER-BE-006", { ...files, ...extra }).map((finding) => finding.replace(/ — review.*/, ""));
+    const findingsOf = (extra) => scanOnFacts("MER-BE-006", { ...files, ...extra }).map((finding) => finding.replace(/ — review.*/, ""));
     assert.deepEqual(findingsOf(serving("Payroll")), onlyClock);
     assert.deepEqual(findingsOf({ ...serving("Payroll"),
         "Contracts/Rota/RotaContract.cs": "using Hourly = Acme.Common.Rate;\nnamespace Acme.Contracts.Rota;\npublic sealed record RotaPay(Hourly Rate);\n" }), onlyClock);
     assert.deepEqual(findingsOf({ "GlobalUsings.cs": "global using RotaApi = Acme.Contracts.Rota.RotaPay;\n",
         "Modules/Payroll/RotaUse.cs": "namespace Acme.Modules.Payroll;\npublic sealed record RotaUse(RotaApi? Pay);\n" }), onlyClock);
     assert.deepEqual(findingsOf({ "GlobalUsings.cs": "global using static Acme.Contracts.Rota.RotaPay;\n" }), onlyClock);
+    // So does a <Using Static> item of the project, unless it is test-only.
+    const usingItem = (attributes) => ({ "App.csproj": net10("", `<ItemGroup><Using Include="Acme.Contracts.Rota.RotaPay" Static="true"${attributes} /></ItemGroup>`) });
+    assert.deepEqual(findingsOf(usingItem("")), onlyClock);
+    assert.deepEqual(findingsOf(usingItem(` Condition="'$(IsTestProject)' == 'true'"`)), findings.map((finding) => finding.replace(/ — review.*/, "")));
     // A contract's own using static names the type for every declaration in its file: Rota serving it consumes Clock.
     assert.deepEqual(findingsOf({ ...serving("Rota"),
         "Contracts/Rota/RotaStamp.cs": "using static Acme.Common.Clock;\nnamespace Acme.Contracts.Rota;\npublic sealed record RotaStamp(int At) { public static RotaStamp Stamp() => new(Now); }\n",
@@ -112,7 +180,7 @@ test("MER-BE-006 counts a module only where a name it writes resolves to the Com
 });
 
 test("MER-BE-006 reads every part of a partial type, and never reports a type that moves with its file or outer type", () => {
-    const findings = scan("MER-BE-006", {
+    const findings = scanOnFacts("MER-BE-006", {
         "Common/Money.cs": "namespace Acme.Common;\npublic sealed record Money(decimal Amount);\n",
         // Settings' second part names Money, so Users, through Settings, is Money's second consumer.
         "Common/Settings.A.cs": "namespace Acme.Common;\npublic sealed partial class Settings { }\n",
@@ -121,9 +189,11 @@ test("MER-BE-006 reads every part of a partial type, and never reports a type th
         "Common/Holder.cs": "namespace Acme.Common;\npublic sealed class Holder\n{\n    protected sealed record Guarded(int A);\n" +
             "    protected internal sealed record Shared(int A);\n    private sealed class Inner { public sealed record Deep(int A); private Deep? deep; }\n" +
             "    private Guarded? guarded;\n    private Inner? inner;\n    public int Size() => new Local().GetHashCode();\n}\nfile sealed class Local { }\n",
-        "Modules/Forms/Forms.cs": "namespace Acme.Modules.Forms;\npublic sealed record Forms(Acme.Common.Settings Settings, Acme.Common.Money Money, " +
-            "Acme.Common.Holder Holder, Acme.Common.Holder.Shared Shared);\n",
-        "Modules/Users/Users.cs": "namespace Acme.Modules.Users;\npublic sealed record Users(Acme.Common.Settings Settings);\n",
+        // A use inside a nested type is its outer type's too: Users, through Wrapper's nested Inner, is Rate's second consumer.
+        "Common/Wrapper.cs": "namespace Acme.Common;\npublic sealed class Wrapper { public sealed record Inner(Rate Value); }\npublic sealed record Rate(int Value);\n",
+        "Modules/Forms/Forms.cs": "namespace Acme.Modules.Forms;\ninternal sealed record Forms(Acme.Common.Settings Settings, Acme.Common.Money Money, " +
+            "Acme.Common.Holder Holder, Acme.Common.Holder.Shared Shared, Acme.Common.Wrapper Wrapper, Acme.Common.Rate Rate);\n",
+        "Modules/Users/Users.cs": "namespace Acme.Modules.Users;\npublic sealed record Users(Acme.Common.Settings Settings, Acme.Common.Wrapper Wrapper);\n",
     });
     assert.deepEqual(findings.map((finding) => finding.replace(/ — review.*/, "")).sort(), [
         "Common/Holder.cs:0\tCommon type Holder is referenced only by module Forms",
@@ -131,8 +201,26 @@ test("MER-BE-006 reads every part of a partial type, and never reports a type th
     ]);
 });
 
+// A file-local class is its own type beside a public one of the same name: the public type's access is its own, so a
+// file-local namesake that sorts first doesn't make it read as hidden.
+test("MER-BE-006 reports a public Common type used by one module as it would without a file-local class of the same name", () => {
+    const files = {
+        "Common/Gauge.cs": "namespace Acme.Common;\npublic sealed record Gauge(int Value);\n",
+        "Modules/Forms/Reading.cs": "namespace Acme.Modules.Forms;\npublic sealed record Reading(Acme.Common.Gauge Gauge);\n",
+    };
+    const expected = ["Common/Gauge.cs:0\tCommon type Gauge is referenced only by module Forms"];
+    const withoutNamesake = scanOnFacts("MER-BE-006", files).map((finding) => finding.replace(/ — review.*/, ""));
+    assert.deepEqual(withoutNamesake, expected);
+    // The file-local class sorts before the public one, so it is the first declaration of the name.
+    const withNamesake = scanOnFacts("MER-BE-006", {
+        ...files,
+        "Common/A.Gauge.cs": "namespace Acme.Common;\nfile sealed class Gauge { public int Local { get; set; } }\n",
+    }).map((finding) => finding.replace(/ — review.*/, ""));
+    assert.deepEqual(withNamesake, expected);
+});
+
 test("MER-BE-006 counts a name in an interpolated string's hole, and never one in its text, a string in a hole, or a format clause", () => {
-    const findings = scan("MER-BE-006", {
+    const findings = scanOnFacts("MER-BE-006", {
         "Common/Clock.cs": "namespace Acme.Common;\npublic static class Clock { public static int Now => 0; }\n",
         "Common/Labels.cs": "namespace Acme.Common;\npublic static class Labels { public static string Of(int value) => \"\"; }\n",
         "Modules/Forms/Forms.cs": "namespace Acme.Modules.Forms;\npublic sealed class Forms { public string Show() => Acme.Common.Labels.Of(Acme.Common.Clock.Now); }\n",
@@ -148,7 +236,7 @@ test("MER-BE-006 counts a name in an interpolated string's hole, and never one i
 });
 
 test("MER-BE-006 counts a call to a static class's extension member where the class's namespace is in scope, and never an enum member's name", () => {
-    const findings = scan("MER-BE-006", {
+    const findings = scanOnFacts("MER-BE-006", {
         "Common/Roles.cs": "namespace Acme.Common;\npublic enum Role { Admin, Member }\npublic static class RoleRules\n{\n" +
             "    public static bool IsAtLeast(this Role role, Role minimum) => role >= minimum;\n}\npublic sealed record Quota(int Limit);\n" +
             // Users' own Doubling class doesn't hide this one's extension method from it.
@@ -186,7 +274,7 @@ test("MER-BE-006 counts a call to a static class's extension member where the cl
 });
 
 test("MER-BE-006 counts a port's consumers for the DTOs its signatures name, and reports a DTO beside the port that it doesn't", () => {
-    const findings = scan("MER-BE-006", {
+    const findings = scanOnFacts("MER-BE-006", {
         "Common/Ports/IRateSource.cs": "namespace Acme.Common.Ports;\npublic interface IRateSource { RateQuote Quote(); }\n" +
             "public sealed record RateQuote(decimal Value);\npublic sealed record RateDraft(decimal Value);\n",
         "Modules/Forms/Forms.cs": "namespace Acme.Modules.Forms;\npublic sealed record Forms(Acme.Common.Ports.IRateSource Source, Acme.Common.Ports.RateQuote Last, " +
@@ -202,12 +290,13 @@ test("MER-BE-007 reports the domain type a port's name resolves to, not a namesa
     // good: IFormLister's FormSnapshot is the Ports namespace's own record, despite the Forms.Domain using.
     assert.equal(run("MER-BE-007", "good"), "");
     assertFindings("MER-BE-007", "bad", [["api/Common/Ports/IConfirmReader.cs:5", "Common port exposes module-owned domain type FormSnapshot"]]);
-    const findings = scan("MER-BE-007", {
+    const findings = scanOnFacts("MER-BE-007", {
         "api/Modules/Forms/Domain/FormSnapshot.cs": "namespace App.Modules.Forms.Domain;\npublic sealed record FormSnapshot(string Id);\npublic enum Status { Draft }\n",
         "api/Common/Status.cs": "namespace App.Common;\npublic enum Status { Open }\n",
         // The parent namespace's Status is Common's; the qualified FormSnapshot is the domain's, past a comment naming it.
         "api/Common/Ports/IFormReader.cs": "namespace App.Common.Ports;\n// FormSnapshot is a domain type.\npublic interface IFormReader\n{\n    Status Status();\n" +
-            "    App.Modules.Forms.Domain.FormSnapshot Read();\n}\n",
+            // A second use below is not reported: the finding sits at the first use by position.
+            "    App.Modules.Forms.Domain.FormSnapshot Read();\n    void Write(App.Modules.Forms.Domain.FormSnapshot snapshot);\n}\n",
     });
     assert.deepEqual(findings.map((finding) => finding.replace(/ — inline.*/, "")), [
         "api/Common/Ports/IFormReader.cs:6\tCommon port exposes module-owned domain type FormSnapshot",
@@ -227,22 +316,32 @@ test("BE's layer, module-shape, style and placement rules exempt a test project'
         "MER-BE-010", "MER-BE-011", "MER-BE-012", "MER-BE-013", "MER-BE-014", "MER-BE-016", "MER-BE-017", "MER-BE-020", "MER-BE-021",
         "MER-BE-022", "MER-BE-023", "MER-BE-024", "MER-BE-030", "MER-BE-031", "MER-BE-032", "MER-BE-042", "MER-BE-051", "MER-BE-052",
         "MER-BE-053", "MER-BE-054", "MER-BE-055", "MER-BE-060"];
+    // The rules that read C# facts need a real net10.0 project, restored, and one that compiles: the copied files get the
+    // project their fixture has (its SDK, implicit usings and nullable setting), as a test project of their own.
+    const onFacts = new Set(["MER-BE-001", "MER-BE-002", "MER-BE-003", "MER-BE-004", "MER-BE-005", "MER-BE-007", "MER-BE-009", "MER-BE-016"]);
+    const fixtureProject = (rule) => {
+        const file = fs.readdirSync(path.join(FIXTURES, rule, "bad"), { recursive: true }).find((name) => name.endsWith(".csproj") && !/(?:^|\/)(?:obj|bin)\//.test(name));
+        return fs.readFileSync(path.join(FIXTURES, rule, "bad", file), "utf8");
+    };
     for (const rule of rules) {
         const files = (project) => Object.fromEntries(fs.readdirSync(path.join(FIXTURES, rule, "bad"), { recursive: true })
-            .filter((file) => fs.statSync(path.join(FIXTURES, rule, "bad", file)).isFile() && !file.endsWith(".csproj"))
+            .filter((file) => !/(?:^|\/)(?:obj|bin)\//.test(file) && fs.statSync(path.join(FIXTURES, rule, "bad", file)).isFile() && !file.endsWith(".csproj"))
             .map((file) => [`ArchitectureTesting/${file}`, fs.readFileSync(path.join(FIXTURES, rule, "bad", file), "utf8")])
             .concat([["ArchitectureTesting/ArchitectureTesting.csproj", project]]));
-        assert.notDeepEqual(scan(rule, files('<Project Sdk="Microsoft.NET.Sdk" />\n')), [], rule);
-        assert.deepEqual(scan(rule, files('<Project Sdk="Microsoft.NET.Sdk"><PropertyGroup><IsTestProject>true</IsTestProject></PropertyGroup></Project>\n')), [], rule);
+        const facts = onFacts.has(rule);
+        const options = { restore: facts };
+        assert.notDeepEqual(scan(rule, files(facts ? fixtureProject(rule) : '<Project Sdk="Microsoft.NET.Sdk" />\n'), undefined, options), [], rule);
+        assert.deepEqual(scan(rule, files(facts ? fixtureProject(rule).replace("</PropertyGroup>", "<IsTestProject>true</IsTestProject></PropertyGroup>") :'<Project Sdk="Microsoft.NET.Sdk"><PropertyGroup><IsTestProject>true</IsTestProject></PropertyGroup></Project>\n'), undefined, options), [], rule);
     }
 });
 
-const testProject = (references = "") => `<Project Sdk="Microsoft.NET.Sdk"><PropertyGroup><IsTestProject>true</IsTestProject></PropertyGroup><ItemGroup>${references}</ItemGroup></Project>\n`;
+const testProject = (references = "") => net10("<IsTestProject>true</IsTestProject>", `<ItemGroup>${references}</ItemGroup>`);
 
 // A test beside a module's code exercises the Common type; it doesn't make that module a second owner.
 test("MER-BE-006 leaves a test project under another module out of a Common type's consumers", () => {
     assert.deepEqual(scan("MER-BE-006", {
-        "api/Api.csproj": '<Project Sdk="Microsoft.NET.Sdk" />\n',
+        // The production project leaves the test project's folder to the test project.
+        "api/Api.csproj": net10("", '<ItemGroup><Compile Remove="Modules/Users/Specs/**" /></ItemGroup>'),
         "api/Common/Paging.cs": "namespace Acme.Common;\npublic sealed record Paging(int Page, int Size);\n",
         "api/Modules/Forms/FormsQuery.cs": "using Acme.Common;\nnamespace Acme.Modules.Forms;\npublic sealed record FormsQuery(Paging Paging);\n",
         "api/Modules/Users/Specs/Specs.csproj": testProject('<ProjectReference Include="../../../Api.csproj" />'),
@@ -251,7 +350,7 @@ test("MER-BE-006 leaves a test project under another module out of a Common type
         "api/Modules/Users/obj/Debug/net10.0/Users.g.cs": "namespace Acme.Modules.Users;\npublic sealed record Generated(Acme.Common.Paging Paging);\n",
         "api/Common/obj/Debug/net10.0/Stamp.g.cs": "namespace Acme.Common;\npublic sealed record Stamp(int Value);\n",
         "api/Modules/Forms/FormsStamp.cs": "namespace Acme.Modules.Forms;\npublic sealed record FormsStamp(Acme.Common.Stamp Stamp);\n",
-    }, undefined, { git: true }), ["api/Common/Paging.cs:0\tCommon type Paging is referenced only by module Forms — review ownership; move it only if Forms truly owns it"]);
+    }, undefined, { git: true, restore: true }), ["api/Common/Paging.cs:0\tCommon type Paging is referenced only by module Forms — review ownership; move it only if Forms truly owns it"]);
 });
 
 // A test double named like an entity, in a test project's Modules/Forms/Domain/, doesn't make Forms the entity's owner.
@@ -267,9 +366,16 @@ test("MER-BE-060 takes an entity's owner only from production Domain code", () =
 });
 
 test("MER-BE-009 detects each System IServiceProvider spelling after masking comments and strings", () => {
+    // good: a module's own `IServiceProvider` is not System's.
     assert.equal(run("MER-BE-009", "good"), "");
-    const output = run("MER-BE-009", "bad");
-    assert.equal((output.match(/^MER-BE-009\t/gm) || []).length, 3);
+    // A declaration, a call on a value of the type (CreateOrder.cs:5), and a parameter through an alias (AliasedOrder.cs:5).
+    assertFindings("MER-BE-009", "bad", [
+        ["Modules/Orders/Application/AliasedOrder.cs:5", "System.IServiceProvider hides dependencies"],
+        ["Modules/Orders/Application/CreateOrder.cs:3", "System.IServiceProvider hides dependencies"],
+        ["Modules/Orders/Application/CreateOrder.cs:5", "System.IServiceProvider hides dependencies"],
+        ["Modules/Orders/Application/CreateOrder.cs:8", "System.IServiceProvider hides dependencies"],
+        ["Modules/Orders/Application/CreateOrder.cs:12", "System.IServiceProvider hides dependencies"],
+    ]);
 });
 
 test("MER-BE-021 exempts Brighter Command subclasses without exempting unrelated command classes", () => {
@@ -293,10 +399,36 @@ test("MER-BE-040 inspects only repository interface bodies and points at the met
 
 test("published contracts reject module internals while allowing published dependencies", () => {
     assert.equal(run("MER-BE-016", "good"), "");
-    const output = run("MER-BE-016", "bad");
-    assert.equal((output.match(/^MER-BE-016\t/gm) || []).length, 4);
-    assert.match(output, /FormsModels\.cs:1\t.*Modules\.Forms\.Domain/);
-    assert.match(output, /FormSummary\.cs:1\t.*Modules\.Forms\.Infrastructure/);
+    // The usings, then each module type a contract names with no `Modules.` written: FormsModels.cs:5 names three,
+    // FormSummary.cs:3 one, and LeakyBillingContract.cs:3 a Domain type its using brought in.
+    assertFindings("MER-BE-016", "bad", [
+        ["Contracts/Forms/FormsModels.cs:1", "depends on App.Modules.Forms.Domain "],
+        ["Contracts/Forms/FormsModels.cs:2", "depends on App.Modules.Forms.Application "],
+        ["Contracts/Forms/FormsModels.cs:3", "depends on App.Modules.Forms "],
+        ["Contracts/Forms/FormsModels.cs:5", "depends on App.Modules.Forms.Domain "],
+        ["Contracts/Forms/FormsModels.cs:5", "depends on App.Modules.Forms.Application "],
+        ["Contracts/Forms/FormsModels.cs:5", "depends on App.Modules.Forms.FormsController "],
+        ["Modules/Billing/Contracts/LeakyBillingContract.cs:1", "depends on App.Modules.Billing.Domain "],
+        ["Modules/Billing/Contracts/LeakyBillingContract.cs:3", "depends on App.Modules.Billing.Domain "],
+        ["Modules/Forms/Contracts/FormSummary.cs:1", "depends on App.Modules.Forms.Infrastructure "],
+        ["Modules/Forms/Contracts/FormSummary.cs:3", "depends on App.Modules.Forms.Infrastructure "],
+    ]);
+    // A using of a module's type (an alias or a `using static`) is flagged at the directive whether or not anything uses
+    // it, unless the type is in a Contracts folder; a module type whose full name holds no `Modules.<X>` is named in full.
+    assert.deepEqual(scanOnFacts("MER-BE-016", {
+        "Modules/Forms/Domain/Form.cs": "namespace App.Modules.Forms.Domain;\npublic sealed record Form(string Title);\n",
+        "Modules/Forms/Application/FormRules.cs": "namespace App.Modules.Forms.Application;\npublic static class FormRules { public static int Limit => 1; }\n",
+        "Modules/Forms/Contracts/FormSummary.cs": "namespace App.Modules.Forms.Contracts;\npublic sealed record FormSummary(string Title);\n",
+        "Modules/Forms/Domain/Loose.cs": "namespace Shared;\npublic sealed record Loose(int Id);\n",
+        "Contracts/Forms/Aliased.cs": "using Stored = App.Modules.Forms.Domain.Form;\nnamespace App.Contracts.Forms;\npublic sealed record Aliased(string Id);\n",
+        "Contracts/Forms/Statics.cs": "using static App.Modules.Forms.Application.FormRules;\nnamespace App.Contracts.Forms;\npublic sealed record Statics(string Id);\n",
+        "Contracts/Forms/Published.cs": "using Summary = App.Modules.Forms.Contracts.FormSummary;\nnamespace App.Contracts.Forms;\npublic sealed record Published(Summary Value);\n",
+        "Contracts/Forms/UsesLoose.cs": "using Shared;\nnamespace App.Contracts.Forms;\npublic sealed record UsesLoose(Loose Value);\n",
+    }), [
+        "Contracts/Forms/Aliased.cs:1\tpublished transport contract depends on App.Modules.Forms.Domain — contracts are closed over published or genuinely shared types",
+        "Contracts/Forms/Statics.cs:1\tpublished transport contract depends on App.Modules.Forms.Application — contracts are closed over published or genuinely shared types",
+        "Contracts/Forms/UsesLoose.cs:3\tpublished transport contract depends on Shared.Loose — contracts are closed over published or genuinely shared types",
+    ]);
 });
 
 test("Common feature directories cannot shadow module owners", () => {
@@ -362,7 +494,8 @@ test("MER-RV-007 flags every app-written RivetResult extension named like an ada
     // set it through the local holding the adapter's output; a nested type of a type around the code, which hides a
     // top-level one of its name; Match arms under a nullable type argument; a lambda's block in a logging statement,
     // whose result is the lambda's own; the adapter's output `?? throw`; aliases named RivetActionResult and
-    // RivetResult bound to another project's types or to types outside the scan; and a returned local holding the
+    // RivetResult bound to another project's types, to types declared in source (Stubs/Vendor.cs), or to types
+    // outside the source (Microsoft.AspNetCore's, which the facts record only as external uses); and a returned local holding the
     // adapter's output that's declared before its one write, or first or last of several in a statement.
     assert.equal(run("MER-RV-007", "good"), "");
     const output = run("MER-RV-007", "bad");
@@ -415,6 +548,8 @@ test("MER-RV-007 flags every app-written RivetResult extension named like an ada
         "Modules/Common/ReturnedNameExtensions.cs:74",
         // An app's own `namespace Rivet.Shims`: only `Rivet` itself is Rivet's.
         "Modules/Common/RivetNamedShim.cs:4",
+        // A file's alias of another type reaches only its own namespace block: in the next one the bare name is Rivet's.
+        "Modules/Common/ScopedForeignAlias.cs:17",
         // The app namespace after a `namespace Rivet { }` block; the shim itself is Rivet's.
         "Modules/Common/Shims.cs:12",
         // Helpers that return the adapter on every path but write its output to the response, read bare, under an
@@ -470,6 +605,8 @@ test("MER-RV-007 flags every app-written RivetResult extension named like an ada
         "Modules/Orders/MemberHelpers.cs:14",
         "Modules/Orders/MemberHelpers.cs:24",
         "Modules/Orders/MemberHelpers.cs:4",
+        // A namesake written under a qualifier says nothing about the bare name beside it, which is still Rivet's.
+        "Modules/Orders/MixedQualifiers.cs:11",
         // The adapter's output under a file's alias of Rivet's namespace, and a bridge off RivetResult qualified by
         // it through `::`.
         "Modules/Orders/NamespaceAliasRelay.cs:12",
@@ -567,6 +704,7 @@ test("MER-RV-007 flags every app-written RivetResult extension named like an ada
         "Modules/Common/NestedAliases.cs:14 InnerCopy",
         "Modules/Common/NestedAliases.cs:6 OuterCopy",
         "Modules/Common/RivetNamedShim.cs:4 Adapted",
+        "Modules/Common/ScopedForeignAlias.cs:17 PlainSend",
         "Modules/Common/Shims.cs:12 Leak",
         "Modules/Common/WrapperRecord.cs:9 Wrapper",
         "Modules/Orders/AccessorStatus.cs:4 AccessorStatus",
@@ -593,6 +731,7 @@ test("MER-RV-007 flags every app-written RivetResult extension named like an ada
         "Modules/Orders/MemberHelpers.cs:14 PickedOverloadStatus",
         "Modules/Orders/MemberHelpers.cs:24 AlignedOverloadStatus",
         "Modules/Orders/MemberHelpers.cs:4 MemberLocalStatus",
+        "Modules/Orders/MixedQualifiers.cs:11 MixedQualifiers",
         "Modules/Orders/NamespaceAliasRelay.cs:6 NamespaceAliasRelay",
         "Modules/Orders/NestedReader.cs:15 NestedLocalReader",
         "Modules/Orders/NestedReader.cs:4 NestedReader",
@@ -661,6 +800,18 @@ test("MER-RV-007 flags every app-written RivetResult extension named like an ada
     assert.match(output, /HttpResultExtensions\.cs:1\tHttpResultExtensions hand-writes an HTTP-result bridge off RivetResult \(ToHttpResult, Respond\) — delete it and use Rivet's first-party \.ToResult\(\)\/\.ToActionResult\(\) adapters\trivet\.md#anti-patterns$/m);
 });
 
+// `RivetResult<T>` binds as `Rivet.RivetResult`1`: Rivet's own type, even when the repo declares it in its source.
+test("MER-RV-007 reads a generic RivetResult<T> declared in the repo as Rivet's, not the app's own", () => {
+    const findings = scan("MER-RV-007", {
+        "App.csproj": '<Project Sdk="Microsoft.NET.Sdk.Web"><PropertyGroup><TargetFramework>net10.0</TargetFramework><ImplicitUsings>enable</ImplicitUsings><OutputType>Library</OutputType></PropertyGroup></Project>\n',
+        "Rivet/RivetResult.cs": "namespace Rivet { public class RivetResult<T> { } }\n",
+        "App/Bridge.cs": "using Microsoft.AspNetCore.Mvc;\nusing Rivet;\n\nnamespace App;\n\npublic static class Bridge\n{\n" +
+            "    public static IActionResult ToActionResult<T>(this RivetResult<T> result) => new OkResult();\n}\n",
+    }, undefined, { restore: true });
+    assert.equal(findings.length, 1, findings.join("\n"));
+    assert.match(findings[0], /^App\/Bridge\.cs:6\tBridge hand-writes an HTTP-result bridge off RivetResult \(ToActionResult\)/);
+});
+
 test("MER-RV-008 ignores MapGroup, reports handlers, and does not accept commented composition", () => {
     assert.equal(run("MER-RV-008", "good"), "");
     const output = run("MER-RV-008", "bad");
@@ -684,11 +835,12 @@ test("Rivet route payload roots belong to their transport contract owner", () =>
     assert.match(output, /\tContracts\/Forms\/FormsContract\.cs:9\troute payload FormDraft is owned by Modules\/Forms\/Application\/FormDraft\.cs/);
 });
 
-test("MER-TE-001 evaluates each modular project and accepts analyzer ProjectReference wiring", () => {
+test("MER-TE-001 evaluates each modular project and accepts a Taskfile that runs plumb", () => {
     assert.equal(run("MER-TE-001", "good"), "");
     const output = run("MER-TE-001", "bad");
-    assert.equal((output.match(/^MER-TE-001\t/gm) || []).length, 1);
-    assert.match(output, /Unenforced\/Unenforced\.csproj:1/);
+    assert.equal((output.match(/^MER-TE-001\t/gm) || []).length, 2);
+    assert.match(output, /^MER-TE-001\t.*\tUnenforced\/Unenforced\.csproj:1\t/m);
+    assert.match(output, /^MER-TE-001\t.*\tApp\.csproj:1\t/m);
 });
 
 test("MER-TE-007 follows transitive ProjectReference paths to the production Npgsql provider", () => {
@@ -781,13 +933,15 @@ test("MER-RV-027 follows transport namesakes and .Returns<T> payloads, checks Pa
 
 // A throwaway repo holding only `files`, scanned for one rule (or with `args`).
 // `git` makes the root a repository: outside one, the inventory's fallback walk never lists obj/ or bin/.
-function scan(rule, files, args = ["--rule", rule], { git = false } = {}) {
+// `restore` restores its SDK projects first, as the rules that read C# facts need.
+function scan(rule, files, args = ["--rule", rule], { git = false, restore = false } = {}) {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "plumb-backend-"));
     try {
         for (const [file, content] of Object.entries(files)) {
             fs.mkdirSync(path.dirname(path.join(root, file)), { recursive: true });
             fs.writeFileSync(path.join(root, file), content);
         }
+        if (restore) restoreProjects(root);
         if (git) assert.equal(spawnSync("git", ["init", "-q"], { cwd: root }).status, 0);
         const result = spawnSync(PLUMB, [root, ...args, "--ci", "--json"], { encoding: "utf8" });
         assert.ok([0, 1].includes(result.status), result.stderr);
@@ -797,38 +951,42 @@ function scan(rule, files, args = ["--rule", rule], { git = false } = {}) {
     }
 }
 
-test("MER-RV-027 resolves a shared name by namespace, skips one two usings make ambiguous, and never flags ErrorResponse", () => {
+// A restored net10.0 web project for the RV-027 repos below: the compiler binds the names written in them. It is a library
+// with the implicit usings and System.Text.Json.Serialization, which the sources name without a using.
+const webProject = '<Project Sdk="Microsoft.NET.Sdk.Web"><PropertyGroup><TargetFramework>net10.0</TargetFramework><OutputType>Library</OutputType><ImplicitUsings>enable</ImplicitUsings></PropertyGroup>' +
+    '<ItemGroup><Using Include="System.Text.Json.Serialization" /></ItemGroup></Project>\n';
+
+test("MER-RV-027 resolves a shared name by namespace and never flags ErrorResponse", () => {
     const findings = scan("MER-RV-027", {
-        "api/Api.csproj": '<Project Sdk="Microsoft.NET.Sdk.Web" />\n',
+        "api/Api.csproj": webProject,
+        ...rivetStubs("api"),
         "api/Contracts/Orders/OrdersContract.cs":
-            "using App.Modules.Orders.Contracts;\nusing App.Modules.Billing.Contracts;\nnamespace App.Contracts.Orders;\n" +
+            "using App.Modules.Orders.Contracts;\nnamespace App.Contracts.Orders;\n" +
             "[RivetContract]\npublic static class OrdersContract\n{\n" +
             '    public static readonly RouteDefinition<OrderDto> Get = Define.Get<OrderDto>("/api/orders/{id}");\n' +
             '    public static readonly RouteDefinition<ImportResponse> Import = Define.Post<ImportResponse>("/api/orders/import");\n}\n' +
             "public sealed record OrderDto(Guid Id, string? Note = null);\n" +
-            "public sealed record ImportResponse(int Imported, IReadOnlyList<ErrorResponse> Failures, Audit Audit);\n",
+            "public sealed record ImportResponse(int Imported, IReadOnlyList<ErrorResponse> Failures);\n",
         // Same name, published by the Orders module: the contract's own namespace wins over the using.
-        "api/Modules/Orders/Contracts/OrderDto.cs": "namespace App.Modules.Orders.Contracts;\npublic sealed record OrderDto(Guid Id, string Note, int Version = 1);\n" +
-            "public sealed record Audit(string By, int Revision = 0);\n",
-        // Audit comes in through both usings (CS0104): ambiguous, so neither is followed.
-        "api/Modules/Billing/Contracts/Audit.cs": "namespace App.Modules.Billing.Contracts;\npublic sealed record Audit(string By, int Revision = 0);\n",
+        "api/Modules/Orders/Contracts/OrderDto.cs": "namespace App.Modules.Orders.Contracts;\npublic sealed record OrderDto(Guid Id, string Note, int Version = 1);\n",
         // A canonical ErrorResponse outside Common/ is still BE-054's to judge, not RV-027's.
         "api/Contracts/Shared/ErrorResponse.cs":
             "namespace App.Contracts.Orders;\npublic sealed record ErrorResponse(string Code, string Message, IReadOnlyDictionary<string, string[]>? Errors = null);\n",
-    });
+    }, undefined, { restore: true });
     assert.equal(findings.length, 1, findings.join("\n"));
-    assert.match(findings[0], /^api\/Contracts\/Orders\/OrdersContract\.cs:10\tOrderDto\.Note has a default on a response/);
+    assert.match(findings[0], /^api\/Contracts\/Orders\/OrdersContract\.cs:9\tOrderDto\.Note has a default on a response/);
 });
 
 test("MER-RV-027 follows a positional record's parameter to the namespace's type, not its own nested namesake", () => {
     const findings = scan("MER-RV-027", {
-        "api/Api.csproj": '<Project Sdk="Microsoft.NET.Sdk.Web" />\n',
+        "api/Api.csproj": webProject,
+        ...rivetStubs("api"),
         "api/Contracts/Orders/OrdersContract.cs":
             "namespace App.Contracts.Orders;\n[RivetContract]\npublic static class OrdersContract\n{\n" +
             '    public static readonly RouteDefinition<Shipment> Get = Define.Get<Shipment>("/api/shipments/{id}");\n}\n' +
             "public sealed record Shipment(IReadOnlyList<Parcel> Parcels)\n{\n    public sealed record Parcel(int Weight);\n}\n" +
             "public sealed record Parcel(int Weight = 0);\n",
-    });
+    }, undefined, { restore: true });
     assert.deepEqual(findings.map((finding) => finding.split(" on a response")[0]), ["api/Contracts/Orders/OrdersContract.cs:11\tParcel.Weight has a default"]);
 });
 
@@ -894,7 +1052,8 @@ test("MER-BE-018 reads every <Using> form and global using statement, and exempt
 
 test("MER-RV-027 reads .Returns<T> only in a [RivetContract], and a conditional [JsonIgnore] beside [RivetOptional] is its own finding", () => {
     const findings = scan("MER-RV-027", {
-        "api/Api.csproj": '<Project Sdk="Microsoft.NET.Sdk.Web" />\n',
+        "api/Api.csproj": webProject,
+        ...rivetStubs("api"),
         "api/Contracts/Orders/OrdersContract.cs":
             "[RivetContract]\npublic static class OrdersContract\n{\n" +
             '    public static readonly RouteDefinition Cancel = Define.Delete("/api/orders/{id}").Returns<CancelRefused>(409);\n}\n' +
@@ -903,7 +1062,7 @@ test("MER-RV-027 reads .Returns<T> only in a [RivetContract], and a conditional 
         "api/Modules/Orders/Infrastructure/ClockSetup.cs":
             "public static class ClockSetup { public static void Use(dynamic clock) => clock.Now().Returns<ClockReading>(1); }\n" +
             "public sealed record ClockReading(int Ticks = 0);\n",
-    });
+    }, undefined, { restore: true });
     assert.equal(findings.length, 2, findings.join("\n"));
     assert.ok(findings.some((finding) => /^api\/Contracts\/Orders\/OrdersContract\.cs:6\tCancelRefused\.Reason is \[RivetOptional\] on a response/.test(finding)), findings.join("\n"));
     assert.ok(findings.some((finding) => /^api\/Contracts\/Orders\/OrdersContract\.cs:6\tCancelRefused\.Reason is \[JsonIgnore\(Condition = WhenWritingNull\)\] on a response/.test(finding)), findings.join("\n"));

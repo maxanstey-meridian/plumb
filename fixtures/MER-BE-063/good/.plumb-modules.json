@@ -1,0 +1,10 @@
+{
+  "modules": {
+    "Cases": {
+      "Forms": "a case is opened from a form and keeps its id"
+    },
+    "Forms": {
+      "Records": "a form pins the record type version it issues (no code edge yet: a claim may run ahead of the code)"
+    }
+  }
+}

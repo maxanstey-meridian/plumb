@@ -154,6 +154,7 @@ test("file dispatch is central, capabilities are enforced, and shared files read
     "frontend-graph": 0,
     csharp: 0,
     "dotnet-projects": 0,
+    "csharp-facts": 0,
   });
 
   const basic = createRepositoryContext(snapshot, []);

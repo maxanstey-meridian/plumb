@@ -44,8 +44,8 @@ sealed partial class DocumentWalker : CSharpSyntaxWalker
     }
 
     // `declarationsOnly` records the type declarations (the parts) and nothing else: no usings, references, or tables. It is
-    // for a file another project owns and this one links, whose usings and references are the owner's, and which this
-    // project still has to declare its own types from.
+    // for a linking project's copy of a file: it is walked for its declarations (its parts, under this project's own
+    // defines and frameworks), and its usings, references, and tables are not recorded.
     public static void Walk(SyntaxTree tree, SemanticModel model, TypeFilter filter, DocumentFacts facts, int bom, Solution solution, string root, bool declarationsOnly)
     {
         var walker = new DocumentWalker(model, filter, facts, bom, solution, root, declarationsOnly);
@@ -274,8 +274,9 @@ sealed partial class DocumentWalker : CSharpSyntaxWalker
                     assembly = Names.Assembly(named.ContainingAssembly, solution, root);
                     external = !Names.IsProject(named.ContainingAssembly, solution, root);
                 }
-                // The types inside the target: its type arguments when it is a plain named type, else every named type in it
-                // (an array's element, a tuple's elements, a nullable's underlying type).
+                // The types inside the target: when it is a plain named type, the type arguments of it and of each type it is
+                // nested in (`Dictionary<Thing, int>.KeyCollection` holds Thing and int), else every named type in it (an
+                // array's element, a tuple's elements, a nullable's underlying type).
                 var inside = IsPlainNamed(resolved) ? ArgumentsOf((INamedTypeSymbol)resolved).SelectMany(NamedTypesIn) : NamedTypesIn(resolved);
                 foreach (var inner in inside)
                 {

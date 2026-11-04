@@ -194,8 +194,9 @@ sealed partial class DocumentWalker
         }
     }
 
-    // A named type that is neither a tuple nor `Nullable<T>`: the one type an alias or `using static` names, whose own
-    // type arguments are the types inside it.
+    // A named type that is neither a tuple nor `Nullable<T>`: the one type an alias or `using static` names, whose type
+    // arguments (its own and those of each type it is nested in, as in `Dictionary<Thing, int>.KeyCollection`, see
+    // `ArgumentsOf`) are the types inside it.
     static bool IsPlainNamed(ITypeSymbol type)
     {
         return type is INamedTypeSymbol { IsTupleType: false, OriginalDefinition.SpecialType: not SpecialType.System_Nullable_T };

@@ -230,7 +230,8 @@ test("MER-BE-006 reads every part of a partial type, and never reports a type th
 });
 
 // A file-local class is its own type beside a public one of the same name: the public type's access is its own, so a
-// file-local namesake that sorts first doesn't make it read as hidden.
+// file-local namesake doesn't make it read as hidden, and a project item that names the public type never reaches the
+// file-local one.
 test("MER-BE-006 reports a public Common type used by one module as it would without a file-local class of the same name", () => {
     const files = {
         "Common/Gauge.cs": "namespace Acme.Common;\npublic sealed record Gauge(int Value);\n",
@@ -239,7 +240,7 @@ test("MER-BE-006 reports a public Common type used by one module as it would wit
     const expected = ["Common/Gauge.cs:0\tCommon type Gauge is referenced only by module Forms"];
     const withoutNamesake = scanOnFacts("MER-BE-006", files).map((finding) => finding.replace(/ — review.*/, ""));
     assert.deepEqual(withoutNamesake, expected);
-    // The file-local class sorts before the public one, so it is the first declaration of the name.
+    // The file-local class is declared in a file that sorts before the public one's.
     const withNamesake = scanOnFacts("MER-BE-006", {
         ...files,
         "Common/A.Gauge.cs": "namespace Acme.Common;\nfile sealed class Gauge { public int Local { get; set; } }\n",
@@ -252,6 +253,15 @@ test("MER-BE-006 reports a public Common type used by one module as it would wit
         "Common/Z.Gauge.cs": "namespace Acme.Common;\nfile sealed class Gauge { public int Local { get; set; } }\n",
         "App.csproj": net10("", '<ItemGroup><Using Include="Acme.Common.Gauge" Static="true" /></ItemGroup>'),
     }), []);
+    // A project `<Using Static>` item can't name a file-local type, so it never makes the host a consumer of a Common
+    // file-local class whose public namesake lives outside Common: the host doesn't pass on to Dial, which that class names.
+    assert.deepEqual(scanOnFacts("MER-BE-006", {
+        "Common/Dial.cs": "namespace Acme.Common;\npublic sealed record Dial(int Face);\n",
+        "Common/Gauge.cs": "namespace Acme.Common;\nfile static class Gauge { public static Dial? Face; }\n",
+        "Modules/Forms/Gauge.cs": "namespace Acme.Common;\npublic static class Gauge { public static int Value => 0; }\n",
+        "Modules/Forms/Reading.cs": "namespace Acme.Modules.Forms;\npublic sealed record Reading(Acme.Common.Dial Dial);\n",
+        "App.csproj": net10("", '<ItemGroup><Using Include="Acme.Common.Gauge" Static="true" /></ItemGroup>'),
+    }).map((finding) => finding.replace(/ — review.*/, "")), ["Common/Dial.cs:0\tCommon type Dial is referenced only by module Forms"]);
 });
 
 test("MER-BE-006 counts a name in an interpolated string's hole, and never one in its text, a string in a hole, or a format clause", () => {
@@ -700,12 +710,13 @@ test("MER-RV-007 flags every app-written RivetResult extension named like an ada
         // An expression-bodied helper that returns a read.
         "Modules/Orders/StatusHelper.cs:4",
         // A target-typed `new(…)` declared as an ObjectResult, and one returned by a method declared to return one,
-        // a Task of one, a global::-qualified one or a conversion operator to one.
+        // a Task of one, a global::-qualified one or a conversion operator to one (global::-qualified too).
         "Modules/Orders/TargetTypedRelay.cs:14",
         "Modules/Orders/TargetTypedRelay.cs:23",
         "Modules/Orders/TargetTypedRelay.cs:33",
         "Modules/Orders/TargetTypedRelay.cs:39",
         "Modules/Orders/TargetTypedRelay.cs:4",
+        "Modules/Orders/TargetTypedRelay.cs:49",
         // A typed Results<…> union, spaces in its generics.
         "Modules/Orders/TypedResultExtensions.cs:1",
         // A local reassigned from itself (after a lambda's block in its arguments or in an initializer's braces too),
@@ -806,6 +817,7 @@ test("MER-RV-007 flags every app-written RivetResult extension named like an ada
         "Modules/Orders/TargetTypedRelay.cs:33 TargetTypedGlobal",
         "Modules/Orders/TargetTypedRelay.cs:39 AdaptedEnvelope",
         "Modules/Orders/TargetTypedRelay.cs:4 TargetTypedLocal",
+        "Modules/Orders/TargetTypedRelay.cs:49 QualifiedAdaptedEnvelope",
         "Modules/Orders/WindowEnds.cs:106 CastFirstLambdaStatus",
         "Modules/Orders/WindowEnds.cs:18 ConditionalStatus",
         "Modules/Orders/WindowEnds.cs:34 LambdaLocalStatus",
@@ -878,20 +890,112 @@ test("MER-RV-007 reads Rivet's non-generic RivetActionResult as Rivet's inside a
     assert.match(copy[0], /^App\/RivetActionResult\.cs:6\tRivetActionResult copies the StatusCode or Value of RivetActionResult/);
 });
 
-// Build output isn't the app's code: a bin/ file the project compiles is judged by no rule. A git repository, so the
-// inventory lists bin/ at all; the explicit Compile item puts the file in the project's facts.
+// The same holds for a name the code writes and for an alias: an app type written bare binds the non-generic name only,
+// and a using alias is found only for a name without type arguments, so Rivet's RivetResult<T> stays Rivet's.
+test("MER-RV-007 reads Rivet's generic RivetResult<T> as Rivet's beside a bare use of the app's non-generic RivetResult", () => {
+    const bridge = scan("MER-RV-007", {
+        "App.csproj": SAME_NAME_PROJECT,
+        "Rivet/RivetResult.cs": "namespace Rivet { public class RivetResult<T> { } }\n",
+        "App/RivetResult.cs": "namespace App { public class RivetResult { } }\n",
+        "App/Web/Bridges.cs": "using Microsoft.AspNetCore.Mvc;\nusing Rivet;\n\nnamespace App.Web;\n\npublic static class Bridges\n{\n" +
+            "    public static IActionResult ToHttp<T>(this RivetResult<T> result, RivetResult legacy) => new OkResult();\n}\n",
+    }, undefined, { restore: true });
+    assert.equal(bridge.length, 1, bridge.join("\n"));
+    assert.match(bridge[0], /^App\/Web\/Bridges\.cs:6\tBridges hand-writes an HTTP-result bridge off RivetResult \(ToHttp\)/);
+});
+
+test("MER-RV-007 reads Rivet's non-generic RivetActionResult as Rivet's beside a bare use of the app's generic RivetActionResult<T>", () => {
+    const copy = scan("MER-RV-007", {
+        "App.csproj": SAME_NAME_PROJECT,
+        "Rivet/RivetActionResult.cs": "namespace Rivet { public sealed class RivetActionResult { public int StatusCode { get; } public object? Value { get; } } }\n",
+        "App/RivetActionResult.cs": "namespace App { public sealed class RivetActionResult<T> { } }\n",
+        "App/Web/Relay.cs": "using Microsoft.AspNetCore.Mvc;\nusing Rivet;\n\nnamespace App.Web;\n\npublic sealed class Relay\n{\n" +
+            "    public IActionResult Send(RivetActionResult adapted, RivetActionResult<int> mine) => new ObjectResult(adapted.Value) { StatusCode = adapted.StatusCode };\n}\n",
+    }, undefined, { restore: true });
+    assert.equal(copy.length, 1, copy.join("\n"));
+    assert.match(copy[0], /^App\/Web\/Relay\.cs:6\tRelay copies the StatusCode or Value of RivetActionResult/);
+});
+
+test("MER-RV-007 reads Rivet's generic RivetResult<T> as Rivet's beside a using alias named RivetResult", () => {
+    const bridge = scan("MER-RV-007", {
+        "App.csproj": SAME_NAME_PROJECT,
+        "Rivet/RivetResult.cs": "namespace Rivet { public class RivetResult<T> { } }\n",
+        "App/Bridges.cs": "using Microsoft.AspNetCore.Mvc;\nusing Rivet;\nusing RivetResult = System.Text.StringBuilder;\n\nnamespace App;\n\npublic static class Bridges\n{\n" +
+            "    public static IActionResult ToHttp<T>(this RivetResult<T> result, RivetResult log) => new OkResult();\n}\n",
+    }, undefined, { restore: true });
+    assert.equal(bridge.length, 1, bridge.join("\n"));
+    assert.match(bridge[0], /^App\/Bridges\.cs:7\tBridges hand-writes an HTTP-result bridge off RivetResult \(ToHttp\)/);
+});
+
+// A project whose Compile item puts bin/ files in its facts: a git repository lists bin/ at all, and the explicit
+// Compile item compiles the file. Build output isn't the app's code, so a rule that judges files skips it.
+const compiledBin = (using = "") => '<Project Sdk="Microsoft.NET.Sdk.Web"><PropertyGroup><TargetFramework>net10.0</TargetFramework><ImplicitUsings>enable</ImplicitUsings><OutputType>Library</OutputType></PropertyGroup>' +
+    `<ItemGroup>${using}<Compile Include="bin/**/*.cs" /></ItemGroup></Project>\n`;
+
 test("MER-RV-007 leaves a bridge in a bin/ folder alone, and reports the same bridge outside it", () => {
     const copy = (name) => "using Microsoft.AspNetCore.Mvc;\nusing Rivet;\n\nnamespace App;\n\n" +
         `public static class ${name}\n{\n    public static IActionResult Send(RivetActionResult adapted) => new ObjectResult(adapted.Value) { StatusCode = adapted.StatusCode };\n}\n`;
     const findings = scan("MER-RV-007", {
-        "App.csproj": '<Project Sdk="Microsoft.NET.Sdk.Web"><PropertyGroup><TargetFramework>net10.0</TargetFramework><ImplicitUsings>enable</ImplicitUsings><OutputType>Library</OutputType></PropertyGroup>' +
-            '<ItemGroup><Compile Include="bin/**/*.cs" /></ItemGroup></Project>\n',
+        "App.csproj": compiledBin(),
         "Rivet/RivetActionResult.cs": "namespace Rivet { public sealed class RivetActionResult { public int StatusCode { get; } public object? Value { get; } } }\n",
         "Relay/Copy.cs": copy("Copy"),
         "bin/Debug/BinCopy.cs": copy("BinCopy"),
     }, undefined, { git: true, restore: true });
     assert.equal(findings.length, 1, findings.join("\n"));
     assert.match(findings[0], /^Relay\/Copy\.cs:6\tCopy copies the StatusCode or Value of RivetActionResult/);
+});
+
+// The skip is for judged files only: a global alias in a compiled bin/ file is a compiler fact that applies to the
+// whole project, so a bridge written through it is still read as Rivet's.
+test("MER-RV-007 reads a global alias in a bin/ folder as the compiler does", () => {
+    const findings = scan("MER-RV-007", {
+        "App.csproj": compiledBin(),
+        "Rivet/RivetActionResult.cs": "namespace Rivet { public sealed class RivetActionResult { public int StatusCode { get; } public object? Value { get; } } }\n",
+        "bin/Debug/Aliases.cs": "global using Adapted = Rivet.RivetActionResult;\n",
+        "Relay/Copy.cs": "using Microsoft.AspNetCore.Mvc;\n\nnamespace App;\n\npublic static class Copy\n{\n    public static IActionResult Send(Adapted adapted) => new ObjectResult(adapted.Value) { StatusCode = adapted.StatusCode };\n}\n",
+    }, undefined, { git: true, restore: true });
+    assert.equal(findings.length, 1, findings.join("\n"));
+    assert.match(findings[0], /^Relay\/Copy\.cs:5\tCopy copies the StatusCode or Value of /);
+});
+
+test("MER-RV-003 leaves a const-route handler in a bin/ folder alone, and reports the same handler outside it", () => {
+    const controller = (name) => `namespace App;\n\npublic sealed class ${name}Controller : ControllerBase\n{\n    [HttpGet(OrdersContract.GetRoute)]\n    public IActionResult Get(Guid id) => Ok(id);\n}\n`;
+    const findings = scan("MER-RV-003", {
+        "App.csproj": compiledBin('<Using Include="Microsoft.AspNetCore.Mvc" />'),
+        ...rivetStubs(),
+        "Contracts/Orders/OrdersContract.cs": 'namespace App;\n\npublic sealed record OrderDto;\n\n[RivetContract]\npublic static class OrdersContract\n{\n    public const string GetRoute = "/api/orders/{id}";\n\n    public static readonly RouteDefinition<OrderDto> Get = Define.Get<OrderDto>(GetRoute);\n}\n',
+        "Modules/Orders/OrdersController.cs": controller("Orders"),
+        "bin/Debug/BinOrdersController.cs": controller("BinOrders"),
+    }, undefined, { git: true, restore: true });
+    assert.equal(findings.length, 1, findings.join("\n"));
+    assert.match(findings[0], /^Modules\/Orders\/OrdersController\.cs:5\thandler route references OrdersContract\.GetRoute/);
+});
+
+test("MER-RV-011 leaves a transport contract in a bin/ folder alone, and reports the same contract outside it", () => {
+    const contract = (name, payload) => `namespace App.Contracts.Orders;\n\n[RivetContract]\npublic static class ${name}\n{\n    public static readonly RouteDefinition<${payload}> Get = Define.Get<${payload}>("/api/${payload}");\n}\n`;
+    const findings = scan("MER-RV-011", {
+        "App.csproj": compiledBin(),
+        ...rivetStubs(),
+        "Contracts/Orders/OrdersContract.cs": contract("OrdersContract", "Line"),
+        "bin/Debug/Contracts/Orders/BinContract.cs": contract("BinContract", "BinLine"),
+        "Modules/Billing/Line.cs": "namespace App.Contracts.Orders;\n\npublic sealed record Line;\n",
+        // A Modules folder under bin/ makes bin/Debug a backend root, so the contract there is a transport contract.
+        "bin/Debug/Modules/Billing/BinLine.cs": "namespace App.Contracts.Orders;\n\npublic sealed record BinLine;\n",
+    }, undefined, { git: true, restore: true });
+    assert.deepEqual(findings, ["Contracts/Orders/OrdersContract.cs:6\troute payload Line is owned by Modules/Billing/Line.cs — define it in Contracts/Orders/"]);
+});
+
+// A global using static in a compiled bin/ file imports the type's members project-wide, so the host consumes the
+// type, as the compiler sees it; the file isn't judged, but its directive is a fact.
+test("MER-BE-006 counts a global using static in a bin/ folder as the host using the type", () => {
+    const files = {
+        "App.csproj": compiledBin(),
+        "Common/Gauge.cs": "namespace Acme.Common;\npublic static class Gauge { public static int Reading => 0; }\n",
+        "Modules/Forms/Forms.cs": "using Acme.Common;\nnamespace Acme.Modules.Forms;\npublic sealed class Forms { public int Level => Gauge.Reading; }\n",
+    };
+    const findingsOf = (extra) => scan("MER-BE-006", { ...files, ...extra }, undefined, { git: true, restore: true }).map((finding) => finding.replace(/ — review.*/, ""));
+    assert.deepEqual(findingsOf({}), ["Common/Gauge.cs:0\tCommon type Gauge is referenced only by module Forms"]);
+    assert.deepEqual(findingsOf({ "bin/Debug/Globals.cs": "global using static Acme.Common.Gauge;\n" }), []);
 });
 
 test("MER-RV-008 ignores MapGroup, reports handlers, and does not accept commented composition", () => {

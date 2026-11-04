@@ -44,3 +44,13 @@ public sealed record AdaptedEnvelope(RivetActionResult Adapted)
         return new(a.Value) { StatusCode = a.StatusCode };
     }
 }
+
+// The same, to a global::-qualified ObjectResult: the qualifier is part of the operator's type.
+public sealed record QualifiedAdaptedEnvelope(RivetActionResult Adapted)
+{
+    public static implicit operator global::Microsoft.AspNetCore.Mvc.ObjectResult(QualifiedAdaptedEnvelope e)
+    {
+        RivetActionResult a = e.Adapted;
+        return new(a.Value) { StatusCode = a.StatusCode };
+    }
+}

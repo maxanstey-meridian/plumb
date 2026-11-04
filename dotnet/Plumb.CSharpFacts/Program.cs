@@ -126,8 +126,9 @@ static class Program
         // A file another project links is declared in that project too, from that project's own compilation: its defines and
         // frameworks decide which declarations it compiles, and a use from it matches a part by the use's assembly. Its
         // documents come after every owner's, so a file's first document is the owner's, and they are walked for declarations
-        // only, so the file's usings, references, and tables are still the owner's and stay once. Being work, they are also
-        // compiled and checked with their project: one that owns nothing, or whose code doesn't compile, gives no parts.
+        // only (its parts, under the linking project's own defines and frameworks): their usings, references, and tables are
+        // not recorded. Being work, they are also compiled and checked with their project: one that owns nothing, or whose
+        // code doesn't compile, gives no parts.
         foreach (var (owned, declarationsOnly) in documents.Select(owned => (owned, false)).Concat(linked.Select(owned => (owned, true))))
         {
             var tree = await owned.Document.GetSyntaxTreeAsync();

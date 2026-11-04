@@ -1797,7 +1797,8 @@ test("MER-CP-001 takes no server ids from a test project, known by metadata, and
 });
 
 // A pair of `#if` headers, only one of which has the body, ends the first where the second starts: the const after the
-// body is Outer's, not a member of the replaced `Fake` (a test double's name, which would drop it).
+// body is Outer's. Without the fix, the first `Fake` header runs to the end of the file, and the const is named
+// `Outer.Fake.XId`.
 test("MER-CP-001 names a const by the type that holds it when an #if pair of headers comes before it", () => {
   const r = repo([], {
     "api/Modules/Crm/Contracts/Outer.cs": "public class B { }\npublic class C { }\npublic static class Outer\n{\n#if X\n    public class Fake : B\n#else\n" +

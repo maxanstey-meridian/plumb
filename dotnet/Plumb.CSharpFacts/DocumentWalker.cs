@@ -27,11 +27,12 @@ sealed partial class DocumentWalker : CSharpSyntaxWalker
     readonly int bom;
     readonly Solution solution;
     readonly string root;
+    readonly bool declarationsOnly;
     readonly Stack<TypeContext> types = new();
     readonly HashSet<ReferenceFact> seen = [];
     string? member;
 
-    DocumentWalker(SemanticModel model, TypeFilter filter, DocumentFacts facts, int bom, Solution solution, string root)
+    DocumentWalker(SemanticModel model, TypeFilter filter, DocumentFacts facts, int bom, Solution solution, string root, bool declarationsOnly)
     {
         this.model = model;
         this.filter = filter;
@@ -39,11 +40,15 @@ sealed partial class DocumentWalker : CSharpSyntaxWalker
         this.bom = bom;
         this.solution = solution;
         this.root = root;
+        this.declarationsOnly = declarationsOnly;
     }
 
-    public static void Walk(SyntaxTree tree, SemanticModel model, TypeFilter filter, DocumentFacts facts, int bom, Solution solution, string root)
+    // `declarationsOnly` records the type declarations (the parts) and nothing else: no usings, references, or tables. It is
+    // for a file another project owns and this one links, whose usings and references are the owner's, and which this
+    // project still has to declare its own types from.
+    public static void Walk(SyntaxTree tree, SemanticModel model, TypeFilter filter, DocumentFacts facts, int bom, Solution solution, string root, bool declarationsOnly)
     {
-        var walker = new DocumentWalker(model, filter, facts, bom, solution, root);
+        var walker = new DocumentWalker(model, filter, facts, bom, solution, root, declarationsOnly);
         walker.Visit(tree.GetRoot());
     }
 
@@ -54,6 +59,10 @@ sealed partial class DocumentWalker : CSharpSyntaxWalker
         switch (node)
         {
             case null:
+                return;
+            // Declarations only: a type declaration lives in the compilation unit, a namespace, or another type, so the
+            // walk goes no further (a using directive, a member, a statement, and an attribute are all skipped here).
+            case not (CompilationUnitSyntax or BaseNamespaceDeclarationSyntax or BaseTypeDeclarationSyntax or DelegateDeclarationSyntax) when declarationsOnly:
                 return;
             case UsingDirectiveSyntax directive:
                 RecordUsing(directive);
@@ -168,6 +177,11 @@ sealed partial class DocumentWalker : CSharpSyntaxWalker
 
     void Process(SyntaxNode node)
     {
+        // Every fact but a part is recorded from here (a reference, a table, a snapshot table, a default schema).
+        if (declarationsOnly)
+        {
+            return;
+        }
         if (node is SimpleNameSyntax name)
         {
             RecordName(name);
@@ -262,15 +276,15 @@ sealed partial class DocumentWalker : CSharpSyntaxWalker
                 }
                 // The types inside the target: its type arguments when it is a plain named type, else every named type in it
                 // (an array's element, a tuple's elements, a nullable's underlying type).
-                var inside = IsPlainNamed(resolved) ? ((INamedTypeSymbol)resolved).TypeArguments.SelectMany(NamedTypesIn) : NamedTypesIn(resolved);
+                var inside = IsPlainNamed(resolved) ? ArgumentsOf((INamedTypeSymbol)resolved).SelectMany(NamedTypesIn) : NamedTypesIn(resolved);
                 foreach (var inner in inside)
                 {
                     if (filter.OriginOf(inner.OriginalDefinition) == TypeOrigin.Ignored)
                     {
                         continue;
                     }
-                    var reference = new TypeRef(Names.Type(inner.OriginalDefinition), Names.Assembly(inner.ContainingAssembly, solution, root));
-                    if (!(arguments ??= []).Contains(reference))
+                    var reference = new TypeRef(Names.Type(inner.OriginalDefinition), Names.Assembly(inner.ContainingAssembly, solution, root), filter.OriginOf(inner.OriginalDefinition) == TypeOrigin.WantedOutside);
+                    if (!(arguments ??= []).Any(existing => existing.Identity == reference.Identity))
                     {
                         arguments.Add(reference);
                     }

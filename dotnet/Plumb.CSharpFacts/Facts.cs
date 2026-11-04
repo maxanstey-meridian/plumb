@@ -27,8 +27,12 @@ readonly record struct UsingFact(
     bool External,
     IReadOnlyList<TypeRef>? Arguments = null);
 
-// A named type by its name and the assembly the compiler bound it to.
-readonly record struct TypeRef(string Type, string Assembly);
+// A named type by its name and the assembly the compiler bound it to. External (not written) is a type outside the repo,
+// whose assembly differs by framework (System.Runtime, netstandard) and is still one type, so Identity leaves it out.
+readonly record struct TypeRef(string Type, string Assembly, bool External = false)
+{
+    public TypeRef Identity => this with { Assembly = External ? "" : Assembly };
+}
 
 readonly record struct ReferenceFact(
     int Start,
@@ -65,14 +69,13 @@ sealed class DocumentFacts(string file, string assembly)
     static readonly string[] WidestFirst = ["public", "protected internal", "internal", "protected", "private protected", "private", "file"];
 
     // One multi-target project's documents, each with its framework's name, first framework first. A type's access, kind,
-    // and bases can differ by framework: it's as visible as its widest, it's an interface if any framework says so
-    // (otherwise each part keeps its own kind, the first framework's), and it has all of its bases. Each part lists the
-    // frameworks whose documents hold it (one name, assembly, file, start, and end), in the order given, so a reader can
-    // tell the declarations of one name that are alternatives under #if from those that compile together. A single-target
-    // project never comes here, and its parts list none. Every part of a name takes the namespace and containing type of
-    // the first framework's (`frameworks` is the project's, first first), as the facts can hold only those. It returns the
-    // names, ordinally sorted, whose namespace and containing type differ by framework: a framework that doesn't declare
-    // a name isn't a difference.
+    // and bases can differ by framework: it's as visible as its widest, it's an interface if any framework says so, and it
+    // has all of its bases. Each part lists the frameworks whose documents hold it (one name, assembly, file, start, and
+    // end), in the order given, so a reader can tell the declarations of one name that are alternatives under #if from those
+    // that compile together. A single-target project never comes here, and its parts list none. Every part of a name takes
+    // the kind (unless an interface, above), namespace, and containing type of the first framework's (`frameworks` is the
+    // project's, first first), as the facts can hold only those. It returns the names, ordinally sorted, whose namespace and
+    // containing type differ by framework: a framework that doesn't declare a name isn't a difference.
     public static IReadOnlyList<string> Reconcile(IReadOnlyList<(DocumentFacts Document, string Framework)> documents, IReadOnlyList<string> frameworks)
     {
         var order = frameworks.ToList();
@@ -143,7 +146,7 @@ sealed class DocumentFacts(string file, string assembly)
         // kept: a framework can bind an argument that another doesn't.
         merged.Usings.AddRange(frameworks.SelectMany(framework => framework.Usings)
             .GroupBy(fact => fact with { Assembly = fact.External ? null : fact.Assembly, Arguments = null })
-            .Select(group => group.First() with { Arguments = group.SelectMany(fact => fact.Arguments ?? []).Distinct().ToList() is { Count: > 0 } union ? union : null }));
+            .Select(group => group.First() with { Arguments = group.SelectMany(fact => fact.Arguments ?? []).DistinctBy(argument => argument.Identity).ToList() is { Count: > 0 } union ? union : null }));
         merged.References.AddRange(frameworks.SelectMany(framework => framework.References).DistinctBy(fact => fact with { Assembly = fact.External ? "" : fact.Assembly }));
         merged.Tables.AddRange(frameworks.SelectMany(framework => framework.Tables).Distinct());
         merged.SnapshotTables.AddRange(frameworks.SelectMany(framework => framework.SnapshotTables).Distinct());

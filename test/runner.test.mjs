@@ -1796,6 +1796,19 @@ test("MER-CP-001 takes no server ids from a test project, known by metadata, and
   assert.deepEqual(findings.map((finding) => finding.message.match(/is the server's (\S+);/)?.[1]), ["Crm.Hooks.HookId", "Crm.CrmId"]);
 });
 
+// A pair of `#if` headers, only one of which has the body, ends the first where the second starts: the const after the
+// body is Outer's, not a member of the replaced `Fake` (a test double's name, which would drop it).
+test("MER-CP-001 names a const by the type that holds it when an #if pair of headers comes before it", () => {
+  const r = repo([], {
+    "api/Modules/Crm/Contracts/Outer.cs": "public class B { }\npublic class C { }\npublic static class Outer\n{\n#if X\n    public class Fake : B\n#else\n" +
+      '    public class Fake : C\n#endif\n    {\n    }\n    public const string XId = "x-id";\n}\n',
+    "nuxt.config.ts": "export default defineNuxtConfig({ ssr: false });\n",
+    "app/pages/index.vue": '<script setup lang="ts">\nconst ids = ["x-id"];\n</script>\n',
+  });
+  const findings = JSON.parse(plumb(r, "--rule", "MER-CP-001", "--json").stdout);
+  assert.deepEqual(findings.map((finding) => finding.message.match(/is the server's (\S+);/)?.[1]), ["Outer.XId"]);
+});
+
 test("MER-CP-002 reads a rule from any level-2 heading that starts with its ID, and reports each missing field or title, unknown or repeated rule ID, rule headed at another level, ID without three digits, file with no rule, and cited name that isn't in the code", () => {
   const findings = JSON.parse(plumb(path.join(FIX, "MER-CP-002", "bad"), "--rule", "MER-CP-002", "--json").stdout);
   const cited = (finding) => finding.message.match(/cites `([^`]+)`(?:, which matches \d+ files)?/)?.[0] ??

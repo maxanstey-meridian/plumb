@@ -26,7 +26,7 @@ sealed partial class DocumentWalker
             {
                 var outer = (INamedTypeSymbol)aliased;
                 Add(outer.OriginalDefinition, name.Identifier.Span, null, WrittenOf(name), QualifiesAType(name));
-                foreach (var argument in outer.TypeArguments)
+                foreach (var argument in ArgumentsOf(outer))
                 {
                     RecordDeep(argument, name.Identifier.Span, WrittenOf(name));
                 }
@@ -173,14 +173,24 @@ sealed partial class DocumentWalker
                 yield break;
             case INamedTypeSymbol named:
                 yield return named;
-                foreach (var argument in named.TypeArguments)
+                foreach (var inner in ArgumentsOf(named).SelectMany(NamedTypesIn))
                 {
-                    foreach (var inner in NamedTypesIn(argument))
-                    {
-                        yield return inner;
-                    }
+                    yield return inner;
                 }
                 yield break;
+        }
+    }
+
+    // The type arguments a named type holds: its own and those of every type it is nested in
+    // (`List<Thing>.Enumerator` holds Thing on its container, not on itself).
+    static IEnumerable<ITypeSymbol> ArgumentsOf(INamedTypeSymbol type)
+    {
+        for (var t = type; t is not null; t = t.ContainingType)
+        {
+            foreach (var argument in t.TypeArguments)
+            {
+                yield return argument;
+            }
         }
     }
 

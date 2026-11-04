@@ -183,7 +183,8 @@ test("a file directly under Modules/ that names a module type is no module's cod
     ...back("RegA", "RegB"),
     "api/Modules/RegA/Application/UseB.cs": "using App.Modules.RegB.Contracts;\nnamespace App.Modules.RegA.Application;\npublic sealed class UseB(RegBThing thing);\n",
     "api/Modules/RegB/Contracts/RegBHelper.cs": "namespace App.Modules.RegB.Contracts;\npublic static class RegBHelper { public static int Count() => 1; }\n",
-    "api/Modules/ModuleRegistration.cs": "using App.Modules.RegA.Contracts;\nnamespace App.Modules;\npublic static class ModuleRegistration\n{\n    public static int Total() => App.Modules.RegB.Contracts.RegBHelper.Count();\n}\n",
+    "api/Modules/RegA/RegARoot.cs": "namespace App.Modules.RegA;\npublic sealed class RegARoot;\n",
+    "api/Modules/ModuleRegistration.cs": "using App.Modules.RegA;\nusing App.Modules.RegA.Contracts;\nnamespace App.Modules;\npublic static class ModuleRegistration\n{\n    public static int Total() => App.Modules.RegB.Contracts.RegBHelper.Count();\n}\n",
   };
   const root = build("registration", files);
   const { locations } = run(root, "MER-BE-062");
@@ -191,6 +192,10 @@ test("a file directly under Modules/ that names a module type is no module's cod
     "api/Modules/RegA/Application/UseB.cs:1",
     "api/Modules/RegB/Application/BackRegA.cs:1",
   ]);
+  // Its using of a module's root-namespace type is outside-module code: not module "ModuleRegistration.cs" reaching in.
+  for (const id of ["MER-BE-003", "MER-BE-004", "MER-BE-005"]) {
+    assert.deepEqual(run(root, id).locations.filter((location) => location.includes("ModuleRegistration.cs")), [], id);
+  }
 });
 
 test("a reference into a module of another backend root is MER-BE-005 and makes no loop edge", () => {
@@ -215,6 +220,22 @@ test("a global using in build output under a module is no hit, while the same li
   assert.deepEqual(locations, ["api/Modules/Cases/Application/Globals.cs:1"]);
 });
 
+test("MER-BE-007 skips build output under Common/Ports, while the same port in an ordinary file is reported", () => {
+  const port = (name) => `using App.Modules.Forms.Domain;\nnamespace App.Common.Ports;\npublic interface ${name}\n{\n    FormsEntity Read();\n}\n`;
+  const files = {
+    "api/Api.csproj": project(),
+    ...entity("Forms"),
+    "api/Common/Ports/IFormsReader.cs": port("IFormsReader"),
+    "api/Common/Ports/obj/Debug/IGeneratedReader.cs": port("IGeneratedReader"),
+  };
+  const root = build("build-output-port", files);
+  // Without a git repository the scan skips obj/ itself; in one that doesn't ignore it, the folder is read.
+  assert.equal(spawnSync("git", ["init", "-q"], { cwd: root }).status, 0);
+  assert.equal(spawnSync("git", ["add", "-A"], { cwd: root }).status, 0);
+  const { locations } = run(root, "MER-BE-007");
+  assert.deepEqual(locations, ["api/Common/Ports/IFormsReader.cs:5"]);
+});
+
 test("a namespace one module declares across layers is a hit for each layer, so a using of it reaches the Domain types", () => {
   const files = {
     "api/Api.csproj": project(),
@@ -227,15 +248,100 @@ test("a namespace one module declares across layers is a hit for each layer, so 
   assert.match(findings[0].message, /^module Auth must not use Forms\.Domain/);
 });
 
-test("a global using in a module file under nested backend roots is one MER-BE-005, not one per root", () => {
+// A global using is about the module, so a namespace the module declares across layers is still one finding per line.
+const wholeModule = "global using of Forms puts module Forms in every file of the project — use it only in the files that need it";
+const flatGlobalFiles = lazy(() => ({
+  "api/Api.csproj": project('\n  <ItemGroup>\n    <Using Include="App.Forms" />\n  </ItemGroup>'),
+  "api/Modules/Forms/Contracts/FormsThing.cs": "namespace App.Forms;\npublic sealed record FormsThing(int Id);\n",
+  "api/Modules/Forms/Domain/FormsEntity.cs": "namespace App.Forms;\npublic sealed class FormsEntity { public int Id { get; set; } }\n",
+  "api/Modules/Forms/Application/FormsService.cs": "namespace App.Forms;\npublic sealed class FormsService;\n",
+  // The second line names a namespace of one layer only, in the nested spelling, so its one segment is named.
+  "api/Modules/Forms/Application/Globals.cs": "global using App.Forms;\nglobal using App.Modules.Forms.Contracts;\nnamespace App.Modules.Forms.Application;\npublic sealed class Globals;\n",
+  "api/Modules/Forms/Contracts/Nested.cs": "namespace App.Modules.Forms.Contracts;\npublic sealed record Nested(int Id);\n",
+}));
+
+const flatGlobalRoot = lazy(() => build("flat-global", flatGlobalFiles()));
+
+test("a global using of a namespace the module declares across three layers is one MER-BE-005 for the module, with no segment", () => {
+  const root = flatGlobalRoot();
+  const found = ["MER-BE-003", "MER-BE-004", "MER-BE-005"].flatMap((id) => run(root, id).findings).filter((finding) => finding.location === "api/Modules/Forms/Application/Globals.cs:1");
+  assert.deepEqual(found.map((finding) => [finding.rule, finding.message]), [["MER-BE-005", wholeModule]]);
+});
+
+test("a global using of a namespace that one layer of the module declares names that segment, once", () => {
+  const found = run(flatGlobalRoot(), "MER-BE-005").findings.filter((finding) => finding.location === "api/Modules/Forms/Application/Globals.cs:2");
+  assert.deepEqual(found.map((finding) => finding.message), ["global using of Forms.Contracts puts module Forms in every file of the project — use it only in the files that need it"]);
+});
+
+test("an MSBuild <Using> of a namespace the module declares across layers is one MER-BE-005 at the item, with no segment", () => {
+  const files = flatGlobalFiles();
+  const found = run(flatGlobalRoot(), "MER-BE-005").findings.filter((finding) => finding.location.startsWith("api/Api.csproj:"));
+  assert.deepEqual(found.map((finding) => [finding.location, finding.message]), [[`api/Api.csproj:${lineOf(files["api/Api.csproj"], "<Using")}`, wholeModule]]);
+});
+
+test("a using of a namespace imports only the types in it: the layers of types in sub-namespaces below are not hit", () => {
+  const files = {
+    "api/Api.csproj": project(),
+    "api/Modules/Forms/FormsModule.cs": "namespace App.Forms;\npublic sealed class FormsModule;\n",
+    "api/Modules/Forms/Domain/Form.cs": "namespace App.Forms.Domain;\npublic sealed class Form { public int Id { get; set; } }\n",
+    "api/Modules/Forms/Infrastructure/FormsDb.cs": "namespace App.Forms.Infrastructure;\npublic sealed class FormsDb;\n",
+    "api/Modules/Auth/Application/Use.cs": "using App.Forms;\nnamespace App.Modules.Auth.Application;\npublic sealed class Use;\n",
+  };
+  const root = build("ancestor-namespace", files);
+  const own = run(root, "MER-BE-005");
+  assert.deepEqual(own.locations, ["api/Modules/Auth/Application/Use.cs:1"]);
+  assert.match(own.findings[0].message, /^module Auth must not use Forms's root namespace types/);
+  for (const id of ["MER-BE-003", "MER-BE-004"]) assert.deepEqual(run(root, id).locations, [], id);
+});
+
+test("a using of a namespace with no type of the module in it is one hit for the module, from the first path's layer", () => {
+  const files = {
+    "api/Api.csproj": project(),
+    "api/Modules/Billing/Domain/Invoice.cs": "namespace App.Billing.Domain;\npublic sealed class Invoice { public int Id { get; set; } }\n",
+    "api/Modules/Billing/Application/Charge.cs": "namespace App.Billing.Application;\npublic sealed class Charge;\n",
+    "api/Modules/Auth/Application/Use.cs": "using App.Billing;\nnamespace App.Modules.Auth.Application;\npublic sealed class Use;\n",
+  };
+  const root = build("ancestor-only", files);
+  // Of Billing's layers the first path is Application/Charge.cs, so the one hit is the Application one.
+  const found = ["MER-BE-003", "MER-BE-004", "MER-BE-005"].flatMap((id) => run(root, id).findings);
+  assert.deepEqual(found.map((finding) => [finding.rule, finding.location]), [["MER-BE-005", "api/Modules/Auth/Application/Use.cs:1"]]);
+  assert.match(found[0].message, /^module Auth must not use Billing\.Application internals/);
+});
+
+test("a global using under nested backend roots is judged once, by the root that classifies the file, and a host file no root classifies is one finding", () => {
   const files = {
     "App.csproj": project(),
     ...Object.fromEntries(Object.entries(contract("Alpha")).map(([file, text]) => [file.replace("api/", ""), text])),
     "api/Modules/Beta/Contracts/BetaThing.cs": "namespace App.Modules.Beta.Contracts;\npublic sealed record BetaThing(int Id);\n",
+    ...entity("Beta"),
     "api/Modules/Gamma/Application/Globals.cs": "global using App.Modules.Beta.Contracts;\nnamespace App.Modules.Gamma.Application;\npublic sealed class Globals;\n",
+    "api/Modules/Gamma/Application/DomainGlobals.cs": "global using App.Modules.Beta.Domain;\nnamespace App.Modules.Gamma.Application;\npublic sealed class DomainGlobals;\n",
+    "api/Modules/Gamma/Domain/GammaEntity.cs": "global using App.Modules.Beta.Contracts;\nnamespace App.Modules.Gamma.Domain;\npublic sealed class GammaEntity { public int Id { get; set; } }\n",
+    // No backend root classifies a host file outside Modules/, Common/, and Contracts/, so every root's pass reads it.
+    "api/GlobalUsings.cs": "global using App.Modules.Beta.Domain;\n",
   };
-  const { locations } = run(build("nested-roots-global", files), "MER-BE-005");
-  assert.deepEqual(locations, ["api/Modules/Gamma/Application/Globals.cs:1"]);
+  const root = build("nested-roots-global", files);
+  const found = Object.fromEntries(["MER-BE-003", "MER-BE-004", "MER-BE-005"].map((id) => [id, run(root, id).findings.map((finding) => [finding.location, finding.message])]));
+  const message = (id, location) => found[id].filter(([where]) => where === location).map(([, text]) => text);
+
+  // A Domain target from a module file: the inner root's finding with the module as owner, and no "outside module" one.
+  assert.deepEqual(message("MER-BE-003", "api/Modules/Gamma/Application/DomainGlobals.cs:1"), [
+    "module Gamma must not use Beta.Domain — consume a published contract or define a required port",
+  ]);
+  // A Domain target from a host file read by both passes: one finding, with no module as owner.
+  assert.deepEqual(message("MER-BE-003", "api/GlobalUsings.cs:1"), [
+    "module outside module must not use Beta.Domain — consume a published contract or define a required port",
+  ]);
+  assert.deepEqual(found["MER-BE-003"].map(([where]) => where), ["api/GlobalUsings.cs:1", "api/Modules/Gamma/Application/DomainGlobals.cs:1"]);
+  assert.deepEqual(found["MER-BE-004"], []);
+  // Gamma Application's Contracts global is the one project-wide finding; Gamma Domain's gets the Domain message only.
+  assert.deepEqual(message("MER-BE-005", "api/Modules/Gamma/Application/Globals.cs:1"), [
+    "global using of Beta.Contracts puts module Beta in every file of the project — use it only in the files that need it",
+  ]);
+  assert.deepEqual(message("MER-BE-005", "api/Modules/Gamma/Domain/GammaEntity.cs:1"), [
+    "module Gamma Domain must not use Beta.Contracts — published contracts are for Application and integration consumers",
+  ]);
+  assert.deepEqual(found["MER-BE-005"].map(([where]) => where), ["api/Modules/Gamma/Application/Globals.cs:1", "api/Modules/Gamma/Domain/GammaEntity.cs:1"]);
 });
 
 // ---- claims ----
@@ -412,8 +518,8 @@ test("a claims file with a wrong shape is one MER-BE-063 and no claim applies", 
     assert.equal(findings[0].location, `.plumb-modules.json:${line}`, text);
     assert.match(findings[0].message, message, text);
   }
-  // A BOM before the JSON doesn't make it invalid, and its offsets still give the key's line. "Cases" starts at column 0
-  // of line 4, the reported key, so an offset one short lands on line 3's newline.
+  // A BOM before the JSON doesn't make it invalid, and its offsets still give the key's line. "Nowhere", the reported
+  // key, starts at column 0 of line 4, so an offset one short lands on line 3's newline.
   claims(root, '﻿{\n"modules": {\n"Cases": {\n"Nowhere": "x"\n}\n}\n}\n');
   const bom = run(root, "MER-BE-063").findings;
   assert.deepEqual(bom.map((finding) => finding.location), [".plumb-modules.json:4"]);

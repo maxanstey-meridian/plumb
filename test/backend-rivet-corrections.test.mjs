@@ -245,7 +245,8 @@ test("MER-BE-006 reports a public Common type used by one module as it would wit
         "Common/A.Gauge.cs": "namespace Acme.Common;\nfile sealed class Gauge { public int Local { get; set; } }\n",
     }).map((finding) => finding.replace(/ — review.*/, ""));
     assert.deepEqual(withNamesake, expected);
-    // A project `<Using Static>` of the public type makes the host its consumer, though a file-local namesake sorts after it.
+    // A project `<Using Static>` of the public type makes the host its consumer, with a file-local namesake declared
+    // beside it: the namesake doesn't break the host's path to the public type.
     assert.deepEqual(scanOnFacts("MER-BE-006", {
         ...files,
         "Common/Z.Gauge.cs": "namespace Acme.Common;\nfile sealed class Gauge { public int Local { get; set; } }\n",
@@ -699,10 +700,11 @@ test("MER-RV-007 flags every app-written RivetResult extension named like an ada
         // An expression-bodied helper that returns a read.
         "Modules/Orders/StatusHelper.cs:4",
         // A target-typed `new(…)` declared as an ObjectResult, and one returned by a method declared to return one,
-        // a Task of one or a global::-qualified one.
+        // a Task of one, a global::-qualified one or a conversion operator to one.
         "Modules/Orders/TargetTypedRelay.cs:14",
         "Modules/Orders/TargetTypedRelay.cs:23",
         "Modules/Orders/TargetTypedRelay.cs:33",
+        "Modules/Orders/TargetTypedRelay.cs:39",
         "Modules/Orders/TargetTypedRelay.cs:4",
         // A typed Results<…> union, spaces in its generics.
         "Modules/Orders/TypedResultExtensions.cs:1",
@@ -802,6 +804,7 @@ test("MER-RV-007 flags every app-written RivetResult extension named like an ada
         "Modules/Orders/TargetTypedRelay.cs:14 TargetTypedReturn",
         "Modules/Orders/TargetTypedRelay.cs:23 TargetTypedAsync",
         "Modules/Orders/TargetTypedRelay.cs:33 TargetTypedGlobal",
+        "Modules/Orders/TargetTypedRelay.cs:39 AdaptedEnvelope",
         "Modules/Orders/TargetTypedRelay.cs:4 TargetTypedLocal",
         "Modules/Orders/WindowEnds.cs:106 CastFirstLambdaStatus",
         "Modules/Orders/WindowEnds.cs:18 ConditionalStatus",
@@ -848,6 +851,47 @@ test("MER-RV-007 reads a generic RivetResult<T> declared in the repo as Rivet's,
     }, undefined, { restore: true });
     assert.equal(findings.length, 1, findings.join("\n"));
     assert.match(findings[0], /^App\/Bridge\.cs:6\tBridge hand-writes an HTTP-result bridge off RivetResult \(ToActionResult\)/);
+});
+
+// A type of the app hides Rivet's only at its own arity: a name with type arguments looks up only types of that arity.
+// The compiler lists no use of a type's name inside its own declaration, so the type judged is what marks the bare name.
+const SAME_NAME_PROJECT = '<Project Sdk="Microsoft.NET.Sdk.Web"><PropertyGroup><TargetFramework>net10.0</TargetFramework><ImplicitUsings>enable</ImplicitUsings><OutputType>Library</OutputType></PropertyGroup></Project>\n';
+test("MER-RV-007 reads Rivet's generic RivetResult<T> as Rivet's inside a non-generic app type of that name", () => {
+    const bridge = scan("MER-RV-007", {
+        "App.csproj": SAME_NAME_PROJECT,
+        "Rivet/RivetResult.cs": "namespace Rivet { public class RivetResult<T> { } }\n",
+        "App/RivetResult.cs": "using Microsoft.AspNetCore.Mvc;\nusing Rivet;\n\nnamespace App;\n\npublic static class RivetResult\n{\n" +
+            "    public static IActionResult ToActionResult<T>(this RivetResult<T> result) => new OkResult();\n}\n",
+    }, undefined, { restore: true });
+    assert.equal(bridge.length, 1, bridge.join("\n"));
+    assert.match(bridge[0], /^App\/RivetResult\.cs:6\tRivetResult hand-writes an HTTP-result bridge off RivetResult \(ToActionResult\)/);
+});
+
+test("MER-RV-007 reads Rivet's non-generic RivetActionResult as Rivet's inside a generic app type of that name", () => {
+    const copy = scan("MER-RV-007", {
+        "App.csproj": SAME_NAME_PROJECT,
+        "Rivet/RivetActionResult.cs": "namespace Rivet { public sealed class RivetActionResult { public int StatusCode { get; } public object? Value { get; } } }\n",
+        "App/RivetActionResult.cs": "using Microsoft.AspNetCore.Mvc;\nusing Rivet;\n\nnamespace App;\n\npublic sealed class RivetActionResult<T>\n{\n" +
+            "    public IActionResult Send(RivetActionResult adapted) => new ObjectResult(adapted.Value) { StatusCode = adapted.StatusCode };\n}\n",
+    }, undefined, { restore: true });
+    assert.equal(copy.length, 1, copy.join("\n"));
+    assert.match(copy[0], /^App\/RivetActionResult\.cs:6\tRivetActionResult copies the StatusCode or Value of RivetActionResult/);
+});
+
+// Build output isn't the app's code: a bin/ file the project compiles is judged by no rule. A git repository, so the
+// inventory lists bin/ at all; the explicit Compile item puts the file in the project's facts.
+test("MER-RV-007 leaves a bridge in a bin/ folder alone, and reports the same bridge outside it", () => {
+    const copy = (name) => "using Microsoft.AspNetCore.Mvc;\nusing Rivet;\n\nnamespace App;\n\n" +
+        `public static class ${name}\n{\n    public static IActionResult Send(RivetActionResult adapted) => new ObjectResult(adapted.Value) { StatusCode = adapted.StatusCode };\n}\n`;
+    const findings = scan("MER-RV-007", {
+        "App.csproj": '<Project Sdk="Microsoft.NET.Sdk.Web"><PropertyGroup><TargetFramework>net10.0</TargetFramework><ImplicitUsings>enable</ImplicitUsings><OutputType>Library</OutputType></PropertyGroup>' +
+            '<ItemGroup><Compile Include="bin/**/*.cs" /></ItemGroup></Project>\n',
+        "Rivet/RivetActionResult.cs": "namespace Rivet { public sealed class RivetActionResult { public int StatusCode { get; } public object? Value { get; } } }\n",
+        "Relay/Copy.cs": copy("Copy"),
+        "bin/Debug/BinCopy.cs": copy("BinCopy"),
+    }, undefined, { git: true, restore: true });
+    assert.equal(findings.length, 1, findings.join("\n"));
+    assert.match(findings[0], /^Relay\/Copy\.cs:6\tCopy copies the StatusCode or Value of RivetActionResult/);
 });
 
 test("MER-RV-008 ignores MapGroup, reports handlers, and does not accept commented composition", () => {

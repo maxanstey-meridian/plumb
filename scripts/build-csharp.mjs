@@ -13,13 +13,16 @@ import { restoreProjects } from "./dotnet-restore.mjs";
 // keep. A consumer's repository is never restored by Plumb.
 const home = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
-const build = spawnSync("dotnet", ["build", path.join(home, "dotnet", "Plumb.CSharpFacts"), "-c", "Release", "--nologo"], { stdio: "inherit" });
+// The stamp the capability checks: the sources this build compiles. It is hashed before the build, so a source edited
+// during the build reads as stale.
+const tool = path.join(home, "dotnet", "Plumb.CSharpFacts");
+const stamp = toolSourceHash(tool);
+
+const build = spawnSync("dotnet", ["build", tool, "-c", "Release", "--nologo"], { stdio: "inherit" });
 if (build.error) throw build.error;
 if (build.status !== 0) process.exit(build.status ?? 1);
 
-// The stamp the capability checks: the sources this build compiled.
-const tool = path.join(home, "dotnet", "Plumb.CSharpFacts");
-fs.writeFileSync(path.join(tool, "bin", "Release", "net10.0", TOOL_STAMP), toolSourceHash(tool));
+fs.writeFileSync(path.join(tool, "bin", "Release", "net10.0", TOOL_STAMP), stamp);
 
 const restored = new Set();
 for (const rule of inProcessRules) {

@@ -38,7 +38,7 @@ pnpm install
 pnpm build:csharp
 ```
 
-`pnpm build:csharp` also restores the fixtures `plumb --self-test` reads, which fetches one NuGet package (`Microsoft.NET.Test.Sdk`) the first time.
+`pnpm build:csharp` also restores the fixtures of the rules that read C# facts, which needs nuget.org the first time (for `Microsoft.NET.Test.Sdk` and its dependencies).
 
 The installed runtime dependencies have explicit jobs:
 

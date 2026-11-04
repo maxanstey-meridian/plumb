@@ -114,21 +114,26 @@ static class Program
             .ToList();
         var generated = new BuildOutput(options.Root, folders, options.RepoFiles);
         var filter = new TypeFilter(options.Root, options.External, options.Segments, generated);
-        var (documents, linkedFrom) = Owned(options, loader, generated);
+        var (documents, linked) = Owned(options, loader, generated);
 
         // Every project's documents are walked at once, the largest first so no big file is left to the end. A project is
         // compiled once per target framework, and the walk is of each framework's documents.
-        var projects = documents.Select(owned => owned.Project).DistinctBy(project => project.Id).ToList();
+        var projects = documents.Concat(linked).Select(owned => owned.Project).DistinctBy(project => project.Id).ToList();
         var compilations = await Task.WhenAll(projects.Select(async project => await project.GetCompilationAsync()
             ?? throw new InvalidOperationException($"no compilation for {project.FilePath}")));
         var compilationOf = projects.Zip(compilations).ToDictionary(pair => pair.First.Id, pair => pair.Second);
-        var work = new List<(Document Document, SyntaxTree Tree, Compilation Compilation, Project Project, int Order)>();
-        foreach (var owned in documents)
+        var work = new List<(Document Document, SyntaxTree Tree, Compilation Compilation, Project Project, int Order, bool DeclarationsOnly)>();
+        // A file another project links is declared in that project too, from that project's own compilation: its defines and
+        // frameworks decide which declarations it compiles, and a use from it matches a part by the use's assembly. Its
+        // documents come after every owner's, so a file's first document is the owner's, and they are walked for declarations
+        // only, so the file's usings, references, and tables are still the owner's and stay once. Being work, they are also
+        // compiled and checked with their project: one that owns nothing, or whose code doesn't compile, gives no parts.
+        foreach (var (owned, declarationsOnly) in documents.Select(owned => (owned, false)).Concat(linked.Select(owned => (owned, true))))
         {
             var tree = await owned.Document.GetSyntaxTreeAsync();
             if (tree is not null)
             {
-                work.Add((owned.Document, tree, compilationOf[owned.Project.Id], owned.Project, work.Count));
+                work.Add((owned.Document, tree, compilationOf[owned.Project.Id], owned.Project, work.Count, declarationsOnly));
             }
         }
         // The sort isn't stable and one file has one length under every framework, so Order keeps the frameworks' order.
@@ -137,11 +142,11 @@ static class Program
         var refused = new List<CompileError>?[work.Count];
         Parallel.For(0, work.Count, index =>
         {
-            var (document, tree, compilation, project, _) = work[index];
+            var (document, tree, compilation, project, _, declarationsOnly) = work[index];
             var file = Paths.Relative(options.Root, document.FilePath!);
             var facts = new DocumentFacts(file, Names.Assembly(compilation.Assembly, project.Solution, options.Root));
             var model = compilation.GetSemanticModel(tree);
-            DocumentWalker.Walk(tree, model, filter, facts, ByteOrderMark(document.FilePath!), project.Solution, options.Root);
+            DocumentWalker.Walk(tree, model, filter, facts, ByteOrderMark(document.FilePath!), project.Solution, options.Root, declarationsOnly);
             walked[index] = facts;
             // What the compiler calls an error is one: not a warning a project promoted, nor a hidden or info diagnostic
             // an .editorconfig raised.
@@ -172,9 +177,12 @@ static class Program
         }
 
         // The kept documents, in Owned's order: a multi-target project's are reconciled across its frameworks, then every
-        // file's are merged into one set of facts.
-        var kept = Enumerable.Range(0, work.Count)
-            .Where(index => !failed.Contains(work[index].Project.FilePath!))
+        // file's are merged into one set of facts. A linker's declarations of a file go with the file's facts: if the owner
+        // failed, they're dropped too, so a file is never half described.
+        var live = Enumerable.Range(0, work.Count).Where(index => !failed.Contains(work[index].Project.FilePath!)).ToList();
+        var ownerKept = live.Where(index => !work[index].DeclarationsOnly).Select(index => walked[index]!.File).ToHashSet(StringComparer.Ordinal);
+        var kept = live
+            .Where(index => !work[index].DeclarationsOnly || ownerKept.Contains(walked[index]!.File))
             .OrderBy(index => work[index].Order)
             .ToList();
         foreach (var group in kept.GroupBy(index => work[index].Project.FilePath!, StringComparer.Ordinal).Where(group => loader.Projects[group.Key].Count > 1))
@@ -192,22 +200,6 @@ static class Program
             .ToList();
         results.Sort((left, right) => string.CompareOrdinal(left.File, right.File));
 
-        // A file another project links is declared in that project too: a use from the linking project binds to its own
-        // compilation's copy of the type, and the facts match a use to a part by the use's assembly. Only the parts are
-        // copied (said nothing of the other project's frameworks), so a using, reference, or table is still reported once.
-        foreach (var result in results)
-        {
-            if (!linkedFrom.TryGetValue(result.File, out var others))
-            {
-                continue;
-            }
-            var original = result.Parts.ToList();
-            foreach (var other in others.Where(other => !failed.Contains(other)))
-            {
-                var key = Paths.Relative(options.Root, other);
-                result.Parts.AddRange(original.Select(part => part with { Assembly = key, Frameworks = null }));
-            }
-        }
         FactsWriter.Write(options, loader, results);
     }
 
@@ -217,10 +209,11 @@ static class Program
     // project the tool knows. A file whose nearest project is `loaded: false` gets no facts, and isn't read from another
     // project that also compiles it. Only when no known project's folder holds a file, or the nearest one doesn't compile
     // it, is it read from the nearest loaded project that does. What a build generated isn't a document.
-    // Also, for each such file (by its path from the root), the other loaded projects that compile it.
-    static (List<(Project Project, Document Document)> Documents, Dictionary<string, List<string>> LinkedFrom) Owned(Options options, Loader loader, BuildOutput generated)
+    // Also, for each kept file, the documents of every other loaded project that compiles it (one per framework, the other
+    // project files in ordinal order): a linking project declares the file's types from its own compilation.
+    static (List<(Project Project, Document Document)> Documents, List<(Project Project, Document Document)> Linked) Owned(Options options, Loader loader, BuildOutput generated)
     {
-        var linkedFrom = new Dictionary<string, List<string>>(StringComparer.Ordinal);
+        var linked = new List<(Project, Document)>();
         var holders = new Dictionary<string, Dictionary<string, List<(Project Project, Document Document)>>>(StringComparer.Ordinal);
         foreach (var (file, frameworks) in loader.Projects)
         {
@@ -280,14 +273,13 @@ static class Program
             owned.AddRange(holder[nearest]);
             NoteLinks(path, nearest);
         }
-        return (owned, linkedFrom);
+        return (owned, linked);
 
         void NoteLinks(string path, string chosen)
         {
-            var others = holders[path].Keys.Where(file => file != chosen).Order(StringComparer.Ordinal).ToList();
-            if (others.Count > 0)
+            foreach (var other in holders[path].Keys.Where(file => file != chosen).Order(StringComparer.Ordinal))
             {
-                linkedFrom[Paths.Relative(options.Root, path)] = others;
+                linked.AddRange(holders[path][other]);
             }
         }
     }

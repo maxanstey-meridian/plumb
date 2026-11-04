@@ -360,7 +360,7 @@ public sealed class Results { RivetResult<${modules}.Cases.Application.Order>? r
   "api/Common/Bom.cs": "﻿using App.Modules.Ledger.Contracts;\nnamespace App.Common;\npublic sealed class Bom\n{\n    Entry? e;\n    IEntryPort? p;\n}\n",
   "api/Common/Crlf.cs": "using App.Modules.Ledger.Contracts;\r\nnamespace App.Common;\r\npublic sealed class Crlf\r\n{\r\n    Entry? e;\r\n    IEntryPort? p;\r\n}\r\n",
   "api/Nested/Inner.csproj": project(),
-  "api/Nested/Shared.cs": "namespace App.Nested;\npublic class Shared { }\n",
+  "api/Nested/Shared.cs": "namespace App.Nested;\npublic class Shared { Other? o; }\npublic class Other { }\n",
   "api/Ignored/Hidden.cs": `namespace App.Hidden;
 public class Secret { ${modules}.Ledger.Contracts.Entry? e; }
 `,
@@ -430,6 +430,7 @@ const aliasFiles = {
 public sealed class Thing { }
 public struct Money { }
 public static class Holder<T> { public static int Count = 0; }
+public class Holder2<T> { public class Inner { } }
 `,
   "api/Modules/Orders/Application/Aliases.cs": `using Bag = System.Collections.Generic.List<${modules}.Billing.Domain.Thing>;
 using Arr = ${modules}.Billing.Domain.Thing[];
@@ -438,6 +439,8 @@ using Maybe = ${modules}.Billing.Domain.Money?;
 using Plain = ${modules}.Billing.Domain.Thing;
 using Deep = System.Collections.Generic.Dictionary<string, System.Collections.Generic.List<${modules}.Billing.Domain.Thing>>;
 using static ${modules}.Billing.Domain.Holder<${modules}.Billing.Domain.Thing>;
+using Keys = System.Collections.Generic.Dictionary<${modules}.Billing.Domain.Thing, int>.KeyCollection;
+using Nested = ${modules}.Billing.Domain.Holder2<${modules}.Billing.Domain.Thing>.Inner;
 namespace ${modules}.Orders.Application;
 public sealed class Aliases
 {
@@ -447,6 +450,12 @@ public sealed class Aliases
     Maybe maybe;
     Plain plain = new();
     Deep deep = new();
+    Keys keys = null!;
+    Nested nested = new();
+    void Walk()
+    {
+        var e = bag.GetEnumerator();
+    }
 }
 `,
 };
@@ -463,6 +472,9 @@ test("a using over a type that holds other types lists them, and a plain alias l
   assert.deepEqual(usings.Pair.arguments, [thing]);
   assert.deepEqual(usings.Maybe.arguments, [money]);
   assert.deepEqual(usings.static.arguments, [thing]);
+  // A type nested in a generic type holds that container's arguments: Thing is on Dictionary<Thing, int>, not on KeyCollection.
+  assert.deepEqual(usings.Keys.arguments, [thing]);
+  assert.deepEqual(usings.Nested.arguments, [thing]);
   // The outer type is left out (Holder is the repo's own, so it would be listed were it not), a type nested in a type
   // argument is listed, and an outside type nobody asked for (List, Dictionary, string) is not.
   assert.deepEqual(usings.Plain.arguments, []);
@@ -473,7 +485,7 @@ test("a use of an alias is a use of the types inside its target, written as impo
   const repo = aliases();
   const file = "api/Modules/Orders/Application/Aliases.cs";
   const source = sourceOf(repo, file);
-  const named = (alias) => refsOf(repo, file).filter((use) => source.slice(use.start, use.end) === alias && use.line > 9).map((use) => [use.to, use.written]);
+  const named = (alias) => refsOf(repo, file).filter((use) => source.slice(use.start, use.end) === alias && use.line > 11).map((use) => [use.to, use.written]);
   const thing = [`${modules}.Billing.Domain.Thing`, "imported"];
   // List itself is an outside type nobody asked for, so Thing is the one use.
   assert.deepEqual(named("Bag"), [thing]);
@@ -481,6 +493,12 @@ test("a use of an alias is a use of the types inside its target, written as impo
   assert.deepEqual(named("Pair"), [thing]);
   assert.deepEqual(named("Maybe"), [[`${modules}.Billing.Domain.Money`, "imported"]]);
   assert.deepEqual(named("Plain"), [thing]);
+  // An alias over a nested type of a generic type reaches the container's arguments; Keys's own type (Dictionary's
+  // KeyCollection) is an outside type nobody asked for, and Nested's own type is the repo's.
+  assert.deepEqual(named("Keys"), [thing]);
+  assert.deepEqual(named("Nested"), [[`${modules}.Billing.Domain.Holder2\`1.Inner`, "imported"], thing]);
+  // `var` over List<Thing>.Enumerator is a use of Thing though the enumerator's own type has no arguments.
+  assert.deepEqual(named("var"), [[`${modules}.Billing.Domain.Thing`, "none"]]);
 });
 
 test("a using directive's names give no reference", () => {
@@ -722,7 +740,8 @@ test("a file under two projects' folders, compiled by both, is read once, from t
   const shared = repo.facts.types.get("App.Nested.Shared");
   // Read once, from the nearer project; the type is declared under each project that compiles the file.
   assert.deepEqual(shared.parts.map((part) => [part.assembly, part.file.path]), [["api/Api.csproj", "api/Nested/Shared.cs"], ["api/Nested/Inner.csproj", "api/Nested/Shared.cs"]]);
-  assert.equal(repo.facts.usings(repo.context.file("api/Nested/Shared.cs")).length, 0);
+  // The nearer project owns it: its uses carry that project's assembly, not the outer project's.
+  assert.deepEqual(refsOf(repo, "api/Nested/Shared.cs").filter((use) => use.to === "App.Nested.Other").map((use) => use.assembly), ["api/Nested/Inner.csproj"]);
 });
 
 test("a test project that redeclares a production type lists both parts, and a production use gets only its own", () => {
@@ -739,21 +758,85 @@ test("a test project that redeclares a production type lists both parts, and a p
   assert.deepEqual(repo.facts.partsOf({ to: "System.String", assembly: "System.Runtime" }), []);
 });
 
-test("a file another project links is declared in that project too, and its usings and references stay once", () => {
-  const repo = repository("linked-file", {
-    "p1/P1.csproj": project(),
-    "p1/Shared/Dto.cs": "using System.Collections.Generic;\n\nnamespace P1.Shared;\n\npublic class Dto { public List<Item> Items { get; } = new(); }\n\npublic class Item { }\n",
-    "p2/P2.csproj": project('\n  <ItemGroup><Compile Include="../p1/Shared/Dto.cs" /></ItemGroup>'),
-    "p2/Use.cs": "namespace P2;\n\npublic class Use { public System.Type Of() => typeof(P1.Shared.Dto); }\n",
-  }, { restore: ["p1", "p2"] });
+// A linking project declares the file's types from its own compilation: its defines decide which branch of an #if it
+// compiles, its frameworks name the parts, and its code has to compile. Its usings, references, and tables are the owner's.
+const linking = (file, extra = "") => project(`\n  <ItemGroup><Compile Include="../p1/Shared/${file}" /></ItemGroup>${extra}`);
+const linkedFiles = lazy(() => repository("linked-file", {
+  "p1/P1.csproj": project(),
+  "p1/Shared/Dto.cs": "using System.Collections.Generic;\n\nnamespace P1.Shared;\n\npublic class Dto { public List<Item> Items { get; } = new(); }\n\npublic class Item { }\n\n#if LINKED\npublic class LinkedOnly { }\n#else\npublic class OwnerOnly { }\n#endif\n",
+  "p2/P2.csproj": linking("Dto.cs", "\n  <PropertyGroup><DefineConstants>$(DefineConstants);LINKED</DefineConstants></PropertyGroup>"),
+  "p2/Use.cs": "namespace P2;\n\npublic class Use { public System.Type Of() => typeof(P1.Shared.Dto); public System.Type Linked() => typeof(P1.Shared.LinkedOnly); }\n",
+  // Compiles in P1 and not under P3's define; P3 owns no file of its own.
+  "p1/Shared/Broken.cs": "namespace P1.Shared;\n\npublic class Broken\n{\n#if P3\n    int x = ;\n#endif\n}\n",
+  "p3/P3.csproj": linking("Broken.cs", "\n  <PropertyGroup><DefineConstants>$(DefineConstants);P3</DefineConstants></PropertyGroup>"),
+  // P4 targets two frameworks and links a file P1 owns; it declares Pick under each.
+  "p1/Shared/Pick.cs": "namespace P1.Shared;\n\n#if NET10_0_OR_GREATER\npublic record Pick(int A);\n#else\npublic class Pick { }\n#endif\n",
+  "p4/P4.csproj": `<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFrameworks>net10.0;net9.0</TargetFrameworks>
+    <ImplicitUsings>enable</ImplicitUsings>
+  </PropertyGroup>
+  <ItemGroup><Compile Include="../p1/Shared/Pick.cs" /></ItemGroup>
+</Project>
+`,
+  // The tool is handed a project because a .cs file sits below it, so P3 and P4, which own none, are opened as P5's references.
+  "p5/P5.csproj": project('\n  <ItemGroup><ProjectReference Include="../p3/P3.csproj" /><ProjectReference Include="../p4/P4.csproj" /><ProjectReference Include="../p7/P7.csproj" /></ItemGroup>'),
+  "p5/Use.cs": "namespace P5;\n\npublic class Use { }\n",
+  // P6 owns Ok.cs and doesn't compile (Bad.cs); P7, which compiles, links Ok.cs.
+  "p6/P6.csproj": project(),
+  "p6/Ok.cs": "namespace P6;\n\npublic class Ok { }\n",
+  "p6/Bad.cs": "namespace P6;\n\npublic class Bad { int x = ; }\n",
+  "p7/P7.csproj": project('\n  <ItemGroup><Compile Include="../p6/Ok.cs" /></ItemGroup>'),
+}, { restore: ["p1", "p2", "p3", "p4", "p5", "p6", "p7"] }));
+
+test("a file another project links is declared in that project too, from its own defines, and its usings and references stay once", () => {
+  const repo = linkedFiles();
   const use = refsOf(repo, "p2/Use.cs").find((candidate) => candidate.to === "P1.Shared.Dto");
   assert.equal(use.assembly, "p2/P2.csproj");
   assert.deepEqual(repo.facts.partsOf(use).map((part) => [part.assembly, part.file.path]), [["p2/P2.csproj", "p1/Shared/Dto.cs"]]);
   assert.deepEqual(repo.facts.types.get("P1.Shared.Dto").parts.map((part) => part.assembly).sort(), ["p1/P1.csproj", "p2/P2.csproj"]);
+  // P2 defines LINKED, so it compiles the other #if branch than the owner: each type has the parts of the projects that compile it.
+  const assembliesOf = (name) => repo.facts.types.get(name).parts.map((part) => part.assembly);
+  assert.deepEqual(assembliesOf("P1.Shared.LinkedOnly"), ["p2/P2.csproj"]);
+  assert.deepEqual(assembliesOf("P1.Shared.OwnerOnly"), ["p1/P1.csproj"]);
+  const linked = refsOf(repo, "p2/Use.cs").find((candidate) => candidate.to === "P1.Shared.LinkedOnly");
+  assert.deepEqual(repo.facts.partsOf(linked).map((part) => [part.assembly, part.file.path]), [["p2/P2.csproj", "p1/Shared/Dto.cs"]]);
   const dto = repo.context.file("p1/Shared/Dto.cs");
   assert.equal(repo.facts.usings(dto).length, 1);
   // The file's uses of Item come from the chosen project only, not repeated per project.
   assert.deepEqual([...new Set(refsOf(repo, "p1/Shared/Dto.cs").filter((candidate) => toName(candidate) === "Item").map((candidate) => candidate.assembly))], ["p1/P1.csproj"]);
+});
+
+test("a project that links a file and owns none is compiled and checked: if it doesn't compile, it gives no parts", () => {
+  const repo = linkedFiles();
+  const entry = entryOf(repo, "p3/P3.csproj");
+  assert.equal(entry.loaded, false);
+  assert.match(entry.messages.join("\n"), /^does not compile: p1\/Shared\/Broken\.cs:6 CS/);
+  assert.ok(repo.diagnostics.some((line) => line.startsWith("plumb: C# facts incomplete for p3/P3.csproj: does not compile: ")));
+  // The owner compiles it, so it keeps its part; P3 has none.
+  assert.deepEqual(repo.facts.types.get("P1.Shared.Broken").parts.map((part) => part.assembly), ["p1/P1.csproj"]);
+});
+
+test("a linker's declarations of a file are dropped with the owner's when the owner doesn't compile, so no file is half described", () => {
+  const repo = linkedFiles();
+  assert.equal(entryOf(repo, "p6/P6.csproj").loaded, false);
+  assert.equal(entryOf(repo, "p7/P7.csproj").loaded, true);
+  // P7 compiles Ok.cs, but the owner's facts of it are gone, so P7 has no part of it either.
+  assert.equal(repo.facts.types.has("P6.Ok"), false);
+  assert.equal(repo.facts.hasFacts("p6/Ok.cs"), false);
+});
+
+test("a multi-target project that links a file declares it under its own frameworks and spans", () => {
+  const repo = linkedFiles();
+  assert.deepEqual(entryOf(repo, "p4/P4.csproj").messages, []);
+  const source = sourceOf(repo, "p1/Shared/Pick.cs");
+  const parts = repo.facts.types.get("P1.Shared.Pick").parts.map((part) => [part.assembly, part.frameworks, source.slice(part.start, part.end)]);
+  // The owner is single-target and lists none; P4's parts are one per framework's branch, each listing its framework.
+  assert.deepEqual(parts, [
+    ["p1/P1.csproj", [], "record Pick(int A);"],
+    ["p4/P4.csproj", ["P4(net10.0)"], "record Pick(int A);"],
+    ["p4/P4.csproj", ["P4(net9.0)"], "class Pick { }"],
+  ]);
 });
 
 // A use at file level, in top-level statements or an assembly attribute, is from no type.
@@ -1691,10 +1774,13 @@ test("a table mapping, a migrations snapshot, a default schema, and a [Table] cl
 test("a framework type that binds to a different assembly under each framework is one using and one reference", () => {
   const repo = repository("assemblies", {
     "lib/Lib.csproj": '<Project Sdk="Microsoft.NET.Sdk">\n  <PropertyGroup>\n    <TargetFrameworks>net10.0;netstandard2.0</TargetFrameworks>\n    <LangVersion>latest</LangVersion>\n  </PropertyGroup>\n</Project>\n',
-    "lib/Code.cs": "using static System.Math;\n\nnamespace LibCode\n{\n    public sealed class Uses\n    {\n        public System.Threading.Tasks.Task Run(System.IServiceProvider provider) => System.Threading.Tasks.Task.FromResult(Abs(-1));\n    }\n}\n",
+    "lib/Code.cs": "using static System.Math;\nusing Providers = System.Collections.Generic.IEnumerable<System.IServiceProvider>;\n\nnamespace LibCode\n{\n    public sealed class Uses\n    {\n        public System.Threading.Tasks.Task Run(System.IServiceProvider provider) => System.Threading.Tasks.Task.FromResult(Abs(-1));\n    }\n}\n",
   });
   complete(repo, "lib/Lib.csproj", ["lib/Code.cs"]);
-  assert.deepEqual(repo.facts.usings("lib/Code.cs").map((using) => using.target), ["System.Math"]);
+  const usings = repo.facts.usings("lib/Code.cs");
+  assert.deepEqual(usings.filter((using) => !using.alias).map((using) => using.target), ["System.Math"]);
+  // An outside argument is one row too, though it binds to a different assembly under each framework.
+  assert.deepEqual(usings.filter((using) => using.alias === "Providers").map((using) => using.arguments.map((argument) => argument.type)), [["System.IServiceProvider"]]);
   assert.deepEqual(refsOf(repo, "lib/Code.cs").filter((use) => use.external).map((use) => use.to), ["System.IServiceProvider"]);
 });
 
@@ -1703,11 +1789,14 @@ test("a framework type that binds to a different assembly under each framework i
 test("an in-repo type that binds to a different project under each framework is two usings and two references", () => {
   const library = (name, framework) => `<Project Sdk="Microsoft.NET.Sdk">\n  <PropertyGroup>\n    <TargetFramework>${framework}</TargetFramework>\n  </PropertyGroup>\n</Project>\n`;
   const polyfill = (name) => `namespace Shim;\n\npublic static class Polyfill\n{\n    public static int ${name}() => 1;\n}\n`;
+  const thing = "namespace Shim;\n\npublic sealed class Thing { }\n";
   const repo = repository("bindings", {
     "ten/Ten.csproj": library("Ten", "net10.0"),
     "ten/Polyfill.cs": polyfill("Ten"),
+    "ten/Thing.cs": thing,
     "nine/Nine.csproj": library("Nine", "net9.0"),
     "nine/Polyfill.cs": polyfill("Nine"),
+    "nine/Thing.cs": thing,
     "app/App.csproj": `<Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
     <TargetFrameworks>net10.0;net9.0</TargetFrameworks>
@@ -1720,7 +1809,7 @@ test("an in-repo type that binds to a different project under each framework is 
   </ItemGroup>
 </Project>
 `,
-    "app/Shared.cs": "using static Shim.Polyfill;\n\nnamespace AppCode;\n\npublic sealed class Shared\n{\n    public System.Type Kind => typeof(Shim.Polyfill);\n}\n",
+    "app/Shared.cs": "using static Shim.Polyfill;\nusing Things = System.Collections.Generic.List<Shim.Thing>;\n\nnamespace AppCode;\n\npublic sealed class Shared\n{\n    public System.Type Kind => typeof(Shim.Polyfill);\n}\n",
   }, { restore: ["ten", "nine", "app"] });
   complete(repo, "app/App.csproj", ["app/Shared.cs"]);
   const usings = repo.facts.usings("app/Shared.cs").filter((using) => using.target === "Shim.Polyfill");
@@ -1730,6 +1819,11 @@ test("an in-repo type that binds to a different project under each framework is 
   for (const use of [...usings, ...uses]) {
     assert.deepEqual(repo.facts.partsOf(use).map((part) => [part.assembly, part.file.path]), [[use.assembly, `${use.assembly.split("/")[0]}/Polyfill.cs`]]);
   }
+  // The arguments are the union over the frameworks, the first framework's first: each binds Shim.Thing to its own project.
+  assert.deepEqual(
+    repo.facts.usings("app/Shared.cs").filter((using) => using.alias === "Things").map((using) => using.arguments),
+    [[{ type: "Shim.Thing", assembly: "ten/Ten.csproj" }, { type: "Shim.Thing", assembly: "nine/Nine.csproj" }]],
+  );
 });
 
 // A type's bases and access can differ by framework: it has all its bases, and is as visible as its widest.
@@ -2103,6 +2197,10 @@ test("a tool that isn't built, or whose sources changed since the build, skips t
   const deleted = toolFolder("tool-deleted");
   fs.rmSync(path.join(deleted, "Sub", "Extra.cs"));
   skipped(deleted);
+  // The project file is a compile input too (package pins, LangVersion).
+  const project = toolFolder("tool-project");
+  fs.writeFileSync(path.join(project, "Plumb.CSharpFacts.csproj"), '<Project Sdk="x" />');
+  skipped(project);
   // A stamped folder reaches the run, whatever else sits beside the sources: neither an editor or system file, a note,
   // nor a file under bin/ or obj/ is a compile input.
   const fresh = toolFolder("tool-fresh");

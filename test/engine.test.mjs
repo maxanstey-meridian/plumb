@@ -23,6 +23,8 @@ const inventory = (files = ["src/a.ts"], root = "/repository") => ({ root, mode:
 test("capability planning closes dependencies, rejects unknown capabilities, and descriptors support multiple IDs", () => {
   const rule = defineRepositoryRule({ descriptor: descriptor("MER-TO-901"), requirements: [Capability.FRONTEND_GRAPH], analyze() {} });
   assert.deepEqual(planCapabilities([rule]), [Capability.TYPESCRIPT, Capability.FRONTEND_ROOTS, Capability.FRONTEND_GRAPH]);
+  const facts = defineRepositoryRule({ descriptor: descriptor("MER-TO-903"), requirements: [Capability.CSHARP_FACTS], analyze() {} });
+  assert.deepEqual(planCapabilities([facts]), [Capability.CSHARP, Capability.DOTNET_PROJECTS, Capability.CSHARP_FACTS]);
   assert.throws(() => planCapabilities([{ requirements: ["unknown"] }]), /unknown capability/);
   const multi = createRuleDescriptor({ ids: ["MER-TO-901", "MER-TO-902"], source: "family.mjs" });
   assert.deepEqual(multi.ids, ["MER-TO-901", "MER-TO-902"]);

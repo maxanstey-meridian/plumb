@@ -243,6 +243,8 @@ sealed partial class DocumentWalker : CSharpSyntaxWalker
         string kind;
         string? type = null;
         string? assembly = null;
+        var external = false;
+        List<TypeRef>? arguments = null;
         switch (target)
         {
             case INamespaceSymbol @namespace:
@@ -256,6 +258,22 @@ sealed partial class DocumentWalker : CSharpSyntaxWalker
                 {
                     type = Names.Type(named.OriginalDefinition);
                     assembly = Names.Assembly(named.ContainingAssembly, solution, root);
+                    external = !Names.IsProject(named.ContainingAssembly, solution, root);
+                }
+                // The types inside the target: its type arguments when it is a plain named type, else every named type in it
+                // (an array's element, a tuple's elements, a nullable's underlying type).
+                var inside = IsPlainNamed(resolved) ? ((INamedTypeSymbol)resolved).TypeArguments.SelectMany(NamedTypesIn) : NamedTypesIn(resolved);
+                foreach (var inner in inside)
+                {
+                    if (filter.OriginOf(inner.OriginalDefinition) == TypeOrigin.Ignored)
+                    {
+                        continue;
+                    }
+                    var reference = new TypeRef(Names.Type(inner.OriginalDefinition), Names.Assembly(inner.ContainingAssembly, solution, root));
+                    if (!(arguments ??= []).Contains(reference))
+                    {
+                        arguments.Add(reference);
+                    }
                 }
                 break;
             default:
@@ -270,6 +288,8 @@ sealed partial class DocumentWalker : CSharpSyntaxWalker
             text,
             kind,
             type,
-            assembly));
+            assembly,
+            external,
+            arguments));
     }
 }

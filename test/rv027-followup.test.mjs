@@ -6,7 +6,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { restoreProjects } from "./helpers/dotnet-restore.mjs";
+import { restoreProjects } from "../scripts/dotnet-restore.mjs";
 import { newtonsoftStubs, rivetStubs } from "./helpers/rivet-stubs.mjs";
 
 const HOME = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -24,19 +24,19 @@ const globalNull = "DefaultIgnoreCondition = WhenWritingNull in the host's JSON 
 const globalDefault = "DefaultIgnoreCondition = WhenWritingDefault in the host's JSON options drops every field holding its type's default (null, 0, false…) from every response, so the client sees all of them as optional — remove it so every field is always sent";
 
 // Every RV-027 finding for a repo root, as `location<TAB>message`, sorted; severity and docRef are checked here.
-function findings(root) {
-    const result = spawnSync(PLUMB, [root, "--rule", RULE, "--ci", "--json"], { encoding: "utf8" });
+function findings(root, rule = RULE) {
+    const result = spawnSync(PLUMB, [root, "--rule", rule, "--ci", "--json"], { encoding: "utf8" });
     assert.ok([0, 1].includes(result.status), result.stderr);
-    const all = JSON.parse(result.stdout).filter((finding) => finding.rule === RULE);
+    const all = JSON.parse(result.stdout).filter((finding) => finding.rule === rule);
     for (const finding of all) {
-        assert.equal(finding.severity, "warn", finding.message);
+        assert.equal(finding.severity, rule === RULE ? "warn" : "error", finding.message);
         assert.equal(finding.docRef, DOC_REF, finding.message);
     }
     return all.map((finding) => `${finding.location}\t${finding.message}`).sort();
 }
 
 // A throwaway repo holding only `files` (each an array of lines), its projects restored, scanned for RV-027.
-function scan(files) {
+function scan(files, rule = RULE) {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "plumb-rv027-"));
     try {
         for (const [file, content] of Object.entries(files)) {
@@ -44,7 +44,7 @@ function scan(files) {
             fs.writeFileSync(path.join(root, file), Array.isArray(content) ? `${content.join("\n")}\n` : content);
         }
         restoreProjects(root);
-        return findings(root);
+        return findings(root, rule);
     } finally {
         fs.rmSync(root, { recursive: true, force: true });
     }
@@ -708,8 +708,7 @@ public partial class PartialCross
     ]));
 });
 
-// A file-local class is its own type beside a public one of the same name, so the contract's `Foo` is the public class
-// (judged, and reported from its file), never read as a second declaration of it that leaves the type unjudged.
+// Each project's assembly is its own, so two `Api` projects' `Foo` are two types, each judged from its own file.
 test("MER-RV-027 judges each project's response type when two projects with one assembly name declare one type name", () => {
     const side = (folder, property) => ({
         [`${folder}/Api.csproj`]: webProject,
@@ -724,6 +723,8 @@ test("MER-RV-027 judges each project's response type when two projects with one 
     ]));
 });
 
+// A file-local class is its own type beside a public one of the same name, so the contract's `Foo` is the public class
+// (judged, and reported from its file), never read as a second declaration of it that leaves the type unjudged.
 test("MER-RV-027 judges the public response type beside a file-local class of the same name in another file", () => {
     const actual = scan({
         "api/Api.csproj": webProject,
@@ -736,4 +737,21 @@ test("MER-RV-027 judges the public response type beside a file-local class of th
     assert.deepEqual(actual, sorted([
         `api/Contracts/Orders/Foo.cs:3\tResponse type Foo is a class with properties${positional}`,
     ]));
+});
+
+// MER-RV-011 judges a payload type under each target framework, as its declarations that framework compiles: a type
+// declared once per framework in differently placed files is owned wrongly under the framework whose file is misplaced.
+test("MER-RV-011 judges a payload type under each target framework: one declared in a wrong owner's file under one framework is reported", () => {
+    const multiTarget = project("Microsoft.NET.Sdk.Web").replace("<TargetFramework>net10.0</TargetFramework>", "<TargetFrameworks>net10.0;net9.0</TargetFrameworks>");
+    const declaration = (symbol) => `namespace App.Contracts.Orders;\n\n#if ${symbol}\npublic class Line\n{\n    public string? Note { get; set; }\n}\n#endif\n`;
+    const actual = scan({
+        "api/Api.csproj": multiTarget,
+        ...rivetStubs("api"),
+        "api/Contracts/Orders/OrdersContract.cs": contract("Line"),
+        "api/Contracts/Orders/Line.cs": declaration("NET10_0"),
+        "api/Modules/Billing/Line.cs": declaration("NET9_0"),
+    }, "MER-RV-011");
+    assert.deepEqual(actual, [
+        "api/Contracts/Orders/OrdersContract.cs:5\troute payload Line is owned by api/Modules/Billing/Line.cs — define it in Contracts/Orders/",
+    ]);
 });

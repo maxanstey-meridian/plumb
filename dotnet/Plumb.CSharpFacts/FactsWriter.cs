@@ -168,6 +168,19 @@ static class FactsWriter
                 writer.WriteString("targetKind", directive.TargetKind);
                 writer.WriteNumber("type", strings.Of(directive.Type));
                 writer.WriteNumber("assembly", strings.Of(directive.Assembly));
+                if (directive.Arguments is { Count: > 0 } arguments)
+                {
+                    // [[type, assembly]…]: the types inside a type target.
+                    writer.WriteStartArray("arguments");
+                    foreach (var argument in arguments)
+                    {
+                        writer.WriteStartArray();
+                        writer.WriteNumberValue(strings.Of(argument.Type));
+                        writer.WriteNumberValue(strings.Of(argument.Assembly));
+                        writer.WriteEndArray();
+                    }
+                    writer.WriteEndArray();
+                }
                 writer.WriteEndObject();
             }
         }

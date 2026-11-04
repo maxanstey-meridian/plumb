@@ -12,7 +12,7 @@ namespace App.Modules.Common.Vendored
     }
 }
 
-namespace App.Modules.Common.Plain
+namespace App.Modules.Common.Unaliased
 {
     public static class PlainSend
     {

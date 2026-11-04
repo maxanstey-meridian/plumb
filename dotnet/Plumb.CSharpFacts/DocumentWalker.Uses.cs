@@ -18,6 +18,25 @@ sealed partial class DocumentWalker
         }
         var info = model.GetSymbolInfo(name);
         var symbol = info.Symbol ?? (info.CandidateSymbols.Length == 1 ? info.CandidateSymbols[0] : null);
+        // An alias stands for the whole type it names, so a use of it is a use of the types inside that type too, judged as
+        // written at the alias (`Written` is the alias's, which the rules that skip imported names already read).
+        if (symbol is ITypeSymbol aliased && model.GetAliasInfo(name) is not null)
+        {
+            if (IsPlainNamed(aliased))
+            {
+                var outer = (INamedTypeSymbol)aliased;
+                Add(outer.OriginalDefinition, name.Identifier.Span, null, WrittenOf(name), QualifiesAType(name));
+                foreach (var argument in outer.TypeArguments)
+                {
+                    RecordDeep(argument, name.Identifier.Span, WrittenOf(name));
+                }
+            }
+            else
+            {
+                RecordDeep(aliased, name.Identifier.Span, WrittenOf(name));
+            }
+            return;
+        }
         INamedTypeSymbol? to;
         string? used = null;
         switch (symbol)
@@ -107,37 +126,69 @@ sealed partial class DocumentWalker
     // use of its own.
     void RecordDeep(ITypeSymbol? type, Microsoft.CodeAnalysis.Text.TextSpan span, Written written)
     {
+        foreach (var named in NamedTypesIn(type))
+        {
+            Add(named.OriginalDefinition, span, null, written, false);
+        }
+    }
+
+    // Each named type in a type, outermost first: the array elements, pointer targets, tuple elements, nullable underlying
+    // types, and type arguments inside it. An error type, an anonymous type, a tuple, and a `Nullable<T>` yield themselves nothing.
+    static IEnumerable<INamedTypeSymbol> NamedTypesIn(ITypeSymbol? type)
+    {
         switch (type)
         {
             case null:
-                return;
+                yield break;
             case IArrayTypeSymbol array:
-                RecordDeep(array.ElementType, span, written);
-                return;
+                foreach (var inner in NamedTypesIn(array.ElementType))
+                {
+                    yield return inner;
+                }
+                yield break;
             case IPointerTypeSymbol pointer:
-                RecordDeep(pointer.PointedAtType, span, written);
-                return;
+                foreach (var inner in NamedTypesIn(pointer.PointedAtType))
+                {
+                    yield return inner;
+                }
+                yield break;
             case INamedTypeSymbol { TypeKind: TypeKind.Error }:
-                return;
+                yield break;
             case INamedTypeSymbol { IsTupleType: true } tuple:
                 foreach (var element in tuple.TupleElements)
                 {
-                    RecordDeep(element.Type, span, written);
+                    foreach (var inner in NamedTypesIn(element.Type))
+                    {
+                        yield return inner;
+                    }
                 }
-                return;
+                yield break;
             case INamedTypeSymbol { OriginalDefinition.SpecialType: SpecialType.System_Nullable_T } nullable:
-                RecordDeep(nullable.TypeArguments[0], span, written);
-                return;
+                foreach (var inner in NamedTypesIn(nullable.TypeArguments[0]))
+                {
+                    yield return inner;
+                }
+                yield break;
             case INamedTypeSymbol { IsAnonymousType: true }:
-                return;
+                yield break;
             case INamedTypeSymbol named:
-                Add(named.OriginalDefinition, span, null, written, false);
+                yield return named;
                 foreach (var argument in named.TypeArguments)
                 {
-                    RecordDeep(argument, span, written);
+                    foreach (var inner in NamedTypesIn(argument))
+                    {
+                        yield return inner;
+                    }
                 }
-                return;
+                yield break;
         }
+    }
+
+    // A named type that is neither a tuple nor `Nullable<T>`: the one type an alias or `using static` names, whose own
+    // type arguments are the types inside it.
+    static bool IsPlainNamed(ITypeSymbol type)
+    {
+        return type is INamedTypeSymbol { IsTupleType: false, OriginalDefinition.SpecialType: not SpecialType.System_Nullable_T };
     }
 
     void Add(INamedTypeSymbol to, Microsoft.CodeAnalysis.Text.TextSpan span, string? used, Written written, bool qualifier)
@@ -241,15 +292,16 @@ sealed partial class DocumentWalker
         var bound = model.GetSymbolInfo(first).Symbol;
         // An attribute's name binds to its constructor; the name is written for the class.
         bound = bound is IMethodSymbol { MethodKind: MethodKind.Constructor } constructor ? constructor.ContainingType : bound;
+        // An alias is imported whatever type it names: an array or a pointer binds to no named type.
+        if (bound is ITypeSymbol && model.GetAliasInfo(first) is not null)
+        {
+            return Written.Imported;
+        }
         switch (bound)
         {
             case INamespaceSymbol:
                 return Written.Qualified;
             case INamedTypeSymbol type:
-                if (model.GetAliasInfo(first) is not null)
-                {
-                    return Written.Imported;
-                }
                 return FoundWithoutUsing(first, type.OriginalDefinition) ? Written.Enclosing : Written.Imported;
             default:
                 return Written.None;

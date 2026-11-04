@@ -39,7 +39,7 @@ static class Program
             {
                 Directory.Delete(temp, true);
             }
-            catch (IOException)
+            catch (Exception error) when (error is IOException or UnauthorizedAccessException)
             {
             }
         }
@@ -114,7 +114,7 @@ static class Program
             .ToList();
         var generated = new BuildOutput(options.Root, folders, options.RepoFiles);
         var filter = new TypeFilter(options.Root, options.External, options.Segments, generated);
-        var documents = Owned(options, loader, generated);
+        var (documents, linkedFrom) = Owned(options, loader, generated);
 
         // Every project's documents are walked at once, the largest first so no big file is left to the end. A project is
         // compiled once per target framework, and the walk is of each framework's documents.
@@ -179,7 +179,7 @@ static class Program
             .ToList();
         foreach (var group in kept.GroupBy(index => work[index].Project.FilePath!, StringComparer.Ordinal).Where(group => loader.Projects[group.Key].Count > 1))
         {
-            var differing = DocumentFacts.Reconcile(group.Select(index => (walked[index]!, work[index].Project.Name)).ToList());
+            var differing = DocumentFacts.Reconcile(group.Select(index => (walked[index]!, work[index].Project.Name)).ToList(), loader.Projects[group.Key].Select(project => project.Name).ToList());
             if (differing.Count > 0)
             {
                 var more = differing.Count > 1 ? $" (and {differing.Count - 1} more)" : "";
@@ -191,6 +191,23 @@ static class Program
             .Select(group => DocumentFacts.Merge(group.Select(index => walked[index]!).ToList()))
             .ToList();
         results.Sort((left, right) => string.CompareOrdinal(left.File, right.File));
+
+        // A file another project links is declared in that project too: a use from the linking project binds to its own
+        // compilation's copy of the type, and the facts match a use to a part by the use's assembly. Only the parts are
+        // copied (said nothing of the other project's frameworks), so a using, reference, or table is still reported once.
+        foreach (var result in results)
+        {
+            if (!linkedFrom.TryGetValue(result.File, out var others))
+            {
+                continue;
+            }
+            var original = result.Parts.ToList();
+            foreach (var other in others.Where(other => !failed.Contains(other)))
+            {
+                var key = Paths.Relative(options.Root, other);
+                result.Parts.AddRange(original.Select(part => part with { Assembly = key, Frameworks = null }));
+            }
+        }
         FactsWriter.Write(options, loader, results);
     }
 
@@ -200,8 +217,10 @@ static class Program
     // project the tool knows. A file whose nearest project is `loaded: false` gets no facts, and isn't read from another
     // project that also compiles it. Only when no known project's folder holds a file, or the nearest one doesn't compile
     // it, is it read from the nearest loaded project that does. What a build generated isn't a document.
-    static List<(Project Project, Document Document)> Owned(Options options, Loader loader, BuildOutput generated)
+    // Also, for each such file (by its path from the root), the other loaded projects that compile it.
+    static (List<(Project Project, Document Document)> Documents, Dictionary<string, List<string>> LinkedFrom) Owned(Options options, Loader loader, BuildOutput generated)
     {
+        var linkedFrom = new Dictionary<string, List<string>>(StringComparer.Ordinal);
         var holders = new Dictionary<string, Dictionary<string, List<(Project Project, Document Document)>>>(StringComparer.Ordinal);
         foreach (var (file, frameworks) in loader.Projects)
         {
@@ -250,6 +269,7 @@ static class Program
                 if (holder.TryGetValue(nearestKnown.Project, out var held))
                 {
                     owned.AddRange(held);
+                    NoteLinks(path, nearestKnown.Project);
                     continue;
                 }
             }
@@ -258,8 +278,18 @@ static class Program
                 .ThenBy(file => file, StringComparer.Ordinal)
                 .First();
             owned.AddRange(holder[nearest]);
+            NoteLinks(path, nearest);
         }
-        return owned;
+        return (owned, linkedFrom);
+
+        void NoteLinks(string path, string chosen)
+        {
+            var others = holders[path].Keys.Where(file => file != chosen).Order(StringComparer.Ordinal).ToList();
+            if (others.Count > 0)
+            {
+                linkedFrom[Paths.Relative(options.Root, path)] = others;
+            }
+        }
     }
 
     // Plumb reads a file as text and keeps a UTF-8 byte-order mark as a character; Roslyn's source text drops it.

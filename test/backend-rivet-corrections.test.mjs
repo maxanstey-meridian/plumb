@@ -6,7 +6,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { restoreProjects } from "./helpers/dotnet-restore.mjs";
+import { restoreProjects } from "../scripts/dotnet-restore.mjs";
 import { rivetStubs } from "./helpers/rivet-stubs.mjs";
 
 const HOME = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -34,12 +34,40 @@ function run(rule, fixture) {
 
 test("MER-BE-001 applies forbidden global usings to a backend containing Domain", () => {
     assert.equal(run("MER-BE-001", "good"), "");
-    const output = run("MER-BE-001", "bad");
-    assert.match(output, /MER-BE-001\terror\tGlobalUsings\.cs:1\t/);
     // A framework type is judged where it is used, however it came into scope: a global using in another file
     // (ILogger), or an alias (Ef.DbContext, which HEAD's text match saw only at the alias line).
-    assert.match(output, /^MER-BE-001\terror\tModules\/Users\/Domain\/GlobalUsingDependency\.cs:4\t.*\(Microsoft\.Extensions\.Logging\.ILogger\)/m);
-    assert.match(output, /^MER-BE-001\terror\tModules\/Users\/Domain\/AliasDependency\.cs:4\t.*\(Microsoft\.EntityFrameworkCore\.DbContext\)/m);
+    assertFindings("MER-BE-001", "bad", [
+        ["GlobalUsings.cs:1", "remove this global using (Microsoft.Extensions.Logging)"],
+        ["Modules/Users/Domain/AliasDependency.cs:1", "remove this reference (Microsoft.EntityFrameworkCore)"],
+        ["Modules/Users/Domain/AliasDependency.cs:4", "remove this reference (Microsoft.EntityFrameworkCore.DbContext)"],
+        ["Modules/Users/Domain/FullyQualifiedDependency.cs:4", "remove this reference (Microsoft.EntityFrameworkCore.DbContext)"],
+        ["Modules/Users/Domain/FullyQualifiedDependency.cs:5", "remove this reference (Acme.Modules.Users.Application.Ports.IUserRepository)"],
+        ["Modules/Users/Domain/GlobalUsingDependency.cs:4", "remove this reference (Microsoft.Extensions.Logging.ILogger)"],
+        ["Modules/Users/Domain/User.cs:1", "remove this reference (Microsoft.EntityFrameworkCore)"],
+        ["Modules/Users/Domain/User.cs:2", "remove this reference (Acme.Modules.Users.Application.Ports)"],
+    ]);
+});
+
+test("MER-BE-002 reports each Infrastructure or transport framework an Application file uses, by using or by use", () => {
+    assertFindings("MER-BE-002", "bad", [
+        ["Modules/Users/Application/CreateUser/CreateUserUseCase.cs:1", "depend on a port instead (Acme.Modules.Users.Infrastructure)"],
+        ["Modules/Users/Application/CreateUser/CreateUserUseCase.cs:2", "depend on a port instead (Microsoft.AspNetCore.Http)"],
+        ["Modules/Users/Application/CreateUser/CreateUserUseCase.cs:3", "depend on a port instead (Npgsql)"],
+    ]);
+    // No using names the type: it comes in through the enclosing namespace, a global using, or the Web SDK's implicit usings.
+    const web = '<Project Sdk="Microsoft.NET.Sdk.Web"><PropertyGroup><TargetFramework>net10.0</TargetFramework><ImplicitUsings>enable</ImplicitUsings></PropertyGroup></Project>\n';
+    assert.deepEqual(scan("MER-BE-002", {
+        "App.csproj": web,
+        "Modules/Users/Infrastructure/UserStore.cs": "namespace Acme.Modules.Users.Infrastructure;\npublic sealed class UserStore { }\npublic sealed class Pool { }\n",
+        "GlobalUsings.cs": "global using Acme.Modules.Users.Infrastructure;\n",
+        "Modules/Users/Application/ByNamespace.cs": "namespace Acme.Modules.Users.Infrastructure.Tools;\npublic sealed class ByNamespace { public Pool? Pool { get; set; } }\n",
+        "Modules/Users/Application/ByGlobalUsing.cs": "namespace Acme.Modules.Users.Application;\npublic sealed class ByGlobalUsing { public UserStore? Store { get; set; } }\n",
+        "Modules/Users/Application/ByImplicitUsing.cs": "namespace Acme.Modules.Users.Application;\npublic sealed class ByImplicitUsing { public HttpContext? Context { get; set; } }\n",
+    }, undefined, { restore: true }), [
+        "Modules/Users/Application/ByGlobalUsing.cs:2\tApplication must not depend on Infrastructure or transport frameworks — depend on a port instead (Acme.Modules.Users.Infrastructure.UserStore)",
+        "Modules/Users/Application/ByImplicitUsing.cs:2\tApplication must not depend on Infrastructure or transport frameworks — depend on a port instead (Microsoft.AspNetCore.Http.HttpContext)",
+        "Modules/Users/Application/ByNamespace.cs:2\tApplication must not depend on Infrastructure or transport frameworks — depend on a port instead (Acme.Modules.Users.Infrastructure.Pool)",
+    ]);
 });
 
 // Every dotted name a using holds is judged, a framework name inside its type arguments included, and a type named
@@ -217,6 +245,12 @@ test("MER-BE-006 reports a public Common type used by one module as it would wit
         "Common/A.Gauge.cs": "namespace Acme.Common;\nfile sealed class Gauge { public int Local { get; set; } }\n",
     }).map((finding) => finding.replace(/ — review.*/, ""));
     assert.deepEqual(withNamesake, expected);
+    // A project `<Using Static>` of the public type makes the host its consumer, though a file-local namesake sorts after it.
+    assert.deepEqual(scanOnFacts("MER-BE-006", {
+        ...files,
+        "Common/Z.Gauge.cs": "namespace Acme.Common;\nfile sealed class Gauge { public int Local { get; set; } }\n",
+        "App.csproj": net10("", '<ItemGroup><Using Include="Acme.Common.Gauge" Static="true" /></ItemGroup>'),
+    }), []);
 });
 
 test("MER-BE-006 counts a name in an interpolated string's hole, and never one in its text, a string in a hole, or a format clause", () => {
@@ -424,8 +458,12 @@ test("published contracts reject module internals while allowing published depen
         "Contracts/Forms/Statics.cs": "using static App.Modules.Forms.Application.FormRules;\nnamespace App.Contracts.Forms;\npublic sealed record Statics(string Id);\n",
         "Contracts/Forms/Published.cs": "using Summary = App.Modules.Forms.Contracts.FormSummary;\nnamespace App.Contracts.Forms;\npublic sealed record Published(Summary Value);\n",
         "Contracts/Forms/UsesLoose.cs": "using Shared;\nnamespace App.Contracts.Forms;\npublic sealed record UsesLoose(Loose Value);\n",
+        // An alias of a framework type closed over a module's type names that type too; one closed over a published type doesn't.
+        "Contracts/Forms/Bag.cs": "using Bag = System.Collections.Generic.List<App.Modules.Forms.Domain.Form>;\nnamespace App.Contracts.Forms;\npublic sealed record BagHolder(string Id);\n",
+        "Contracts/Forms/PublishedBag.cs": "using Bag = System.Collections.Generic.List<App.Modules.Forms.Contracts.FormSummary>;\nnamespace App.Contracts.Forms;\npublic sealed record PublishedBag(string Id);\n",
     }), [
         "Contracts/Forms/Aliased.cs:1\tpublished transport contract depends on App.Modules.Forms.Domain — contracts are closed over published or genuinely shared types",
+        "Contracts/Forms/Bag.cs:1\tpublished transport contract depends on App.Modules.Forms.Domain — contracts are closed over published or genuinely shared types",
         "Contracts/Forms/Statics.cs:1\tpublished transport contract depends on App.Modules.Forms.Application — contracts are closed over published or genuinely shared types",
         "Contracts/Forms/UsesLoose.cs:3\tpublished transport contract depends on Shared.Loose — contracts are closed over published or genuinely shared types",
     ]);

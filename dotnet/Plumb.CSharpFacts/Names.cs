@@ -11,7 +11,7 @@ static class Names
     static readonly ConcurrentDictionary<INamedTypeSymbol, string> TypeNames = new(SymbolEqualityComparer.Default);
     static readonly ConcurrentDictionary<INamespaceSymbol, string> NamespaceNames = new(SymbolEqualityComparer.Default);
     // By reference: two projects with one assembly name can have one assembly identity, and they're still two assemblies.
-    static readonly ConcurrentDictionary<IAssemblySymbol, string> AssemblyKeys = new(ReferenceEqualityComparer.Instance);
+    static readonly ConcurrentDictionary<IAssemblySymbol, (string Key, bool Project)> AssemblyKeys = new(ReferenceEqualityComparer.Instance);
 
     static readonly SymbolDisplayFormat TargetFormat = new(
         globalNamespaceStyle: SymbolDisplayGlobalNamespaceStyle.Omitted,
@@ -23,11 +23,18 @@ static class Names
     // assembly name stay two (a multi-target project's frameworks share the file, so they're one); any other by its name.
     public static string Assembly(IAssemblySymbol? assembly, Solution solution, string root)
     {
-        if (assembly is null)
-        {
-            return "";
-        }
-        return AssemblyKeys.GetOrAdd(assembly, symbol => solution.GetProject(symbol)?.FilePath is { } path ? Paths.Relative(root, path) : symbol.Name);
+        return assembly is null ? "" : AssemblyKey(assembly, solution, root).Key;
+    }
+
+    // Whether the assembly is a project of the solution (its key is then its project file), not a referenced binary.
+    public static bool IsProject(IAssemblySymbol? assembly, Solution solution, string root)
+    {
+        return assembly is not null && AssemblyKey(assembly, solution, root).Project;
+    }
+
+    static (string Key, bool Project) AssemblyKey(IAssemblySymbol assembly, Solution solution, string root)
+    {
+        return AssemblyKeys.GetOrAdd(assembly, static (symbol, state) => state.solution.GetProject(symbol)?.FilePath is { } path ? (Paths.Relative(state.root, path), true) : (symbol.Name, false), (solution, root));
     }
 
     public static string Namespace(INamespaceSymbol? ns)

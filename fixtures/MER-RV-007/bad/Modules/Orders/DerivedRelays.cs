@@ -36,7 +36,7 @@ public sealed class LocalResponseFilter : IResultFilter
     {
         if (context.Result is not RivetActionResult a) return;
         var response = context.HttpContext.Response;
-        response.StatusCode = a.StatusCode | StatusCodes.Status200OK;
+        response.StatusCode = a.StatusCode;
     }
 
     public void OnResultExecuted(ResultExecutedContext context) { }

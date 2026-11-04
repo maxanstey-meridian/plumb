@@ -7,8 +7,8 @@ import { spawnSync } from "node:child_process";
 import { Capability, createRuleDescriptor, defineRepositoryRule, planCapabilities } from "../lib/engine/contracts.mjs";
 import { createRepositoryContext } from "../lib/engine/repository-context.mjs";
 import { createRepositorySnapshot } from "../lib/engine/repository-snapshot.mjs";
-import { APPLICATION_HIGHER_LAYERS, DOMAIN_HIGHER_LAYERS, EXTERNAL_PREFIXES, EXTERNAL_SEGMENTS, isFileLocalName } from "../lib/engine/csharp-facts.mjs";
-import { restoreProjects } from "./helpers/dotnet-restore.mjs";
+import { APPLICATION_HIGHER_LAYERS, DOMAIN_HIGHER_LAYERS, EXTERNAL_PREFIXES, EXTERNAL_SEGMENTS, isFileLocalName, TOOL_STAMP, toolSourceHash } from "../lib/engine/csharp-facts.mjs";
+import { restoreProjects } from "../scripts/dotnet-restore.mjs";
 
 // Needs the .NET 10 SDK and the built tool (pnpm build:csharp). The cases run the tool through context.csharpFacts over
 // temp repositories of package-free net10.0 projects. A repository is built and run once, on the first case that needs
@@ -419,6 +419,68 @@ test("a using's target and type are the constructed alias's", () => {
   assert.equal(constructed.targetKind, "type");
   assert.equal(constructed.type, "App.Wire.Page`1");
   assert.equal(constructed.assembly, "api/Api.csproj");
+  assert.deepEqual(constructed.arguments, [{ type: "App.Wire.Item", assembly: "api/Api.csproj" }]);
+});
+
+// Aliases (and a `using static`) over types that hold another module's type: the using lists the types inside its target,
+// and a use of the alias is a use of them too.
+const aliasFiles = {
+  "api/Api.csproj": project(),
+  "api/Modules/Billing/Domain/Thing.cs": `namespace ${modules}.Billing.Domain;
+public sealed class Thing { }
+public struct Money { }
+public static class Holder<T> { public static int Count = 0; }
+`,
+  "api/Modules/Orders/Application/Aliases.cs": `using Bag = System.Collections.Generic.List<${modules}.Billing.Domain.Thing>;
+using Arr = ${modules}.Billing.Domain.Thing[];
+using Pair = (${modules}.Billing.Domain.Thing, int);
+using Maybe = ${modules}.Billing.Domain.Money?;
+using Plain = ${modules}.Billing.Domain.Thing;
+using Deep = System.Collections.Generic.Dictionary<string, System.Collections.Generic.List<${modules}.Billing.Domain.Thing>>;
+using static ${modules}.Billing.Domain.Holder<${modules}.Billing.Domain.Thing>;
+namespace ${modules}.Orders.Application;
+public sealed class Aliases
+{
+    Bag bag = new();
+    Arr arr = [];
+    Pair pair;
+    Maybe maybe;
+    Plain plain = new();
+    Deep deep = new();
+}
+`,
+};
+const aliases = lazy(() => repository("aliasargs", aliasFiles));
+
+test("a using over a type that holds other types lists them, and a plain alias lists none", () => {
+  const repo = aliases();
+  assert.deepEqual(repo.diagnostics, []);
+  const thing = { type: `${modules}.Billing.Domain.Thing`, assembly: "api/Api.csproj" };
+  const money = { type: `${modules}.Billing.Domain.Money`, assembly: "api/Api.csproj" };
+  const usings = Object.fromEntries(repo.facts.usings(repo.context.file("api/Modules/Orders/Application/Aliases.cs")).map((using) => [using.alias ?? "static", using]));
+  assert.deepEqual(usings.Bag.arguments, [thing]);
+  assert.deepEqual(usings.Arr.arguments, [thing]);
+  assert.deepEqual(usings.Pair.arguments, [thing]);
+  assert.deepEqual(usings.Maybe.arguments, [money]);
+  assert.deepEqual(usings.static.arguments, [thing]);
+  // The outer type is left out (Holder is the repo's own, so it would be listed were it not), a type nested in a type
+  // argument is listed, and an outside type nobody asked for (List, Dictionary, string) is not.
+  assert.deepEqual(usings.Plain.arguments, []);
+  assert.deepEqual(usings.Deep.arguments, [thing]);
+});
+
+test("a use of an alias is a use of the types inside its target, written as imported", () => {
+  const repo = aliases();
+  const file = "api/Modules/Orders/Application/Aliases.cs";
+  const source = sourceOf(repo, file);
+  const named = (alias) => refsOf(repo, file).filter((use) => source.slice(use.start, use.end) === alias && use.line > 9).map((use) => [use.to, use.written]);
+  const thing = [`${modules}.Billing.Domain.Thing`, "imported"];
+  // List itself is an outside type nobody asked for, so Thing is the one use.
+  assert.deepEqual(named("Bag"), [thing]);
+  assert.deepEqual(named("Arr"), [thing]);
+  assert.deepEqual(named("Pair"), [thing]);
+  assert.deepEqual(named("Maybe"), [[`${modules}.Billing.Domain.Money`, "imported"]]);
+  assert.deepEqual(named("Plain"), [thing]);
 });
 
 test("a using directive's names give no reference", () => {
@@ -658,8 +720,9 @@ test("positions are offsets into Plumb's text: a BOM counts, and \\r\\n line end
 test("a file under two projects' folders, compiled by both, is read once, from the nearer project", () => {
   const repo = main();
   const shared = repo.facts.types.get("App.Nested.Shared");
-  assert.equal(shared.parts.length, 1);
-  assert.equal(shared.parts[0].assembly, "api/Nested/Inner.csproj");
+  // Read once, from the nearer project; the type is declared under each project that compiles the file.
+  assert.deepEqual(shared.parts.map((part) => [part.assembly, part.file.path]), [["api/Api.csproj", "api/Nested/Shared.cs"], ["api/Nested/Inner.csproj", "api/Nested/Shared.cs"]]);
+  assert.equal(repo.facts.usings(repo.context.file("api/Nested/Shared.cs")).length, 0);
 });
 
 test("a test project that redeclares a production type lists both parts, and a production use gets only its own", () => {
@@ -674,6 +737,23 @@ test("a test project that redeclares a production type lists both parts, and a p
   const alias = repo.facts.usings(repo.context.file("api/Modules/Cases/Application/Imported.cs"))[1];
   assert.deepEqual(repo.facts.partsOf(alias).map((part) => part.assembly), ["api/Api.csproj"]);
   assert.deepEqual(repo.facts.partsOf({ to: "System.String", assembly: "System.Runtime" }), []);
+});
+
+test("a file another project links is declared in that project too, and its usings and references stay once", () => {
+  const repo = repository("linked-file", {
+    "p1/P1.csproj": project(),
+    "p1/Shared/Dto.cs": "using System.Collections.Generic;\n\nnamespace P1.Shared;\n\npublic class Dto { public List<Item> Items { get; } = new(); }\n\npublic class Item { }\n",
+    "p2/P2.csproj": project('\n  <ItemGroup><Compile Include="../p1/Shared/Dto.cs" /></ItemGroup>'),
+    "p2/Use.cs": "namespace P2;\n\npublic class Use { public System.Type Of() => typeof(P1.Shared.Dto); }\n",
+  }, { restore: ["p1", "p2"] });
+  const use = refsOf(repo, "p2/Use.cs").find((candidate) => candidate.to === "P1.Shared.Dto");
+  assert.equal(use.assembly, "p2/P2.csproj");
+  assert.deepEqual(repo.facts.partsOf(use).map((part) => [part.assembly, part.file.path]), [["p2/P2.csproj", "p1/Shared/Dto.cs"]]);
+  assert.deepEqual(repo.facts.types.get("P1.Shared.Dto").parts.map((part) => part.assembly).sort(), ["p1/P1.csproj", "p2/P2.csproj"]);
+  const dto = repo.context.file("p1/Shared/Dto.cs");
+  assert.equal(repo.facts.usings(dto).length, 1);
+  // The file's uses of Item come from the chosen project only, not repeated per project.
+  assert.deepEqual([...new Set(refsOf(repo, "p1/Shared/Dto.cs").filter((candidate) => toName(candidate) === "Item").map((candidate) => candidate.assembly))], ["p1/P1.csproj"]);
 });
 
 // A use at file level, in top-level statements or an assembly attribute, is from no type.
@@ -1561,6 +1641,26 @@ test("a file both frameworks compile is one set of facts: one part, and each use
   ]);
 });
 
+test("an alias both frameworks compile is one using, with its arguments once", () => {
+  const repo = repository("frameworkalias", {
+    "m/M.csproj": `<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFrameworks>net10.0;net9.0</TargetFrameworks>
+    <ImplicitUsings>enable</ImplicitUsings>
+  </PropertyGroup>
+</Project>
+`,
+    "m/Aliases.cs": `using Bag = System.Collections.Generic.List<M.Thing>;
+namespace M;
+public sealed class Thing { }
+public sealed class Holds { public Bag? Held; }
+`,
+  });
+  const usings = repo.facts.usings(repo.context.file("m/Aliases.cs"));
+  assert.deepEqual(usings.map((using) => using.alias), ["Bag"]);
+  assert.deepEqual(usings[0].arguments, [{ type: "M.Thing", assembly: "m/M.csproj" }]);
+});
+
 test("each framework compiles its own generated global usings, so a name only one of them declares binds", () => {
   const repo = frameworks();
   assert.ok(refsOf(repo, "b/OnlyNine.cs").some((use) => use.to === "B.NineOnlyNamespace.NineThing"));
@@ -1596,6 +1696,40 @@ test("a framework type that binds to a different assembly under each framework i
   complete(repo, "lib/Lib.csproj", ["lib/Code.cs"]);
   assert.deepEqual(repo.facts.usings("lib/Code.cs").map((using) => using.target), ["System.Math"]);
   assert.deepEqual(refsOf(repo, "lib/Code.cs").filter((use) => use.external).map((use) => use.to), ["System.IServiceProvider"]);
+});
+
+// An in-repo type's assembly is its project file, the same under every framework, so a name that binds to a different project
+// under each framework is two uses; only an outside type's assembly is left out of the identity (the test above).
+test("an in-repo type that binds to a different project under each framework is two usings and two references", () => {
+  const library = (name, framework) => `<Project Sdk="Microsoft.NET.Sdk">\n  <PropertyGroup>\n    <TargetFramework>${framework}</TargetFramework>\n  </PropertyGroup>\n</Project>\n`;
+  const polyfill = (name) => `namespace Shim;\n\npublic static class Polyfill\n{\n    public static int ${name}() => 1;\n}\n`;
+  const repo = repository("bindings", {
+    "ten/Ten.csproj": library("Ten", "net10.0"),
+    "ten/Polyfill.cs": polyfill("Ten"),
+    "nine/Nine.csproj": library("Nine", "net9.0"),
+    "nine/Polyfill.cs": polyfill("Nine"),
+    "app/App.csproj": `<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFrameworks>net10.0;net9.0</TargetFrameworks>
+  </PropertyGroup>
+  <ItemGroup Condition="'$(TargetFramework)' == 'net10.0'">
+    <ProjectReference Include="../ten/Ten.csproj" />
+  </ItemGroup>
+  <ItemGroup Condition="'$(TargetFramework)' == 'net9.0'">
+    <ProjectReference Include="../nine/Nine.csproj" />
+  </ItemGroup>
+</Project>
+`,
+    "app/Shared.cs": "using static Shim.Polyfill;\n\nnamespace AppCode;\n\npublic sealed class Shared\n{\n    public System.Type Kind => typeof(Shim.Polyfill);\n}\n",
+  }, { restore: ["ten", "nine", "app"] });
+  complete(repo, "app/App.csproj", ["app/Shared.cs"]);
+  const usings = repo.facts.usings("app/Shared.cs").filter((using) => using.target === "Shim.Polyfill");
+  assert.deepEqual(usings.map((using) => using.assembly).sort(), ["nine/Nine.csproj", "ten/Ten.csproj"]);
+  const uses = refsOf(repo, "app/Shared.cs").filter((use) => use.to === "Shim.Polyfill");
+  assert.deepEqual(uses.map((use) => use.assembly).sort(), ["nine/Nine.csproj", "ten/Ten.csproj"]);
+  for (const use of [...usings, ...uses]) {
+    assert.deepEqual(repo.facts.partsOf(use).map((part) => [part.assembly, part.file.path]), [[use.assembly, `${use.assembly.split("/")[0]}/Polyfill.cs`]]);
+  }
 });
 
 // A type's bases and access can differ by framework: it has all its bases, and is as visible as its widest.
@@ -1805,7 +1939,34 @@ namespace Dn.A.B { public class C { } public class D { } }
 namespace Dn.A { public class B { public class C { } public class D { } } }
 #endif
 `,
+  // A type split between two files by framework, the first framework's in the file that sorts last: the facts take the
+  // first framework's namespace, containing type, and kind, not the first file's.
+  "ds/Ds.csproj": `<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFrameworks>net10.0;net9.0</TargetFrameworks>
+  </PropertyGroup>
+  <ItemGroup Condition="'$(TargetFramework)' == 'net10.0'">
+    <Compile Remove="A9.cs" />
+  </ItemGroup>
+  <ItemGroup Condition="'$(TargetFramework)' == 'net9.0'">
+    <Compile Remove="Z10.cs" />
+  </ItemGroup>
+</Project>
+`,
+  "ds/A9.cs": "namespace Ds.A.B { public record C { } public record R; }\n",
+  "ds/Z10.cs": "namespace Ds.A { public class B { public class C { } } }\nnamespace Ds { public class R { } }\n",
 }));
+
+test("a name split between files by framework takes the first framework's namespace, containing type, and kind", () => {
+  const repo = differing();
+  const entry = entryOf(repo, "ds/Ds.csproj");
+  assert.equal(entry.loaded, true);
+  const type = repo.facts.types.get("Ds.A.B.C");
+  assert.equal(type.namespace, "Ds.A");
+  assert.equal(type.containing, "Ds.A.B");
+  assert.equal(type.kind, "class");
+  assert.equal(repo.facts.types.get("Ds.R").kind, "class");
+});
 
 test("a name that is a class under one framework and an interface under the other reads as an interface, in either order, with no message", () => {
   const repo = differing();
@@ -1873,37 +2034,43 @@ function memory(runtime, files = memoryFiles) {
   const loaded = loadSnapshot(snapshot, { run: (...args) => { calls.push(args); return { status: 0, stderr: "" }; }, ...runtime });
   return { ...loaded, calls };
 }
-const toolFolder = (name, { dllAge, sourceAge }) => {
+// A built tool folder: sources, a DLL, and the stamp `pnpm build:csharp` writes beside it (hash of the sources).
+const toolFolder = (name) => {
   const folder = path.join(scratch, name);
-  fs.mkdirSync(path.join(folder, "bin", "Release", "net10.0"), { recursive: true });
+  const built = path.join(folder, "bin", "Release", "net10.0");
+  fs.mkdirSync(built, { recursive: true });
   fs.mkdirSync(path.join(folder, "obj"), { recursive: true });
+  fs.mkdirSync(path.join(folder, "Sub"), { recursive: true });
   fs.writeFileSync(path.join(folder, "Plumb.CSharpFacts.csproj"), "<Project />");
-  fs.writeFileSync(path.join(folder, "Program.cs"), "");
-  // Files under bin/ and obj/ don't count towards staleness.
-  fs.writeFileSync(path.join(folder, "obj", "newer.cs"), "");
-  fs.writeFileSync(path.join(folder, "bin", "Release", "net10.0", "Plumb.CSharpFacts.dll"), "");
-  const now = Date.now() / 1000;
-  fs.utimesSync(path.join(folder, "Plumb.CSharpFacts.csproj"), now - sourceAge, now - sourceAge);
-  fs.utimesSync(path.join(folder, "Program.cs"), now - sourceAge, now - sourceAge);
-  fs.utimesSync(path.join(folder, "bin", "Release", "net10.0", "Plumb.CSharpFacts.dll"), now - dllAge, now - dllAge);
+  fs.writeFileSync(path.join(folder, "Program.cs"), "class P { }");
+  fs.writeFileSync(path.join(folder, "Sub", "Extra.cs"), "class E { }");
+  // Files under bin/ and obj/ aren't compile inputs.
+  fs.writeFileSync(path.join(folder, "obj", "Generated.cs"), "");
+  fs.writeFileSync(path.join(built, "Plumb.CSharpFacts.dll"), "");
+  fs.writeFileSync(path.join(built, TOOL_STAMP), toolSourceHash(folder));
   return folder;
 };
 
-test("no dotnet, or only a .NET 9 SDK, skips the facts rules with the SDK diagnostic and never runs the tool", () => {
+test("no dotnet, or no .NET 10 SDK (a .NET 9 or 11 one alone), skips the facts rules with the SDK diagnostic and never runs the tool", () => {
   const message = "plumb: .NET 10 SDK not found — C# facts rules skipped (install the .NET 10 SDK)";
-  const fresh = toolFolder("tool-for-sdk", { dllAge: 0, sourceAge: 100 });
-  for (const dotnet of [() => null, () => ["9.0.319"], () => []]) {
+  const fresh = toolFolder("tool-for-sdk");
+  for (const dotnet of [() => null, () => ["9.0.319"], () => [], () => ["9.0.319", "11.0.100"], () => ["11.0.100"]]) {
     const result = memory({ dotnet, toolFolder: fresh });
     assert.deepEqual(result.diagnostics, [message]);
     assert.equal(result.facts.available, false);
     assert.deepEqual(result.calls, []);
     assert.deepEqual(result.facts.references(result.context.file("a/A.cs")), []);
   }
-  // Version 10 or later is enough, and a run that exits 0 without writing its output is a tool failure too.
-  const later = memory({ dotnet: () => ["9.0.319", "11.0.100"], toolFolder: fresh });
+  // A 10.x SDK is enough beside a later one (the tool targets net10.0 with no roll-forward), and a run that exits 0
+  // without writing its output is a tool failure too.
+  const later = memory({ dotnet: () => ["10.0.402", "11.0.100"], toolFolder: fresh });
   assert.deepEqual(later.diagnostics, ["plumb: C# facts tool failed (0: unreadable output)"]);
   assert.equal(later.calls.length, 1);
+  // The scratch folder the run wrote into is gone once the run returns.
+  assert.ok(!fs.existsSync(scratchOf(later.calls[0][1])));
 });
+
+const scratchOf = (args) => path.dirname(args[args.indexOf("--out") + 1]);
 
 test("the SDK check comes before the tool check", () => {
   const empty = path.join(scratch, "no-tool");
@@ -1912,18 +2079,41 @@ test("the SDK check comes before the tool check", () => {
   assert.deepEqual(result.diagnostics, ["plumb: .NET 10 SDK not found — C# facts rules skipped (install the .NET 10 SDK)"]);
 });
 
-test("a tool that isn't built, or is older than its sources, skips the facts rules with the build diagnostic", () => {
+test("a tool that isn't built, or whose sources changed since the build, skips the facts rules with the build diagnostic", () => {
   const message = "plumb: C# facts tool not built — C# facts rules skipped (run pnpm build:csharp in the plumb folder)";
   const missing = memory({ dotnet: () => ["10.0.402"], toolFolder: path.join(scratch, "does-not-exist") });
   assert.deepEqual(missing.diagnostics, [message]);
   assert.equal(missing.facts.available, false);
   assert.deepEqual(missing.calls, []);
-  const stale = memory({ dotnet: () => ["10.0.402"], toolFolder: toolFolder("tool-stale", { dllAge: 100, sourceAge: 10 }) });
-  assert.deepEqual(stale.diagnostics, [message]);
-  assert.deepEqual(stale.calls, []);
-  // The same folder with the DLL newer than every source reaches the run; bin/ and obj/ files don't count.
-  const fresh = memory({ dotnet: () => ["10.0.402"], toolFolder: toolFolder("tool-fresh", { dllAge: 10, sourceAge: 100 }), run: () => ({ status: 3, stderr: "exit" }) });
-  assert.ok(!fresh.diagnostics.includes(message));
+  const skipped = (folder) => {
+    const result = memory({ dotnet: () => ["10.0.402"], toolFolder: folder });
+    assert.deepEqual(result.diagnostics, [message]);
+    assert.deepEqual(result.calls, []);
+  };
+  // A DLL with no stamp, a stamp that isn't the sources' hash, an edited source, and a deleted one are all stale.
+  const unstamped = toolFolder("tool-unstamped");
+  fs.rmSync(path.join(unstamped, "bin", "Release", "net10.0", TOOL_STAMP));
+  skipped(unstamped);
+  const wrongStamp = toolFolder("tool-wrong-stamp");
+  fs.writeFileSync(path.join(wrongStamp, "bin", "Release", "net10.0", TOOL_STAMP), "0".repeat(64));
+  skipped(wrongStamp);
+  const edited = toolFolder("tool-edited");
+  fs.writeFileSync(path.join(edited, "Sub", "Extra.cs"), "class E { int changed; }");
+  skipped(edited);
+  const deleted = toolFolder("tool-deleted");
+  fs.rmSync(path.join(deleted, "Sub", "Extra.cs"));
+  skipped(deleted);
+  // A stamped folder reaches the run, whatever else sits beside the sources: neither an editor or system file, a note,
+  // nor a file under bin/ or obj/ is a compile input.
+  const fresh = toolFolder("tool-fresh");
+  fs.writeFileSync(path.join(fresh, ".DS_Store"), "x");
+  fs.writeFileSync(path.join(fresh, "Sub", "notes.txt"), "x");
+  fs.writeFileSync(path.join(fresh, "Program.cs~"), "x");
+  fs.writeFileSync(path.join(fresh, "obj", "Another.cs"), "x");
+  fs.writeFileSync(path.join(fresh, "bin", "Another.cs"), "x");
+  const reached = memory({ dotnet: () => ["10.0.402"], toolFolder: fresh, run: () => ({ status: 3, stderr: "exit" }) });
+  assert.ok(!reached.diagnostics.includes(message));
+  assert.deepEqual(reached.diagnostics, ["plumb: C# facts tool failed (3: exit)"]);
 });
 
 test("a tool that exits non-zero gives the failure diagnostic with its first stderr line, and no facts", () => {
@@ -1932,7 +2122,7 @@ test("a tool that exits non-zero gives the failure diagnostic with its first std
   const listed = [];
   const result = memory({
     dotnet: () => ["10.0.402"],
-    toolFolder: toolFolder("tool-exit", { dllAge: 10, sourceAge: 100 }),
+    toolFolder: toolFolder("tool-exit"),
     run: (command, args) => {
       calls.push([command, args]);
       listed.push(fs.readFileSync(args[args.indexOf("--repo-files") + 1], "utf8"));
@@ -1951,14 +2141,17 @@ test("a tool that exits non-zero gives the failure diagnostic with its first std
   // --repo-files names a file listing the repository's .cs files, one path a line, so the tool knows what a build's folders hold of its own.
   assert.ok(args.includes("--repo-files"));
   assert.deepEqual(listed, ["a/A.cs\nloose/L.cs"]);
+  assert.ok(!fs.existsSync(scratchOf(args)));
 });
 
 test("the incomplete-facts diagnostic carries the project's first message on one line, with its whitespace collapsed", () => {
   const messages = ["  first\n\n   line\twith    runs  ", "second\nmessage"];
+  let scratchDir;
   const result = memory({
     dotnet: () => ["10.0.402"],
-    toolFolder: toolFolder("tool-whitespace", { dllAge: 10, sourceAge: 100 }),
+    toolFolder: toolFolder("tool-whitespace"),
     run: (command, args) => {
+      scratchDir = scratchOf(args);
       const raw = { strings: [], projects: [{ path: "a/A.csproj", loaded: false, messages }], documents: [], types: [], usings: [], references: [], tables: [], snapshotTables: [], defaultSchemas: [] };
       fs.writeFileSync(args[args.indexOf("--out") + 1], JSON.stringify(raw));
       return { status: 0, stderr: "" };
@@ -1967,6 +2160,9 @@ test("the incomplete-facts diagnostic carries the project's first message on one
   assert.deepEqual(result.diagnostics, ["plumb: C# facts incomplete for a/A.csproj: first line with runs"]);
   // The project's own messages keep their text.
   assert.deepEqual(entryOf(result, "a/A.csproj").messages, messages);
+  // The scratch folder holding the tool's output was there during the run and is gone after a run that succeeded.
+  assert.ok(scratchDir);
+  assert.ok(!fs.existsSync(scratchDir));
 });
 
 test("with no project to pass, the tool isn't run and nothing is reported", () => {

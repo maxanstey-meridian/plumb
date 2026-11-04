@@ -1,6 +1,6 @@
 namespace App.Modules.Common;
 
-public static class PlainName
+public static class Plain
 {
     public static string Name => "plain";
 }

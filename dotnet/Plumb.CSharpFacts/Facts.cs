@@ -23,7 +23,12 @@ readonly record struct UsingFact(
     string Target,
     string TargetKind,
     string? Type,
-    string? Assembly);
+    string? Assembly,
+    bool External,
+    IReadOnlyList<TypeRef>? Arguments = null);
+
+// A named type by its name and the assembly the compiler bound it to.
+readonly record struct TypeRef(string Type, string Assembly);
 
 readonly record struct ReferenceFact(
     int Start,
@@ -64,24 +69,30 @@ sealed class DocumentFacts(string file, string assembly)
     // (otherwise each part keeps its own kind, the first framework's), and it has all of its bases. Each part lists the
     // frameworks whose documents hold it (one name, assembly, file, start, and end), in the order given, so a reader can
     // tell the declarations of one name that are alternatives under #if from those that compile together. A single-target
-    // project never comes here, and its parts list none. It returns the names, ordinally sorted, whose namespace and
-    // containing type differ by framework, as the facts can hold only the first framework's: a framework that doesn't
-    // declare a name isn't a difference, nor are two types of one name that every framework holds.
-    public static IReadOnlyList<string> Reconcile(IReadOnlyList<(DocumentFacts Document, string Framework)> documents)
+    // project never comes here, and its parts list none. Every part of a name takes the namespace and containing type of
+    // the first framework's (`frameworks` is the project's, first first), as the facts can hold only those. It returns the
+    // names, ordinally sorted, whose namespace and containing type differ by framework: a framework that doesn't declare
+    // a name isn't a difference.
+    public static IReadOnlyList<string> Reconcile(IReadOnlyList<(DocumentFacts Document, string Framework)> documents, IReadOnlyList<string> frameworks)
     {
-        var types = documents.SelectMany(entry => entry.Document.Parts)
-            .GroupBy(part => (part.Name, part.Assembly))
-            .ToDictionary(type => type.Key, type => (
-                Access: type.Select(part => part.Access).MinBy(access => Array.IndexOf(WidestFirst, access))!,
-                Interface: type.Any(part => part.Kind == "interface"),
-                BaseTypes: (IReadOnlyList<string>)type.SelectMany(part => part.BaseTypes).Distinct(StringComparer.Ordinal).ToList()));
+        var order = frameworks.ToList();
+        var types = documents
+            .SelectMany(entry => entry.Document.Parts.Select(part => (Part: part, Rank: order.IndexOf(entry.Framework))))
+            .GroupBy(declared => (declared.Part.Name, declared.Part.Assembly))
+            .ToDictionary(type => type.Key, type =>
+            {
+                var first = type.MinBy(declared => declared.Rank).Part;
+                return (
+                    Access: type.Select(declared => declared.Part.Access).MinBy(access => Array.IndexOf(WidestFirst, access))!,
+                    Kind: type.Any(declared => declared.Part.Kind == "interface") ? "interface" : first.Kind,
+                    first.Namespace,
+                    first.Containing,
+                    BaseTypes: (IReadOnlyList<string>)type.SelectMany(declared => declared.Part.BaseTypes).Distinct(StringComparer.Ordinal).ToList());
+            });
         var differing = documents
-            .SelectMany(entry => entry.Document.Parts.Select(part => (part.Name, part.Assembly, entry.Framework, Place: (part.Namespace, part.Containing))))
+            .SelectMany(entry => entry.Document.Parts.Select(part => (part.Name, part.Assembly, Place: (part.Namespace, part.Containing))))
             .GroupBy(declared => (declared.Name, declared.Assembly))
-            .Where(type => type.GroupBy(declared => declared.Framework)
-                .Select(framework => framework.Select(declared => declared.Place).ToHashSet())
-                .Distinct(HashSet<(string Namespace, string? Containing)>.CreateSetComparer())
-                .Count() > 1)
+            .Where(type => type.Select(declared => declared.Place).Distinct().Count() > 1)
             .Select(type => type.Key.Name)
             .Distinct(StringComparer.Ordinal)
             .Order(StringComparer.Ordinal)
@@ -92,14 +103,14 @@ sealed class DocumentFacts(string file, string assembly)
             foreach (var part in document.Parts)
             {
                 var key = (part.Name, part.Assembly, document.File, part.Start, part.End);
-                if (!declaring.TryGetValue(key, out var frameworks))
+                if (!declaring.TryGetValue(key, out var holding))
                 {
-                    frameworks = [];
-                    declaring[key] = frameworks;
+                    holding = [];
+                    declaring[key] = holding;
                 }
-                if (!frameworks.Contains(framework))
+                if (!holding.Contains(framework))
                 {
-                    frameworks.Add(framework);
+                    holding.Add(framework);
                 }
             }
         }
@@ -109,8 +120,8 @@ sealed class DocumentFacts(string file, string assembly)
             {
                 var part = document.Parts[index];
                 var type = types[(part.Name, part.Assembly)];
-                var frameworks = declaring[(part.Name, part.Assembly, document.File, part.Start, part.End)];
-                document.Parts[index] = part with { Kind = type.Interface ? "interface" : part.Kind, Access = type.Access, BaseTypes = type.BaseTypes, Frameworks = frameworks };
+                var declared = declaring[(part.Name, part.Assembly, document.File, part.Start, part.End)];
+                document.Parts[index] = part with { Kind = type.Kind, Namespace = type.Namespace, Containing = type.Containing, Access = type.Access, BaseTypes = type.BaseTypes, Frameworks = declared };
             }
         }
         return differing;
@@ -125,9 +136,15 @@ sealed class DocumentFacts(string file, string assembly)
         }
         var merged = new DocumentFacts(frameworks[0].File, frameworks[0].Assembly);
         merged.Parts.AddRange(frameworks.SelectMany(framework => framework.Parts).DistinctBy(part => (part.Name, part.Start, part.End, part.Assembly)));
-        // A framework type's assembly differs by framework (System.Runtime, netstandard), and it's still one use.
-        merged.Usings.AddRange(frameworks.SelectMany(framework => framework.Usings).DistinctBy(fact => fact with { Assembly = null }));
-        merged.References.AddRange(frameworks.SelectMany(framework => framework.References).DistinctBy(fact => fact with { Assembly = "" }));
+        // An outside type's assembly differs by framework (System.Runtime, netstandard), and it's still one use, so it's left out
+        // of the identity. An in-repo type's is its project file, the same under every framework, and two frameworks can bind
+        // one name to two projects, so it stays.
+        // The arguments are a list, which compares by reference, so they're left out of the identity and every framework's are
+        // kept: a framework can bind an argument that another doesn't.
+        merged.Usings.AddRange(frameworks.SelectMany(framework => framework.Usings)
+            .GroupBy(fact => fact with { Assembly = fact.External ? null : fact.Assembly, Arguments = null })
+            .Select(group => group.First() with { Arguments = group.SelectMany(fact => fact.Arguments ?? []).Distinct().ToList() is { Count: > 0 } union ? union : null }));
+        merged.References.AddRange(frameworks.SelectMany(framework => framework.References).DistinctBy(fact => fact with { Assembly = fact.External ? "" : fact.Assembly }));
         merged.Tables.AddRange(frameworks.SelectMany(framework => framework.Tables).Distinct());
         merged.SnapshotTables.AddRange(frameworks.SelectMany(framework => framework.SnapshotTables).Distinct());
         merged.DefaultSchemas.AddRange(frameworks.SelectMany(framework => framework.DefaultSchemas).Distinct());

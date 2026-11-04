@@ -399,4 +399,16 @@ test("C# declarations: nested types, bodyless records, attribute starts, constra
     ],
     namespaces: [{ fullName: "App.Shipping", text: fileScoped }],
   });
+  // A preprocessor line ends a declaration's lead-in, and a keyword on one (`#region ... record types`) declares
+  // nothing; a keyword after a word that is no modifier (`var record in`, `Order record` in code) declares nothing.
+  const loose = "#nullable enable\nrecord Loose(int A);\n#region Response record types\n#endregion\n" +
+    "class Host\n{\n    void Run() { foreach (var record in records) { } }\n    // Order record Draft\n}\n";
+  assert.deepEqual(shape(loose).types.map(({ name, kind, modifiers }) => ({ name, kind, modifiers })), [
+    { name: "Loose", kind: "record", modifiers: [] },
+    { name: "Host", kind: "class", modifiers: [] },
+  ]);
+  // A header replaced before its body opens (an #if pair) ends at the next header, not at the end of the file.
+  const conditional = 'public static class Outer\n{\n#if X\n    public class Fake : B\n#else\n    public class Fake : C\n#endif\n    {\n    }\n    public const string XId = "x";\n}\n';
+  const owners = csharpDeclarations(maskCSharpText(conditional)).types.filter((type) => type.start < conditional.indexOf("XId") && conditional.indexOf("XId") < type.end).map((type) => type.name);
+  assert.deepEqual(owners, ["Outer"]);
 });

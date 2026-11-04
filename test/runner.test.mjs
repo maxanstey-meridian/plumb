@@ -13,7 +13,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { restoreProjects } from "./helpers/dotnet-restore.mjs";
+import { restoreProjects } from "../scripts/dotnet-restore.mjs";
 import { spawnProducer } from "./helpers/run-producer.mjs";
 
 const HOME = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -526,6 +526,16 @@ test("MER-TE-001 accepts an architecture API only when a test executes it", () =
     "App.csproj": '<Project Sdk="Microsoft.NET.Sdk" />\n',
     "Modules/Auth/Login.cs": "namespace App.Modules.Auth; public sealed class Login;\n",
     "Tests/ArchitectureTests.cs": "var rule = ArchRuleDefinition.Types().Should().BeSealed();\nrule.Check(architecture);\n",
+  });
+  const { findings } = focusedFindings(r, "MER-TE-001");
+  assert.deepEqual(findings, []);
+});
+
+test("MER-TE-001 accepts a Taskfile task whose command is the list item `- cmd: plumb .`", () => {
+  const r = repo([], {
+    "App.csproj": '<Project Sdk="Microsoft.NET.Sdk" />\n',
+    "Modules/Auth/Login.cs": "namespace App.Modules.Auth; public sealed class Login;\n",
+    "Taskfile.yml": 'version: "3"\n\ntasks:\n  check:\n    cmds:\n      - cmd: plumb .\n',
   });
   const { findings } = focusedFindings(r, "MER-TE-001");
   assert.deepEqual(findings, []);

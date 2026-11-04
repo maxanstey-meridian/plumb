@@ -6,7 +6,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { restoreProjects } from "./helpers/dotnet-restore.mjs";
+import { restoreProjects } from "../scripts/dotnet-restore.mjs";
 import { rivetResultStubs, rivetStubs } from "./helpers/rivet-stubs.mjs";
 
 const HOME = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");

@@ -9,7 +9,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { restoreProjects } from "./helpers/dotnet-restore.mjs";
+import { restoreProjects } from "../scripts/dotnet-restore.mjs";
 
 const HOME = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const PLUMB = path.join(HOME, "plumb");
@@ -83,6 +83,9 @@ const kindFiles = lazy(() => {
   Object.assign(files, back("TypeA", "TypeB"));
   files["api/Modules/TypeB/Contracts/TypeBStatics.cs"] = "namespace App.Modules.TypeB.Contracts;\npublic static class TypeBStatics { public static int Count => 1; }\n";
   files["api/Modules/TypeA/Application/Use.cs"] = "using static App.Modules.TypeB.Contracts.TypeBStatics;\nnamespace App.Modules.TypeA.Application;\npublic sealed class Use\n{\n    public int Total => Count;\n}\n";
+  // An alias of a framework type closed over another module's type: the directive is the reference (the alias is never used).
+  Object.assign(files, back("AliasA", "AliasB"));
+  files["api/Modules/AliasA/Application/UseAlias.cs"] = "using Bag = System.Collections.Generic.List<App.Modules.AliasB.Contracts.AliasBThing>;\nnamespace App.Modules.AliasA.Application;\npublic sealed class UseAlias;\n";
   // A name a global using elsewhere brings in: the edge is the name, in a file with no using.
   files["api/GlobalUsings.cs"] = "global using App.Modules.GlobA.Contracts;\n";
   files["api/Modules/GlobB/Application/Use.cs"] = "namespace App.Modules.GlobB.Application;\npublic sealed class Use(GlobAThing thing);\n";
@@ -118,7 +121,34 @@ const kindFiles = lazy(() => {
 test("MER-BE-062 finds a loop through each kind of reference: a relative using, a partly qualified and an enclosing name, an inferred type, an extension call, and a root member", () => {
   const { root, files } = kindFiles();
   const { locations, findings } = run(root, "MER-BE-062");
+  // Every loop edge and nothing else: the other backend root's XA → XB and the root-less Modules/ file add none.
+  assert.deepEqual(locations, [
+    "api/Modules/AliasA/Application/UseAlias.cs:1",
+    "api/Modules/AliasB/Application/BackAliasA.cs:1",
+    "api/Modules/EncA/Application/UseB.cs:2",
+    "api/Modules/EncB/Application/BackEncA.cs:1",
+    "api/Modules/ExtA/Application/Use.cs:4",
+    "api/Modules/ExtB/Application/BackExtA.cs:1",
+    "api/Modules/GlobA/Application/BackGlobB.cs:1",
+    "api/Modules/GlobB/Application/Use.cs:2",
+    "api/Modules/InfA/Application/Ports/IInfPort.cs:1",
+    "api/Modules/InfA/Application/Use.cs:7",
+    "api/Modules/InfB/Application/BackInfA.cs:1",
+    "api/Modules/QualA/Application/UseB.cs:2",
+    "api/Modules/QualB/Application/BackQualA.cs:1",
+    "api/Modules/RelA/Application/UseB.cs:3",
+    "api/Modules/RelB/Application/BackRelA.cs:1",
+    "api/Modules/RootA/Infrastructure/Repo.cs:5",
+    "api/Modules/RootB/Application/BackRootA.cs:1",
+    "api/Modules/SpreadA/Application/BackSpreadC.cs:1",
+    "api/Modules/SpreadB/Application/BackSpreadC.cs:1",
+    "api/Modules/SpreadC/Application/UseSpread.cs:1",
+    "api/Modules/SpreadC/Application/UseSpread.cs:1",
+    "api/Modules/TypeA/Application/Use.cs:1",
+    "api/Modules/TypeB/Application/BackTypeA.cs:1",
+  ]);
   const expected = [
+    ["AliasA", "AliasB", spot(files, "api/Modules/AliasA/Application/UseAlias.cs", "using Bag")],
     ["RelA", "RelB", spot(files, "api/Modules/RelA/Application/UseB.cs", "using RelB.Contracts")],
     ["QualA", "QualB", spot(files, "api/Modules/QualA/Application/UseB.cs", "QualB.Contracts.QualBThing")],
     ["EncA", "EncB", spot(files, "api/Modules/EncA/Application/UseB.cs", "EncBThing")],
@@ -169,6 +199,43 @@ test("a reference into a module of another backend root is MER-BE-005 and makes 
   assert.deepEqual(findings.map((finding) => finding.location), ["api/GlobalUsings.cs:1", "api/Modules/XA/Application/Use.cs:1"]);
   assert.match(findings[0].message, /^global using of GlobA\.Contracts puts module GlobA in every file of the project/);
   assert.match(findings[1].message, /^module XA must not use XB\.Application internals/);
+});
+
+test("a global using in build output under a module is no hit, while the same line in an ordinary module file is MER-BE-005", () => {
+  const files = {
+    "api/Api.csproj": project(),
+    ...contract("Forms"),
+    "api/Modules/Cases/Application/Globals.cs": "global using App.Modules.Forms.Contracts;\nnamespace App.Modules.Cases.Application;\npublic sealed class Globals;\n",
+    "api/Modules/Cases/obj/Debug/Cases.GlobalUsings.g.cs": "global using App.Modules.Forms.Contracts;\nnamespace App.Modules.Cases.Generated;\npublic sealed class Generated;\n",
+  };
+  const root = build("build-output-global", files);
+  // Without a git repository the scan skips obj/ itself; in one that doesn't ignore it, the folder is read.
+  assert.equal(spawnSync("git", ["init", "-q"], { cwd: root }).status, 0);
+  const { locations } = run(root, "MER-BE-005");
+  assert.deepEqual(locations, ["api/Modules/Cases/Application/Globals.cs:1"]);
+});
+
+test("a namespace one module declares across layers is a hit for each layer, so a using of it reaches the Domain types", () => {
+  const files = {
+    "api/Api.csproj": project(),
+    "api/Modules/Forms/Contracts/FormsThing.cs": "namespace App.Forms;\npublic sealed record FormsThing(int Id);\n",
+    "api/Modules/Forms/Domain/FormsEntity.cs": "namespace App.Forms;\npublic sealed class FormsEntity { public int Id { get; set; } }\n",
+    "api/Modules/Auth/Application/Use.cs": "using App.Forms;\nnamespace App.Modules.Auth.Application;\npublic sealed class Use;\n",
+  };
+  const { findings } = run(build("spread-layers", files), "MER-BE-003");
+  assert.deepEqual(findings.map((finding) => finding.location), ["api/Modules/Auth/Application/Use.cs:1"]);
+  assert.match(findings[0].message, /^module Auth must not use Forms\.Domain/);
+});
+
+test("a global using in a module file under nested backend roots is one MER-BE-005, not one per root", () => {
+  const files = {
+    "App.csproj": project(),
+    ...Object.fromEntries(Object.entries(contract("Alpha")).map(([file, text]) => [file.replace("api/", ""), text])),
+    "api/Modules/Beta/Contracts/BetaThing.cs": "namespace App.Modules.Beta.Contracts;\npublic sealed record BetaThing(int Id);\n",
+    "api/Modules/Gamma/Application/Globals.cs": "global using App.Modules.Beta.Contracts;\nnamespace App.Modules.Gamma.Application;\npublic sealed class Globals;\n",
+  };
+  const { locations } = run(build("nested-roots-global", files), "MER-BE-005");
+  assert.deepEqual(locations, ["api/Modules/Gamma/Application/Globals.cs:1"]);
 });
 
 // ---- claims ----
@@ -337,6 +404,7 @@ test("a claims file with a wrong shape is one MER-BE-063 and no claim applies", 
     ['{\n  "modules": {},\n  "version": 1\n}\n', 3, /^\.plumb-modules\.json has the unknown top-level key "version" — only "modules" is read: remove it; no claims apply until then$/],
     ['{\n  "modules": {},\n  "modules": {}\n}\n', 3, /^\.plumb-modules\.json has the key "modules" twice — keep one; no claims apply until then$/],
     ['{ "modules": { "Cases": null } }', 1, /^\.plumb-modules\.json has null for Cases, not an object of claims — give "Module": "reason" claims; this entry is skipped$/],
+    ['{ "modules": { "Cases": [] } }', 1, /^\.plumb-modules\.json has array for Cases, not an object of claims — give "Module": "reason" claims; this entry is skipped$/],
   ]) {
     claims(root, text);
     const { findings } = run(root, "MER-BE-063");
@@ -344,8 +412,13 @@ test("a claims file with a wrong shape is one MER-BE-063 and no claim applies", 
     assert.equal(findings[0].location, `.plumb-modules.json:${line}`, text);
     assert.match(findings[0].message, message, text);
   }
-  // A BOM before the JSON doesn't make it invalid, and its offsets still give the key's line.
-  claims(root, '﻿{\n  "modules": {\n    "Cases": { "Nowhere": "x", "OnlyTests": "y" }\n  }\n}\n');
+  // A BOM before the JSON doesn't make it invalid, and its offsets still give the key's line. "Cases" starts at column 0
+  // of line 4, the reported key, so an offset one short lands on line 3's newline.
+  claims(root, '﻿{\n"modules": {\n"Cases": {\n"Nowhere": "x"\n}\n}\n}\n');
+  const bom = run(root, "MER-BE-063").findings;
+  assert.deepEqual(bom.map((finding) => finding.location), [".plumb-modules.json:4"]);
+  assert.match(bom[0].message, /^\.plumb-modules\.json names module Nowhere, which has no Modules\/Nowhere folder — remove it or fix the name; the claim is dropped$/);
+  claims(root, '{\n  "modules": {\n    "Cases": { "Nowhere": "x", "OnlyTests": "y" }\n  }\n}\n');
   const { findings } = run(root, "MER-BE-063");
   // A folder that holds only test code is no module.
   assert.deepEqual(findings.map((finding) => finding.location), [".plumb-modules.json:3", ".plumb-modules.json:3"]);
@@ -458,11 +531,42 @@ public partial class AppDbContext : AppDbContextBase, IAppDbContext
   return { root: build("routes", files), files };
 });
 
+// The whole MER-BE-062 result over the routes repository: each pair's two edges, bar MissX, NoX, and OvrX, which make no route.
+const ROUTE_LOCATIONS = [
+  "api/Modules/AttrX/Application/UseLinks.cs:5",
+  "api/Modules/AttrY/Application/BackAttrX.cs:1",
+  "api/Modules/BothX/Application/UseBoth.cs:6",
+  "api/Modules/BothY/Application/BackBothX.cs:1",
+  "api/Modules/ChainX/Application/UseChain.cs:5",
+  "api/Modules/ChainY/Application/BackChainX.cs:1",
+  "api/Modules/ComX/Application/UseClock.cs:5",
+  "api/Modules/ComY/Application/BackComX.cs:1",
+  "api/Modules/CtorX/Application/UseLinks.cs:5",
+  "api/Modules/CtorY/Application/BackCtorX.cs:1",
+  "api/Modules/ExtX/Application/UseExt.cs:5",
+  "api/Modules/ExtY/Application/BackExtX.cs:1",
+  "api/Modules/HelpX/Application/UseHelper.cs:5",
+  "api/Modules/HelpY/Application/BackHelpX.cs:1",
+  "api/Modules/HostX/Application/UseBridge.cs:5",
+  "api/Modules/HostY/Application/BackHostX.cs:1",
+  "api/Modules/IfX/Application/UseRoot.cs:5",
+  "api/Modules/IfY/Application/BackIfX.cs:1",
+  "api/Modules/MemX/Application/UseRoot.cs:5",
+  "api/Modules/MemY/Application/BackMemX.cs:1",
+  "api/Modules/OuterX/Application/UseRoot.cs:5",
+  "api/Modules/OuterY/Application/BackOuterX.cs:1",
+  "api/Modules/SetX/Application/UseRoot.cs:5",
+  "api/Modules/SetY/Application/BackSetX.cs:1",
+  "api/Modules/TransX/Application/UseMapper.cs:5",
+  "api/Modules/TransY/Application/BackTransX.cs:1",
+];
+
 const route = (files, x, file, needle) => spot(files, `api/Modules/${x}X/Application/${file}.cs`, needle);
 
 test("a route through host code, a chain of two host types, a host extension member, a transport-contract type, or a Common type is a derived finding with its fix", () => {
   const { root, files } = routeFiles();
-  const { findings } = run(root, "MER-BE-062");
+  const { findings, locations } = run(root, "MER-BE-062");
+  assert.deepEqual(locations, ROUTE_LOCATIONS);
   const at = (location) => findings.find((finding) => finding.location === location)?.message;
   assert.match(at(route(files, "Host", "UseBridge", "HostBridge Bridge")), /^modules HostX and HostY are in a loop \(HostX → HostY → HostX\) through App\.Infrastructure\.HostBridge \(api\/Infrastructure\/HostBridge\.cs\), and \.plumb-modules\.json doesn't say whether HostX depends on HostY — if HostX can't keep its rules without HostY, add that claim with its reason; if not, stop using App\.Infrastructure\.HostBridge from module HostX: register it at the host, or move what App\.Infrastructure\.HostBridge needs from HostY behind a consumer-owned port$/);
   assert.match(at(route(files, "Chain", "UseChain", "ChainOne One")), /through App\.Infrastructure\.ChainOne \(api\/Infrastructure\/ChainOne\.cs\) → App\.Infrastructure\.ChainTwo \(api\/Infrastructure\/ChainTwo\.cs\), and/);
@@ -487,6 +591,7 @@ test("a type-level miss and the persistence root's type make no route", () => {
 test("a module calling a root member that reads another module's data is a route through that member; the root's override is not", () => {
   const { root, files } = routeFiles();
   const { findings, locations } = run(root, "MER-BE-062");
+  assert.deepEqual(locations, ROUTE_LOCATIONS);
   const at = (location) => findings.find((finding) => finding.location === location)?.message;
   const fix = (name, member, x, y) => new RegExp(`through App\\.Persistence\\.AppDbContext\\.${member} \\(api\\/Persistence\\/AppDbContext\\.cs\\), and .*; if not, stop calling ${name.replaceAll(".", "\\.")}\\.${member} from module ${x}: it reads ${y}'s data, so move that query into ${y} and reach it through a consumer-owned required port$`);
   assert.match(at(route(files, "Mem", "UseRoot", "db.CountMem")), fix("App.Persistence.AppDbContext", "CountMem", "MemX", "MemY"));
@@ -600,7 +705,7 @@ test("a module mapping another module's table is MER-BE-064, whatever the mappin
   assert.equal(at(table("SchemaThree", "ItemThree")), `module SchemaThree maps SchemaOne's table a.items — ${read} SchemaOne's published contract`);
   assert.equal(at(table("Shelf", "ShelfRow")), `module Shelf maps Books's table app.books — ${read} Books's published contract`);
   assert.equal(at(table("Dispatch", "OrderRef")), `module Dispatch maps Orders's table app.orders — ${read} Orders's published contract`);
-  assert.equal(at(table("LedgerOne", "AccountOne")), "table app.accounts is mapped with ToTable by modules LedgerOne and LedgerTwo — one module owns a table; the other reads it through a port or a published contract");
+  assert.equal(at(table("LedgerOne", "AccountOne")), "table app.accounts is mapped by modules LedgerOne and LedgerTwo (with ToTable or [Table]) — one module owns a table; the other reads it through a port or a published contract");
   assert.equal(at(table("LedgerTwo", "AccountTwo")), at(table("LedgerOne", "AccountOne")));
 });
 

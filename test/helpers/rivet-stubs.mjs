@@ -3,7 +3,7 @@
 // brings them in the way the package's own props do. A repo spreads `...rivetStubs("api")` into its `files`, with `dir`
 // the project folder: stubs under `Stubs/` reach only the project that compiles them, and the default SDK globbing
 // compiles them there.
-export const rivetStubSource = `global using Rivet;
+const rivetStubSource = `global using Rivet;
 
 namespace Rivet;
 
@@ -54,7 +54,7 @@ public static class Define
 export const rivetStubs = (dir = "") => ({ [`${dir && `${dir}/`}Stubs/Rivet.cs`]: rivetStubSource });
 
 // Newtonsoft.Json's null-handling setting, for a repo that names it beside System.Text.Json's.
-export const newtonsoftStubSource = `global using Newtonsoft.Json;
+const newtonsoftStubSource = `global using Newtonsoft.Json;
 
 namespace Newtonsoft.Json
 {
@@ -76,7 +76,7 @@ export const newtonsoftStubs = (dir = "") => ({ [`${dir && `${dir}/`}Stubs/Newto
 // The terminal a handler answers a route's field through, for a repo whose controllers call `Field.Success(...)
 // .ToActionResult()`. It is added beside the route definitions above as extensions, so those stay as they are. The
 // project references ASP.NET Core (the Web SDK) for `IActionResult`.
-export const rivetResultStubSource = `using Microsoft.AspNetCore.Mvc;
+const rivetResultStubSource = `using Microsoft.AspNetCore.Mvc;
 
 namespace Rivet;
 

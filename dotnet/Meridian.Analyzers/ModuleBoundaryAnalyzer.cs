@@ -12,7 +12,7 @@
 // like plumb's checks — namespace conventions are not trusted. Alias usings
 // (`using Foo = Modules.Y.Bar;`) are also checked: plumb's regex skips them,
 // but the dependency is just as real, and the compiler can afford the rigor.
-// DOC: rules/backend/dependency-rules.md#non-negotiable-dependency-rules / #across-modules
+// DOC: each diagnostic cites the rule file and heading plumb's finding for the mirrored ID cites (the *Doc constants below).
 using System;
 using System.Collections.Immutable;
 using System.Linq;
@@ -27,7 +27,12 @@ namespace Meridian.Analyzers;
 [DiagnosticAnalyzer(LanguageNames.CSharp)]
 public sealed class ModuleBoundaryAnalyzer : DiagnosticAnalyzer
 {
-    private const string DocRoot = "meridian skill: references/rules/backend/";
+    private const string DependencyRulesDoc = "meridian skill: references/rules/backend/dependency-rules.md#non-negotiable-dependency-rules";
+    private const string AcrossModulesDoc = "meridian skill: references/rules/backend/dependency-rules.md#across-modules";
+    private const string ContractClosureDoc = "meridian skill: references/rules/backend/dependency-rules.md#published-contract-closure";
+    private const string WhatGoesWhereDoc = "meridian skill: references/rules/backend/what-goes-where.md#domain";
+    private const string CodingStyleDoc = "meridian skill: references/rules/backend/coding-style-rules.md#net";
+    private const string RivetPayloadDoc = "meridian skill: references/rules/rivet/route-payload-ownership.md#route-payload-ownership";
 
     private static readonly DiagnosticDescriptor DomainPurity = new(
         id: "MERBE001",
@@ -130,7 +135,7 @@ public sealed class ModuleBoundaryAnalyzer : DiagnosticAnalyzer
 
         if (TryGetContractOwner(node.SyntaxTree, out _, out _) && IsModuleInternal(type))
         {
-            context.ReportDiagnostic(Diagnostic.Create(ContractPurity, node.GetLocation(), type.ToDisplayString(), DocRoot));
+            context.ReportDiagnostic(Diagnostic.Create(ContractPurity, node.GetLocation(), type.ToDisplayString(), ContractClosureDoc));
             return;
         }
 
@@ -143,19 +148,19 @@ public sealed class ModuleBoundaryAnalyzer : DiagnosticAnalyzer
             (layer == "Domain" || !IsPublishedContract(targetNamespace, cross.Groups[1].Value)))
         {
             context.ReportDiagnostic(Diagnostic.Create(
-                CrossesModuleInternals, node.GetLocation(), module, targetType, cross.Groups[1].Value, DocRoot));
+                CrossesModuleInternals, node.GetLocation(), module, targetType, cross.Groups[1].Value, AcrossModulesDoc));
             return;
         }
 
         if (layer == "Domain" &&
             (LayerRef.IsMatch(targetNamespace) || StartsWithAny(targetNamespace, DomainForbiddenPrefixes)))
         {
-            context.ReportDiagnostic(Diagnostic.Create(DomainPurity, node.GetLocation(), targetType, DocRoot));
+            context.ReportDiagnostic(Diagnostic.Create(DomainPurity, node.GetLocation(), targetType, DependencyRulesDoc));
         }
         else if (layer == "Application" &&
             (InfraRef.IsMatch(targetNamespace) || StartsWithAny(targetNamespace, AppForbiddenPrefixes)))
         {
-            context.ReportDiagnostic(Diagnostic.Create(AppNoInfra, node.GetLocation(), targetType, DocRoot));
+            context.ReportDiagnostic(Diagnostic.Create(AppNoInfra, node.GetLocation(), targetType, DependencyRulesDoc));
         }
     }
 
@@ -167,7 +172,7 @@ public sealed class ModuleBoundaryAnalyzer : DiagnosticAnalyzer
 
         if (TryGetContractOwner(node.SyntaxTree, out _, out _) && IsModuleInternalNamespace(target!))
         {
-            context.ReportDiagnostic(Diagnostic.Create(ContractPurity, node.GetLocation(), target, DocRoot));
+            context.ReportDiagnostic(Diagnostic.Create(ContractPurity, node.GetLocation(), target, ContractClosureDoc));
             return;
         }
 
@@ -178,19 +183,19 @@ public sealed class ModuleBoundaryAnalyzer : DiagnosticAnalyzer
             (layer == "Domain" || !IsPublishedContract(target!, cross.Groups[1].Value)))
         {
             context.ReportDiagnostic(Diagnostic.Create(
-                CrossesModuleInternals, node.GetLocation(), module, target, cross.Groups[1].Value, DocRoot));
+                CrossesModuleInternals, node.GetLocation(), module, target, cross.Groups[1].Value, AcrossModulesDoc));
             return;
         }
 
         if (layer == "Domain" &&
             (LayerRef.IsMatch(target!) || StartsWithAny(target!, DomainForbiddenPrefixes)))
         {
-            context.ReportDiagnostic(Diagnostic.Create(DomainPurity, node.GetLocation(), target, DocRoot));
+            context.ReportDiagnostic(Diagnostic.Create(DomainPurity, node.GetLocation(), target, DependencyRulesDoc));
         }
         else if (layer == "Application" &&
             (InfraRef.IsMatch(target!) || StartsWithAny(target!, AppForbiddenPrefixes)))
         {
-            context.ReportDiagnostic(Diagnostic.Create(AppNoInfra, node.GetLocation(), target, DocRoot));
+            context.ReportDiagnostic(Diagnostic.Create(AppNoInfra, node.GetLocation(), target, DependencyRulesDoc));
         }
     }
 
@@ -212,7 +217,7 @@ public sealed class ModuleBoundaryAnalyzer : DiagnosticAnalyzer
         }
 
         if (name is not null)
-            context.ReportDiagnostic(Diagnostic.Create(DomainRepository, context.Node.GetLocation(), name, DocRoot));
+            context.ReportDiagnostic(Diagnostic.Create(DomainRepository, context.Node.GetLocation(), name, WhatGoesWhereDoc));
     }
 
     private static void AnalyzeServiceLocatorIdentifier(SyntaxNodeAnalysisContext context)
@@ -224,7 +229,7 @@ public sealed class ModuleBoundaryAnalyzer : DiagnosticAnalyzer
             context.SemanticModel.GetSymbolInfo(identifier, context.CancellationToken).Symbol as INamedTypeSymbol;
         if (type is null ||
             type.Name != "IServiceProvider" || type.ContainingNamespace.ToDisplayString() != "System") return;
-        context.ReportDiagnostic(Diagnostic.Create(ServiceLocator, identifier.GetLocation(), "IServiceProvider", DocRoot));
+        context.ReportDiagnostic(Diagnostic.Create(ServiceLocator, identifier.GetLocation(), "IServiceProvider", CodingStyleDoc));
     }
 
     private static void AnalyzeServiceLocatorInvocation(SyntaxNodeAnalysisContext context)
@@ -240,7 +245,7 @@ public sealed class ModuleBoundaryAnalyzer : DiagnosticAnalyzer
             definition.ContainingType?.Name == "ServiceProviderServiceExtensions" &&
             definition.ContainingNamespace.ToDisplayString() == "Microsoft.Extensions.DependencyInjection";
         if (isSystemProviderMember || isMicrosoftDiExtension)
-            context.ReportDiagnostic(Diagnostic.Create(ServiceLocator, invocation.GetLocation(), method.Name, DocRoot));
+            context.ReportDiagnostic(Diagnostic.Create(ServiceLocator, invocation.GetLocation(), method.Name, CodingStyleDoc));
     }
 
     private static void AnalyzeRivetRouteField(SyntaxNodeAnalysisContext context)
@@ -287,7 +292,7 @@ public sealed class ModuleBoundaryAnalyzer : DiagnosticAnalyzer
         if (!named.Locations.Any(static candidate => candidate.IsInSource) &&
             !IsModuleInternal(named) && !TryGetTransportContractOwner(named, out _)) return;
 
-        context.ReportDiagnostic(Diagnostic.Create(RivetPayloadOwnership, location, owner, named.ToDisplayString(), DocRoot));
+        context.ReportDiagnostic(Diagnostic.Create(RivetPayloadOwnership, location, owner, named.ToDisplayString(), RivetPayloadDoc));
     }
 
     private static bool IsDomainOrApplication(SyntaxTree tree) =>

@@ -3,7 +3,7 @@ id: MER-FE-012
 language: typescript
 severity: error
 message: ports must not export useX names — export the [injectX, provideX] tuple; useX belongs to implementation composables
-note: frontend-pa-vsa.md#naming
+note: rules/frontend/ports.md#naming
 files:
   - "**/ports/**/*.ts"
 ignores:

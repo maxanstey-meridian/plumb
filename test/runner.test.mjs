@@ -106,7 +106,7 @@ ${produces ? `// PRODUCES: ${produces.join(", ")}\n` : ""}import fs from "node:f
 import path from "node:path";
 const root = process.argv[2];
 ${marker ? `fs.writeFileSync(path.join(root, ${JSON.stringify(marker)}), "ran\\n");` : ""}
-${emit ? `console.log(${JSON.stringify(`${emit}\t${severity}\tresult.txt:1\tfinding from sentinel\ttools.md#default-stack-1`)});` : ""}
+${emit ? `console.log(${JSON.stringify(`${emit}\t${severity}\tresult.txt:1\tfinding from sentinel\trules/tools/dotnet.md#default-stack`)});` : ""}
 `;
 }
 
@@ -752,7 +752,7 @@ test("successful legacy producer stderr is forwarded without contaminating JSON 
   const isolated = isolatedPlumb({
     "MER-TO-910-diagnostic.mjs": `#!/usr/bin/env node
 process.stderr.write("legacy diagnostic\\n");
-console.log("MER-TO-910\\twarn\\tresult.txt:1\\tfinding from sentinel\\ttools.md#default-stack-1");
+console.log("MER-TO-910\\twarn\\tresult.txt:1\\tfinding from sentinel\\trules/tools/dotnet.md#default-stack");
 `,
   });
   const out = isolated.run("--rule", "MER-TO-910", "--json");
@@ -848,18 +848,18 @@ test("mixed in-process, YAML, and legacy findings merge through the real CLI", (
   });
   const out = plumb(r, "--json", "--fail-on", "info");
   assert.deepEqual(JSON.parse(out.stdout), [
-    { rule: "MER-FE-001", severity: "error", location: "app/logic/framework.ts:1", message: "logic/ must not import framework code — keep it pure TypeScript or move it to a composable", docRef: "frontend-pa-vsa.md#logic" },
-    { rule: "MER-TO-011", severity: "error", location: "App.csproj:0", message: "enable nullable reference types", docRef: "tools.md#default-stack-1" },
-    { rule: "MER-FE-044", severity: "warn", location: "nuxt.config.ts:1", message: "Nuxt SPA config must explicitly set ssr: false", docRef: "frontend-pa-vsa.md#purpose" },
-    { rule: "MER-TO-001", severity: "warn", location: "package.json:0", message: "pin pnpm via the packageManager field", docRef: "tools.md#default-stack" },
-    { rule: "MER-TO-002", severity: "warn", location: ".oxfmtrc.json:0", message: "no .oxfmtrc.json found — TS repos carry the oxfmt base config (golden: configs/oxfmtrc.json in plumb)", docRef: "tools.md#linting-and-formatting" },
-    { rule: "MER-TO-002", severity: "warn", location: ".oxlintrc.json:0", message: "no .oxlintrc.json found — TS repos carry the oxlint base config (golden: configs/oxlintrc.json in plumb)", docRef: "tools.md#linting-and-formatting" },
-    { rule: "MER-TO-004", severity: "warn", location: "package.json:1", message: "Nuxt TypeScript package needs a script using vue-tsc or Nuxt typecheck", docRef: "tools.md#typescript--vue--nuxt" },
-    { rule: "MER-TO-010", severity: "warn", location: ".:0", message: "no global.json — pin the SDK (.NET 10, rollForward latestFeature)", docRef: "tools.md#default-stack-1" },
-    { rule: "MER-TO-011", severity: "warn", location: "App.csproj:0", message: "enable implicit usings (Meridian tooling default)", docRef: "tools.md#default-stack-1" },
-    { rule: "MER-TO-012", severity: "warn", location: ".editorconfig:0", message: "no .editorconfig in a .NET repo — it is the style/analyzer authority (golden: configs/editorconfig.dotnet in plumb)", docRef: "tools.md#formatting-and-analyzers" },
-    { rule: "MER-TO-012", severity: "warn", location: "App.csproj:1", message: "analyzers not enabled — set EnforceCodeStyleInBuild (or AnalysisLevel) in the csproj or Directory.Build.props", docRef: "tools.md#formatting-and-analyzers" },
-    { rule: "MER-TO-014", severity: "warn", location: ".config/dotnet-tools.json:0", message: "CSharpier not wired — add CSharpier.MsBuild to the project (or a dotnet tool manifest) so formatting is enforced at build", docRef: "tools.md#formatting-and-analyzers" },
+    { rule: "MER-FE-001", severity: "error", location: "app/logic/framework.ts:1", message: "logic/ must not import framework code — keep it pure TypeScript or move it to a composable", docRef: "rules/frontend/logic.md#logic" },
+    { rule: "MER-TO-011", severity: "error", location: "App.csproj:0", message: "enable nullable reference types", docRef: "rules/tools/dotnet.md#default-stack" },
+    { rule: "MER-FE-044", severity: "warn", location: "nuxt.config.ts:1", message: "Nuxt SPA config must explicitly set ssr: false", docRef: "rules/frontend/core-principle.md#core-principle" },
+    { rule: "MER-TO-001", severity: "warn", location: "package.json:0", message: "pin pnpm via the packageManager field", docRef: "rules/tools/typescript-vue-nuxt.md#default-stack" },
+    { rule: "MER-TO-002", severity: "warn", location: ".oxfmtrc.json:0", message: "no .oxfmtrc.json found — TS repos carry the oxfmt base config (golden: configs/oxfmtrc.json in plumb)", docRef: "rules/tools/typescript-vue-nuxt.md#linting-and-formatting" },
+    { rule: "MER-TO-002", severity: "warn", location: ".oxlintrc.json:0", message: "no .oxlintrc.json found — TS repos carry the oxlint base config (golden: configs/oxlintrc.json in plumb)", docRef: "rules/tools/typescript-vue-nuxt.md#linting-and-formatting" },
+    { rule: "MER-TO-004", severity: "warn", location: "package.json:1", message: "Nuxt TypeScript package needs a script using vue-tsc or Nuxt typecheck", docRef: "rules/tools/typescript-vue-nuxt.md#typescript--vue--nuxt" },
+    { rule: "MER-TO-010", severity: "warn", location: ".:0", message: "no global.json — pin the SDK (.NET 10, rollForward latestFeature)", docRef: "rules/tools/dotnet.md#default-stack" },
+    { rule: "MER-TO-011", severity: "warn", location: "App.csproj:0", message: "enable implicit usings (Meridian tooling default)", docRef: "rules/tools/dotnet.md#default-stack" },
+    { rule: "MER-TO-012", severity: "warn", location: ".editorconfig:0", message: "no .editorconfig in a .NET repo — it is the style/analyzer authority (golden: configs/editorconfig.dotnet in plumb)", docRef: "rules/tools/dotnet.md#formatting-and-analyzers" },
+    { rule: "MER-TO-012", severity: "warn", location: "App.csproj:1", message: "analyzers not enabled — set EnforceCodeStyleInBuild (or AnalysisLevel) in the csproj or Directory.Build.props", docRef: "rules/tools/dotnet.md#formatting-and-analyzers" },
+    { rule: "MER-TO-014", severity: "warn", location: ".config/dotnet-tools.json:0", message: "CSharpier not wired — add CSharpier.MsBuild to the project (or a dotnet tool manifest) so formatting is enforced at build", docRef: "rules/tools/dotnet.md#formatting-and-analyzers" },
   ]);
 });
 
@@ -1169,8 +1169,8 @@ test("baseline: a narrowed --write-baseline replaces only what the run checked a
   // writes never add to them).
   const dirFindings = isolatedPlumb({
     "MER-TO-909-dirs.mjs": `#!/usr/bin/env node
-console.log("MER-TO-909\\twarn\\tgenerated/rivet:0\\tdirectory finding\\ttools.md#default-stack-1");
-console.log("MER-TO-909\\twarn\\tgenerated/missing.txt:1\\tmissing-file finding\\ttools.md#default-stack-1");
+console.log("MER-TO-909\\twarn\\tgenerated/rivet:0\\tdirectory finding\\trules/tools/dotnet.md#default-stack");
+console.log("MER-TO-909\\twarn\\tgenerated/missing.txt:1\\tmissing-file finding\\trules/tools/dotnet.md#default-stack");
 `,
   });
   for (const [file, text] of [["generated/rivet/rivet.ts", "// generated\n"], ["generated/old.ts", "// old\n"], ["hidden.ts", "// hidden\n"], [".plumbignore", "hidden.ts\n"], ["node_modules/dep/index.ts", "// dependency\n"], ["built/out.ts", "// built\n"]]) {
@@ -1206,10 +1206,10 @@ test("self-test: a check that crashes on its good fixture is an ERROR, not clean
   const isolated = isolatedPlumb({
     "MER-TO-909-flaky.mjs": `#!/usr/bin/env node
 if (process.argv[2].endsWith("good")) { console.error("blew up on good"); process.exit(3); }
-console.log("MER-TO-909\\twarn\\tresult.txt:1\\tfinding\\ttools.md#default-stack-1");
+console.log("MER-TO-909\\twarn\\tresult.txt:1\\tfinding\\trules/tools/dotnet.md#default-stack");
 `,
     "MER-TO-910-healthy.mjs": `#!/usr/bin/env node
-if (process.argv[2].endsWith("bad")) console.log("MER-TO-910\\twarn\\tresult.txt:1\\tfinding\\ttools.md#default-stack-1");
+if (process.argv[2].endsWith("bad")) console.log("MER-TO-910\\twarn\\tresult.txt:1\\tfinding\\trules/tools/dotnet.md#default-stack");
 `,
     "MER-TO-911-broken.mjs": "#!/usr/bin/env node\nprocess.exit(3);\n",
   });

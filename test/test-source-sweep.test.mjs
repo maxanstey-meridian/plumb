@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // The BT, FE-043 and RV-021 rules read test code through the shared isTestScript definition
-// (testing-philosophy.md#test-location): a package's top-level test/, tests/ and e2e/ trees are tests, and a
+// (rules/tests/test-location.md#test-location): a package's top-level test/, tests/ and e2e/ trees are tests, and a
 // test/ or tests/ folder inside the app tree is production code. A file with no package is measured from the
 // repository root. Backend rules skip a Nuxt frontend's files.
 import { test } from "node:test";

@@ -11,7 +11,7 @@ const HOME = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const FIXTURES = path.join(HOME, "fixtures", "MER-RV-027");
 const PLUMB = path.join(HOME, "plumb");
 const RULE = "MER-RV-027";
-const DOC_REF = "rivet.md#route-payload-ownership";
+const DOC_REF = "rules/rivet/route-payload-ownership.md#route-payload-ownership";
 
 const omitNull = "is [JsonIgnore(Condition = WhenWritingNull)] on a response, so the server drops it from the JSON when it is null and the client sees the field as optional — remove the attribute so it is always sent";
 const optional = "is [RivetOptional] on a response, so the client type marks it optional though the server always sends it — drop the attribute";

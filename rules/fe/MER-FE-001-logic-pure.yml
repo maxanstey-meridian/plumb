@@ -3,7 +3,7 @@ id: MER-FE-001
 language: typescript
 severity: error
 message: logic/ must not import framework code — keep it pure TypeScript or move it to a composable
-note: frontend-pa-vsa.md#logic
+note: rules/frontend/logic.md#logic
 files:
   - "**/logic/**/*.ts"
 ignores:

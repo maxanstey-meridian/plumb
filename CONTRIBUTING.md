@@ -49,7 +49,7 @@ defineFileRule({
         path: file.path,
         line: index + 1,
         message: "explain the mechanical violation",
-        docRef: "doctrine.md#rule",
+        docRef: "rules/<folder>/<file>.md#<slug>",
       });
     }
   },
@@ -67,7 +67,7 @@ RULE-ID<TAB>SEVERITY<TAB>PATH:LINE<TAB>MESSAGE<TAB>DOC-REF
 Example:
 
 ```text
-MER-BE-005	error	api/Modules/Auth/Application/U.cs:1	module Auth must not use Forms.Application internals - publish a contract or define a required port	backend-pa-vsa.md#across-modules
+MER-BE-005	error	api/Modules/Auth/Application/U.cs:1	module Auth must not use Forms.Application internals - publish a contract or define a required port	rules/backend/dependency-rules.md#across-modules
 ```
 
 Executable producers exit `0` when they find drift. Non-zero exits are reserved for internal failures.

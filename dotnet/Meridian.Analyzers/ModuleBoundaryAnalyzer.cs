@@ -12,7 +12,7 @@
 // like plumb's checks — namespace conventions are not trusted. Alias usings
 // (`using Foo = Modules.Y.Bar;`) are also checked: plumb's regex skips them,
 // but the dependency is just as real, and the compiler can afford the rigor.
-// DOC: backend-pa-vsa.md#non-negotiable-dependency-rules / #across-modules
+// DOC: rules/backend/dependency-rules.md#non-negotiable-dependency-rules / #across-modules
 using System;
 using System.Collections.Immutable;
 using System.Linq;
@@ -27,7 +27,7 @@ namespace Meridian.Analyzers;
 [DiagnosticAnalyzer(LanguageNames.CSharp)]
 public sealed class ModuleBoundaryAnalyzer : DiagnosticAnalyzer
 {
-    private const string DocRoot = "meridian skill: references/backend-pa-vsa.md";
+    private const string DocRoot = "meridian skill: references/rules/backend/";
 
     private static readonly DiagnosticDescriptor DomainPurity = new(
         id: "MERBE001",

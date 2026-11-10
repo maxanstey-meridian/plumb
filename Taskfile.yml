@@ -1,0 +1,35 @@
+version: "3"
+
+tasks:
+  build:
+    desc: Build the C# facts tool and restore the fixtures of every rule that reads its facts
+    cmds:
+      - pnpm build:csharp
+
+  self-test:
+    desc: Run every fixture pair through the full CLI
+    cmds:
+      - ./plumb --self-test
+
+  test:
+    desc: Run the full test suite
+    cmds:
+      - node --test "test/*.test.mjs"
+
+  format:
+    desc: Format the C# facts tool with CSharpier
+    cmds:
+      - dotnet tool restore
+      - dotnet csharpier format dotnet/Plumb.CSharpFacts
+
+  format:check:
+    desc: Check the C# facts tool's formatting without rewriting it
+    cmds:
+      - dotnet tool restore
+      - dotnet csharpier check dotnet/Plumb.CSharpFacts
+
+  gate:
+    desc: Everything that must pass before a commit (the self-test, then the full suite)
+    cmds:
+      - task: self-test
+      - task: test

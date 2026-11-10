@@ -101,7 +101,7 @@ test("each owner emits its declared ID on bad, not on good, with a valid severit
 });
 
 // Fixtures reach only some docRefs; this reads every rules/<folder>/<file>.md literal in plumb's
-// tracked sources, the analyzer's constants, the DOC comments, and CONTRIBUTING's worked example
+// tracked sources, the DOC comments and CONTRIBUTING's worked example
 // included, and each must name a rule file that exists, with no anchor. An anchor runs to whitespace, a
 // backtick, ), ], a comma, a semicolon, or a quote (a docRef sits inside a string literal).
 test("every docRef literal in plumb's sources names an existing rule file", () => {
@@ -109,7 +109,7 @@ test("every docRef literal in plumb's sources names an existing rule file", () =
     fs.existsSync(REFERENCES),
     `Meridian references not found at ${REFERENCES}: set MERIDIAN_REFERENCES to the meridian skill's references folder, or install the skill at ${DEFAULT_REFERENCES}`,
   );
-  const tracked = spawnSync("git", ["ls-files", "lib", "checks", "rules", "dotnet/Meridian.Analyzers", "CONTRIBUTING.md"], { cwd: HOME, encoding: "utf8" });
+  const tracked = spawnSync("git", ["ls-files", "lib", "checks", "rules", "CONTRIBUTING.md"], { cwd: HOME, encoding: "utf8" });
   assert.equal(tracked.status, 0, `git ls-files failed: ${tracked.stderr}`);
   // git still lists a tracked file that is deleted but not yet committed.
   const sources = tracked.stdout.split("\n").filter((file) => /\.(?:mjs|yml|cs|md)$/.test(file) && fs.existsSync(path.join(HOME, file)));

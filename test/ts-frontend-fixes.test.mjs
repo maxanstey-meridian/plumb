@@ -189,7 +189,7 @@ test("FE-045 reports each unlabelled control once, including a tests folder insi
 
 // A copy of an FE-046 fixture (or, given null, an empty repository) with some files replaced (or, given null,
 // deleted), run through the real CLI.
-function fe046Repo(fixture, files, check) {
+function fe046Repo(fixture, files, check, args = []) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "plumb-fe046-"));
   try {
     if (fixture) fs.cpSync(path.join(HOME, "fixtures", "MER-FE-046", fixture), root, { recursive: true });
@@ -201,7 +201,7 @@ function fe046Repo(fixture, files, check) {
       }
     }
     assert.equal(spawnSync("git", ["init", "-q"], { cwd: root }).status, 0);
-    const out = spawnSync(path.join(HOME, "plumb"), [root, "--rule", "MER-FE-046", "--json", "--ci"], { encoding: "utf8" });
+    const out = spawnSync(path.join(HOME, "plumb"), [root, "--rule", "MER-FE-046", "--json", "--ci", ...args], { encoding: "utf8" });
     assert.ok([0, 1].includes(out.status), out.stderr);
     check(JSON.parse(out.stdout || "[]").map((finding) => `${finding.severity} ${finding.location}`), out, JSON.parse(out.stdout || "[]"));
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
@@ -283,6 +283,7 @@ test("FE-046 counts any reference to a pair's names as a use, so a provide it ca
   const named = 'import { injectBooking, provideBooking } from "~/features/booking";\n\ninjectBooking();\n';
   const cases = {
     "a value alias": { "app/pages/bookings.vue": fe046Page(`${named}const wire = provideBooking;\nwire(${provide});\n`) },
+    "a value alias with type arguments": { "app/pages/bookings.vue": fe046Page(`${named}const wire = provideBooking<Booking>;\nwire(${provide});\n`) },
     "a template expression": { "app/pages/bookings.vue": fe046Page(named, `<button type="button" @click="provideBooking(${provide})">Book</button>`) },
     "a namespace export": {
       "app/features/booking/index.ts": 'export * as booking from "./port";\n',
@@ -323,6 +324,16 @@ test("FE-046 counts any reference to a pair's names as a use, so a provide it ca
   // The inject side the same way: a pair whose inject is only held as a value is still consumed.
   await t.test("an inject held as a value", () => fe046Repo("bad", { "app/components/RoomList.vue": fe046Page('import { injectRooms } from "../features/rooms";\n\nconst use = injectRooms;\nuse();\n') }, (found) =>
     assert.ok(!found.includes("warn app/features/rooms/port.ts:5"), found.join(", "))));
+});
+
+test("FE-046 counts a use in a file left out of the run, and reports no pair declared in one", () => {
+  // app.vue provides the session and the theme; leaving it out of the run must not orphan their injects.
+  fe046Repo("good", {}, (found) => assert.deepEqual(found, []), ["--exclude", "app/app.vue"]);
+  fe046Repo("good", { ".plumbignore": "app/app.vue\n" }, (found) => assert.deepEqual(found, []));
+  // The bad fixture's orphaned booking pair is not reported when its own file is left out, and still is otherwise.
+  fe046Repo("bad", {}, (found) => assert.ok(found.includes("error app/features/booking/port.ts:5"), found.join(", ")));
+  fe046Repo("bad", {}, (found) => assert.ok(!found.some((finding) => finding.includes("app/features/booking/port.ts")), found.join(", ")),
+    ["--exclude", "app/features/booking/port.ts"]);
 });
 
 test("FE-046 reports a pair outside every Nuxt app as a warning, since a host application may provide it", () => {

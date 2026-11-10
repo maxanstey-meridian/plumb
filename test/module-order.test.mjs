@@ -788,11 +788,19 @@ const tableFiles = lazy(() => {
         public static Metadata.Builders.EntityTypeBuilder<T> ToView<T>(this Metadata.Builders.EntityTypeBuilder<T> builder, string name, string? schema) where T : class => builder;
         public static Metadata.Builders.EntityTypeBuilder ToTable(this Metadata.Builders.EntityTypeBuilder builder, string name) => builder;
     }
+    public static class RelationalOwnedNavigationBuilderExtensions
+    {
+        public static Metadata.Builders.OwnedNavigationBuilder ToTable(this Metadata.Builders.OwnedNavigationBuilder builder, string name) => builder;
+    }
 }
 namespace Microsoft.EntityFrameworkCore.Metadata.Builders
 {
-    public class EntityTypeBuilder { }
+    public class EntityTypeBuilder
+    {
+        public EntityTypeBuilder OwnsMany(string ownedTypeName, string navigationName, Action<OwnedNavigationBuilder> buildAction) => this;
+    }
     public class EntityTypeBuilder<T> : EntityTypeBuilder where T : class { }
+    public class OwnedNavigationBuilder { }
 }
 namespace Microsoft.EntityFrameworkCore.Infrastructure { public abstract class ModelSnapshot { } }
 `;
@@ -832,6 +840,11 @@ namespace Microsoft.EntityFrameworkCore.Infrastructure { public abstract class M
   files["api/Modules/Shipping/Domain/ShipmentEntity.cs"] = "namespace App.Modules.Shipping.Domain;\npublic sealed class ShipmentEntity { public int Id { get; set; } }\n";
   files["api/Migrations/AppSnapshot.cs"] = files["api/Migrations/AppSnapshot.cs"].replace("b.ToTable(\"orders\"); });", "b.ToTable(\"orders\"); });\n        modelBuilder.Entity(\"App.Modules.Shipping.Domain.ShipmentEntity\", b => { b.ToTable(\"shipments\"); });");
   mapping("Courier", "CourierRow", 'ToTable("shipments")');
+  // An owned type with a table of its own belongs to its owner, even when the type is declared outside every module:
+  // Orders' snapshot block owns Common's OrderLine, so Packing's ToView of order_lines maps Orders's table.
+  files["api/Common/OrderLine.cs"] = "namespace App.Common;\npublic sealed class OrderLine { public int Id { get; set; } }\n";
+  files["api/Migrations/AppSnapshot.cs"] = files["api/Migrations/AppSnapshot.cs"].replace("b.ToTable(\"orders\"); });", "b.ToTable(\"orders\"); b.OwnsMany(\"App.Common.OrderLine\", \"Lines\", b1 => { b1.ToTable(\"order_lines\"); }); });");
+  mapping("Packing", "LineRef", 'ToView("order_lines")');
   // With two host defaults, a ToView of another module's unqualified table is still one finding.
   mapping("Stock", "StockRow", 'ToTable("stock")');
   mapping("Picking", "PickRow", 'ToView("stock")');
@@ -853,6 +866,7 @@ test("a module mapping another module's table is MER-BE-064, whatever the mappin
     table("Dispatch", "OrderRef"),
     table("LedgerOne", "AccountOne"),
     table("LedgerTwo", "AccountTwo"),
+    table("Packing", "LineRef"),
     table("Picking", "PickRow"),
     table("Reporting", "InvoiceRow"),
     table("SchemaThree", "ItemThree"),
@@ -866,6 +880,7 @@ test("a module mapping another module's table is MER-BE-064, whatever the mappin
   assert.equal(at(table("SchemaThree", "ItemThree")), `module SchemaThree maps SchemaOne's table a.items — ${read} SchemaOne's published contract`);
   assert.equal(at(table("Shelf", "ShelfRow")), `module Shelf maps Books's table app.books — ${read} Books's published contract`);
   assert.equal(at(table("Dispatch", "OrderRef")), `module Dispatch maps Orders's table app.orders — ${read} Orders's published contract`);
+  assert.equal(at(table("Packing", "LineRef")), `module Packing maps Orders's table app.order_lines — ${read} Orders's published contract`);
   assert.equal(at(table("Picking", "PickRow")), `module Picking maps Stock's table app.stock — ${read} Stock's published contract`);
   assert.equal(at(table("Courier", "CourierRow")), "table app.shipments is owned by Shipping (migrations snapshot) and mapped by module Courier with ToTable or [Table] — one module owns a table; the other reads it through a port or a published contract");
   assert.equal(at(table("LedgerOne", "AccountOne")), "table app.accounts is mapped by modules LedgerOne and LedgerTwo with ToTable or [Table] — one module owns a table; the other reads it through a port or a published contract");

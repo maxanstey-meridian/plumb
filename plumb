@@ -205,13 +205,13 @@ function runAstGrep(r, selected, allYaml) {
   }));
 }
 
-function runChecks(r, selected, rivetVariant) {
+function runChecks(r, selected) {
   const findings = [];
   for (const owner of selected) {
     const started = performance.now();
     const out = spawnSync(owner.file, [path.resolve(r)], {
       encoding: "utf8", maxBuffer: 16 * 1024 * 1024,
-      env: { ...process.env, ...(ci || selfTest ? { PLUMB_CI: "1" } : {}), PLUMB_RIVET_VARIANT: rivetVariant },
+      env: { ...process.env, ...(ci || selfTest ? { PLUMB_CI: "1" } : {}) },
     });
     const duration = elapsed(started);
     (owner.ciOnly ? timings.external : timings.producers).push({ owner, duration });
@@ -239,7 +239,7 @@ catch (error) { console.error(`plumb: cannot load rule catalogue: ${error.messag
 timings.setup += elapsed(catalogStarted);
 const allYaml = catalogue.owners.filter((owner) => owner.kind === "yaml");
 
-function selectedOwners(packs, rivetVariant = null, selectedRule = ruleFilter) {
+function selectedOwners(packs, selectedRule = ruleFilter) {
   let selected = catalogue.owners;
   if (selectedRule) selected = selected.filter((owner) => owner.ids.includes(selectedRule));
   if (packFilter) selected = selected.filter((owner) => owner.ids.some((id) => packFilter.has(id.split("-")[1])));
@@ -250,9 +250,7 @@ function selectedOwners(packs, rivetVariant = null, selectedRule = ruleFilter) {
       timings.external.push({ owner, duration: 0, skipped: true });
     }
   }
-  selected = selected.filter((owner) => !owner.ciOnly || ciEligible);
-  if (rivetVariant) selected = selected.filter((owner) => !owner.variants || owner.variants.includes(rivetVariant));
-  return selected;
+  return selected.filter((owner) => !owner.ciOnly || ciEligible);
 }
 
 function isMissingFileError(error) {
@@ -286,9 +284,9 @@ async function scanAttempt(r, { allPacks = false, selectedRule = ruleFilter } = 
   const setupStarted = performance.now();
   const rivet = detectRivetContext(snapshot);
   const packs = allPacks || selectedRule ? null : detectPacks(snapshot);
-  if (packs && rivet.variant !== "none") packs.add("RV");
+  if (packs && rivet.artifactDirs.length) packs.add("RV");
   const visibility = createVisibility(r);
-  const selected = selectedOwners(packs, rivet.variant, selectedRule);
+  const selected = selectedOwners(packs, selectedRule);
   const selectedYaml = selected.filter((owner) => owner.kind === "yaml");
   const selectedScripts = selected.filter((owner) => owner.kind === "script");
   const selectedInProcess = selected.filter((owner) => owner.kind === "in-process");
@@ -309,7 +307,7 @@ async function scanAttempt(r, { allPacks = false, selectedRule = ruleFilter } = 
   for (const diagnostic of inProcess.diagnostics) process.stderr.write(`${diagnostic}\n`);
   degraded.push(...inProcess.diagnostics);
   timings.counters = snapshot.counters;
-  let found = [...runAstGrep(r, selectedYaml, allYaml), ...inProcess.findings, ...runChecks(r, selectedScripts, rivet.variant)]
+  let found = [...runAstGrep(r, selectedYaml, allYaml), ...inProcess.findings, ...runChecks(r, selectedScripts)]
     .filter((f) => visiblePath(r, visibility, f.loc.replace(/:\d+$/, "")));
   if (packs) found = found.filter((f) => packs.has(f.id.split("-")[1]));
   found = found.filter((f) => ruleSelected(f.id));

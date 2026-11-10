@@ -11,7 +11,8 @@ const HOME = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const FIXTURES = path.join(HOME, "fixtures", "MER-RV-027");
 const PLUMB = path.join(HOME, "plumb");
 const RULE = "MER-RV-027";
-const DOC_REF = "rules/rivet/server-shape.md#route-payload-ownership";
+const FIELDS_REF = "rules/rivet/take-every-response-field-positionally.md";
+const HOST_OPTIONS_REF = "rules/rivet/keep-wire-changing-settings-out-of-host-json-options.md";
 
 const omitNull = "is [JsonIgnore(Condition = WhenWritingNull)] on a response, so the server drops it from the JSON when it is null and the client sees the field as optional — remove the attribute so it is always sent";
 const optional = "is [RivetOptional] on a response, so the client type marks it optional though the server always sends it — drop the attribute";
@@ -28,7 +29,7 @@ function findings(root) {
     const all = JSON.parse(result.stdout).filter((finding) => finding.rule === RULE);
     for (const finding of all) {
         assert.equal(finding.severity, "warn", finding.message);
-        assert.equal(finding.docRef, DOC_REF, finding.message);
+        assert.equal(finding.docRef, finding.message.startsWith("DefaultIgnoreCondition") ? HOST_OPTIONS_REF : FIELDS_REF, finding.message);
     }
     return all.map((finding) => `${finding.location}\t${finding.message}`).sort();
 }

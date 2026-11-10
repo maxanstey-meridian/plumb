@@ -17,23 +17,6 @@ const DEFAULT_REFERENCES = path.join(os.homedir(), ".claude/skills/meridian/refe
 const REFERENCES = process.env.MERIDIAN_REFERENCES || DEFAULT_REFERENCES;
 const ownersByRule = () => loadRuleOwners(CHECKS, path.join(HOME, "rules"), inProcessRules).byRule;
 
-function githubHeadingSlugs(markdown) {
-  const counts = new Map();
-  const slugs = new Set();
-  for (const match of markdown.matchAll(/^ {0,3}#{1,6}\s+(.+?)\s*#*\s*$/gm)) {
-    const heading = match[1]
-      .replace(/!?(?:\[([^\]]*)\])\([^)]*\)/g, "$1")
-      .replace(/<[^>]+>/g, "")
-      .replace(/[`*_~]/g, "")
-      .toLowerCase();
-    const base = heading.replace(/[^\p{L}\p{N}\s_-]/gu, "").trim().replace(/\s/g, "-");
-    const count = counts.get(base) ?? 0;
-    counts.set(base, count + 1);
-    slugs.add(count ? `${base}-${count}` : base);
-  }
-  return slugs;
-}
-
 function runOwner(owner, fixture, id) {
   if (owner.kind === "script") {
     const out = spawnProducer(owner.file, fixture, {
@@ -75,16 +58,15 @@ function runOwner(owner, fixture, id) {
   }));
 }
 
-function verifyFinding(owner, finding, slugCache) {
+// A docRef names one rule file under meridian's references/, and nothing else: each file states
+// one rule, so a heading anchor has nothing to add.
+function verifyFinding(owner, finding) {
   assert.ok(owner.ids.includes(finding.id), `${owner.source} emitted undeclared ID ${finding.id}`);
   assert.ok(["error", "warn", "info"].includes(finding.severity), `${owner.source} emitted ${finding.id} with severity ${finding.severity}`);
 
-  const ref = finding.docRef?.match(/^([^#]+\.md)#(.+)$/);
-  assert.ok(ref, `${owner.source} emitted invalid docRef ${JSON.stringify(finding.docRef)}`);
-  const reference = path.join(REFERENCES, ref[1]);
+  assert.ok(/^rules\/[a-z-]+\/[a-z0-9-]+\.md$/.test(finding.docRef ?? ""), `${owner.source} emitted invalid docRef ${JSON.stringify(finding.docRef)}`);
+  const reference = path.join(REFERENCES, finding.docRef);
   assert.ok(fs.existsSync(reference), `${owner.source} docRef ${finding.docRef}: file does not exist: ${reference}`);
-  if (!slugCache.has(reference)) slugCache.set(reference, githubHeadingSlugs(fs.readFileSync(reference, "utf8")));
-  assert.ok(slugCache.get(reference).has(ref[2]), `${owner.source} docRef ${finding.docRef}: anchor #${ref[2]} does not exist in ${reference}`);
 }
 
 test("every implemented ID has exactly one owner and a fixture pair", () => {
@@ -99,20 +81,19 @@ test("each owner emits its declared ID on bad, not on good, with a valid severit
     fs.existsSync(REFERENCES),
     `Meridian references not found at ${REFERENCES}: set MERIDIAN_REFERENCES to the meridian skill's references folder, or install the skill at ${DEFAULT_REFERENCES}`,
   );
-  const slugCache = new Map();
   const findingFailures = [];
   for (const [id, owner] of ownersByRule()) {
     const bad = runOwner(owner, path.join(FIXTURES, id, "bad"), id);
     assert.ok(bad.some((finding) => finding.id === id), `${owner.source} did not emit ${id} on fixtures/${id}/bad`);
     for (const finding of bad) {
-      try { verifyFinding(owner, finding, slugCache); }
+      try { verifyFinding(owner, finding); }
       catch (error) { findingFailures.push(error.message); }
     }
 
     const good = runOwner(owner, path.join(FIXTURES, id, "good"), id);
     assert.ok(!good.some((finding) => finding.id === id), `${owner.source} emitted ${id} on fixtures/${id}/good`);
     for (const finding of good) {
-      try { verifyFinding(owner, finding, slugCache); }
+      try { verifyFinding(owner, finding); }
       catch (error) { findingFailures.push(error.message); }
     }
   }
@@ -121,35 +102,26 @@ test("each owner emits its declared ID on bad, not on good, with a valid severit
 
 // Fixtures reach only some docRefs; this reads every rules/<folder>/<file>.md literal in plumb's
 // tracked sources, the analyzer's constants, the DOC comments, and CONTRIBUTING's worked example
-// included, and each must name a heading. A slug runs to whitespace, a backtick, ), ], a comma,
-// a semicolon, or a quote (a docRef sits inside a string literal), less one trailing full stop.
-test("every docRef literal in plumb's sources names an existing heading", () => {
+// included, and each must name a rule file that exists, with no anchor. An anchor runs to whitespace, a
+// backtick, ), ], a comma, a semicolon, or a quote (a docRef sits inside a string literal).
+test("every docRef literal in plumb's sources names an existing rule file", () => {
   assert.ok(
     fs.existsSync(REFERENCES),
     `Meridian references not found at ${REFERENCES}: set MERIDIAN_REFERENCES to the meridian skill's references folder, or install the skill at ${DEFAULT_REFERENCES}`,
   );
   const tracked = spawnSync("git", ["ls-files", "lib", "checks", "rules", "dotnet/Meridian.Analyzers", "CONTRIBUTING.md"], { cwd: HOME, encoding: "utf8" });
   assert.equal(tracked.status, 0, `git ls-files failed: ${tracked.stderr}`);
-  const sources = tracked.stdout.split("\n").filter((file) => /\.(?:mjs|yml|cs|md)$/.test(file));
-  const slugCache = new Map();
+  // git still lists a tracked file that is deleted but not yet committed.
+  const sources = tracked.stdout.split("\n").filter((file) => /\.(?:mjs|yml|cs|md)$/.test(file) && fs.existsSync(path.join(HOME, file)));
   const failures = [];
   let checked = 0;
   for (const file of sources) {
     for (const match of fs.readFileSync(path.join(HOME, file), "utf8").matchAll(/rules\/[a-z-]+\/[a-z0-9-]+\.md(?:#[^\s`)\],;"']+)?/g)) {
-      const docRef = match[0].replace(/\.$/, "");
-      const [docPath, slug] = docRef.split("#");
+      const [docPath, anchor] = match[0].split("#");
       const reference = path.join(REFERENCES, docPath);
       checked++;
-      if (slug === undefined) {
-        failures.push(`${file}: ${docRef}: names no heading`);
-        continue;
-      }
-      if (!fs.existsSync(reference)) {
-        failures.push(`${file}: ${docRef}: file does not exist: ${reference}`);
-        continue;
-      }
-      if (!slugCache.has(reference)) slugCache.set(reference, githubHeadingSlugs(fs.readFileSync(reference, "utf8")));
-      if (!slugCache.get(reference).has(slug)) failures.push(`${file}: ${docRef}: anchor #${slug} does not exist in ${reference}`);
+      if (anchor !== undefined) failures.push(`${file}: ${match[0]}: carries an anchor: a docRef names the rule file only`);
+      else if (!fs.existsSync(reference)) failures.push(`${file}: ${docPath}: file does not exist: ${reference}`);
     }
   }
   assert.ok(checked > 0, "no docRef literals found in plumb's sources");

@@ -12,7 +12,7 @@
 // the runner knows the rule didn't run rather than reading "no drift". The
 // output dir is snapshotted before regeneration and restored byte-for-byte
 // afterward, so the working tree is never changed.
-// DOC: rules/rivet/client-package.md#generated-output
+// DOC: rules/rivet/regenerate-and-commit-output-with-the-contract-change.md
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
@@ -75,7 +75,7 @@ try {
     } else if (diff.status === 1) {
       const n = (diff.stdout || "").split("\n").filter(Boolean).length;
       console.log(
-        `MER-RV-024\tinfo\t${outRel}:0\tgenerated Rivet output is stale (${n} file(s) differ after re-running task ${genTask}) — regenerate and commit\trules/rivet/client-package.md#generated-output`
+        `MER-RV-024\tinfo\t${outRel}:0\tgenerated Rivet output is stale (${n} file(s) differ after re-running task ${genTask}) — regenerate and commit\trules/rivet/regenerate-and-commit-output-with-the-contract-change.md`
       );
     }
   }

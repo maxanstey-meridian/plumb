@@ -2,7 +2,7 @@
 
 ## Test Prerequisites
 
-The test suite and `./plumb --self-test` use every one of Plumb's [requirements](README.md#requirements), with its Node dependencies installed:
+The test suite and `./plumb --self-test` use every one of Plumb's [prerequisites](README.md#prerequisites), with its Node dependencies installed:
 
 - ast-grep on `PATH`
 - go-task (`task`) on `PATH`: without it two `MER-RV-024` runner tests are skipped (the one that runs its check script against its fixtures, `producer MER-RV-024-stale-generated.mjs: …`, and the one for conventions it can't check, `MER-RV-024: a convention it can't check exits 2 …`) and its self-test fixture fails, since the self-test runs the CI-only checks
@@ -49,7 +49,7 @@ defineFileRule({
         path: file.path,
         line: index + 1,
         message: "explain the mechanical violation",
-        docRef: "rules/<folder>/<file>.md#<slug>",
+        docRef: "rules/<folder>/<file>.md",
       });
     }
   },
@@ -67,7 +67,7 @@ RULE-ID<TAB>SEVERITY<TAB>PATH:LINE<TAB>MESSAGE<TAB>DOC-REF
 Example:
 
 ```text
-MER-BE-005	error	api/Modules/Auth/Application/U.cs:1	module Auth must not use Forms.Application internals - publish a contract or define a required port	rules/backend/dependency-rules.md#across-modules
+MER-BE-005	error	api/Modules/Auth/Application/U.cs:1	module Auth must not use Forms.Application internals - publish a contract or define a required port	rules/backend/never-reach-into-another-modules-internals.md
 ```
 
 Executable producers exit `0` when they find drift. Non-zero exits are reserved for internal failures.

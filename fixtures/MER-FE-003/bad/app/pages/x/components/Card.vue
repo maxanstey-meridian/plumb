@@ -1,4 +1,5 @@
 <script setup lang="ts">
-import { forms } from "~~/generated/rivet/client";
-const load = () => forms.list({ query: {} });
+// a subpath of the contracts package is still the client
+import { client } from "@acme/contracts/client";
+const load = () => client.GET("/api/forms");
 </script>

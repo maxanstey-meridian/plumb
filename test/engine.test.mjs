@@ -226,17 +226,14 @@ test("Rivet context preserves artifact fingerprints, package ancestry, and sorte
     ["packages/contracts/package.json", '{"name":"@acme/contracts"}'],
     ["packages/contracts/z-generated/openapi.json", "{}"],
     ["packages/contracts/z-generated/schema.d.ts", ""],
-    ["apps/web/generated/rivet/client/index.ts", ""],
-    ["apps/web/generated/rivet/rivet.ts", ""],
-    ["apps/web/generated/client", "this is a file, not a directory"],
+    ["api-schema/openapi.json", "{}"],
+    ["api-schema/schema.d.ts", ""],
   ]);
   const snapshot = createRepositorySnapshot(inventory([...contents.keys()]), {
     readFile(file) { return contents.get(file.slice("/repository/".length)); },
   });
   const context = detectRivetContext(snapshot);
-  assert.equal(context.variant, "both");
-  assert.deepEqual(context.v1Dirs, ["apps/web/generated/rivet"]);
-  assert.deepEqual(context.v2Dirs, ["packages/contracts/z-generated"]);
+  assert.deepEqual(context.artifactDirs, ["api-schema", "packages/contracts/z-generated"]);
   assert.deepEqual(context.contractsPackages, ["@root/repository", "@acme/contracts"]);
   assert.equal(snapshot.counters.textReads, 2);
   assert.equal(detectRivetContext(snapshot).contractsPackages[0], "@root/repository");

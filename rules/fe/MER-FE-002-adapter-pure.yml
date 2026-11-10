@@ -3,7 +3,7 @@ id: MER-FE-002
 language: typescript
 severity: error
 message: adapters must not import framework code — if it needs reactivity it is a composable, not an adapter
-note: rules/frontend/page-ports-and-adapters.md#adapters
+note: rules/frontend/keep-adapters-free-of-vue-and-presentation-state.md
 files:
   - "**/adapters/**/*.ts"
 ignores:

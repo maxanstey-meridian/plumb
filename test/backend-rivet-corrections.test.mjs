@@ -642,8 +642,8 @@ test("MER-RV-007 flags every app-written RivetResult extension named like an ada
         "Relay/WrappedRelay.cs:4 WrappedRelay",
     ]);
     assert.match(output, /FunctionResultExtensions\.cs:1\tFunctionResultExtensions hand-writes an HTTP-result bridge off RivetResult \(ToResponse, Rebuild, ToHttp, OneArm\)/);
-    assert.match(output, /FunctionResultExtensions\.cs:1\tFunctionResultExtensions declares its own ToResult off RivetResult, so a handler's call may bind to it instead of Rivet's first-party adapter — rename or delete it\trules\/rivet\/server-shape\.md#anti-patterns$/m);
-    assert.match(output, /AdapterStatus\.cs:1\tAdapterStatus copies the StatusCode or Value of RivetActionResult, the output of Rivet's \.ToActionResult\(\) adapter, into an HTTP result or response of its own — a hand-written bridge; return \.ToResult\(\)\/\.ToActionResult\(\) directly \(in a filter, let Rivet write the response\), and at most read its StatusCode or Value\trules\/rivet\/server-shape\.md#practical-rules$/m);
+    assert.match(output, /FunctionResultExtensions\.cs:1\tFunctionResultExtensions declares its own ToResult off RivetResult, so a handler's call may bind to it instead of Rivet's first-party adapter — rename or delete it\trules\/rivet\/return-responses-through-rivets-terminals\.md$/m);
+    assert.match(output, /AdapterStatus\.cs:1\tAdapterStatus copies the StatusCode or Value of RivetActionResult, the output of Rivet's \.ToActionResult\(\) adapter, into an HTTP result or response of its own — a hand-written bridge; return \.ToResult\(\)\/\.ToActionResult\(\) directly \(in a filter, let Rivet write the response\), and at most read its StatusCode or Value\trules\/rivet\/return-responses-through-rivets-terminals\.md$/m);
     assert.match(output, /AliasedResultExtensions\.cs:8\tAliasedResultExtensions hand-writes an HTTP-result bridge off RivetResult \(ToHttp\)/);
     assert.match(output, /BridgeThenStruct\.cs:1\tStructBridgeExtensions hand-writes an HTTP-result bridge off RivetResult \(ToHttp\)/);
     assert.match(output, /StatusWriterExtensions\.cs:7\tStatusWriterExtensions hand-writes an HTTP-result bridge off RivetResult \(ToHttp\)/);
@@ -657,8 +657,8 @@ test("MER-RV-007 flags every app-written RivetResult extension named like an ada
     assert.match(output, /QualifiedResultExtensions\.cs:10\tGlobalQualifiedResultExtensions hand-writes an HTTP-result bridge off RivetResult \(ToHttp\)/);
     assert.match(output, /RelayTerminalExtensions\.cs:4\tRelayTerminalExtensions hand-writes an HTTP-result bridge off RivetResult \(ToHttp\)/);
     assert.match(output, /HostExtensions\.cs:4\tHostTerminalExtensions hand-writes an HTTP-result bridge off RivetResult \(ToHttp\)/);
-    assert.match(output, /TestNamesakes\.cs:4\tTestNamesakes declares its own ToResult off RivetResult, so a handler's call may bind to it instead of Rivet's first-party adapter — rename or delete it\trules\/rivet\/server-shape\.md#anti-patterns$/m);
-    assert.match(output, /HttpResultExtensions\.cs:1\tHttpResultExtensions hand-writes an HTTP-result bridge off RivetResult \(ToHttpResult, Respond\) — delete it and use Rivet's first-party \.ToResult\(\)\/\.ToActionResult\(\) adapters\trules\/rivet\/server-shape\.md#anti-patterns$/m);
+    assert.match(output, /TestNamesakes\.cs:4\tTestNamesakes declares its own ToResult off RivetResult, so a handler's call may bind to it instead of Rivet's first-party adapter — rename or delete it\trules\/rivet\/return-responses-through-rivets-terminals\.md$/m);
+    assert.match(output, /HttpResultExtensions\.cs:1\tHttpResultExtensions hand-writes an HTTP-result bridge off RivetResult \(ToHttpResult, Respond\) — delete it and use Rivet's first-party \.ToResult\(\)\/\.ToActionResult\(\) adapters\trules\/rivet\/return-responses-through-rivets-terminals\.md$/m);
 });
 
 test("MER-RV-008 ignores MapGroup, reports handlers, and does not accept commented composition", () => {

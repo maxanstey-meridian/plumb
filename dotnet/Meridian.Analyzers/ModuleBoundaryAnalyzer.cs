@@ -12,7 +12,7 @@
 // like plumb's checks — namespace conventions are not trusted. Alias usings
 // (`using Foo = Modules.Y.Bar;`) are also checked: plumb's regex skips them,
 // but the dependency is just as real, and the compiler can afford the rigor.
-// DOC: each diagnostic cites the rule file or design document and heading plumb's finding for the mirrored ID cites (the *Doc constants below).
+// DOC: each diagnostic cites the rule file plumb's finding for the mirrored ID cites (the *Doc constants below).
 using System;
 using System.Collections.Immutable;
 using System.Linq;
@@ -27,12 +27,12 @@ namespace Meridian.Analyzers;
 [DiagnosticAnalyzer(LanguageNames.CSharp)]
 public sealed class ModuleBoundaryAnalyzer : DiagnosticAnalyzer
 {
-    private const string DependencyRulesDoc = "meridian skill: references/rules/backend/dependency-rules.md#non-negotiable-dependency-rules";
-    private const string AcrossModulesDoc = "meridian skill: references/rules/backend/dependency-rules.md#across-modules";
-    private const string ContractClosureDoc = "meridian skill: references/rules/backend/dependency-rules.md#published-contract-closure";
-    private const string WhatGoesWhereDoc = "meridian skill: references/rules/backend/module-layout.md#domain";
-    private const string CodingStyleDoc = "meridian skill: references/rules/backend/coding-style-rules.md#net";
-    private const string RivetPayloadDoc = "meridian skill: references/rules/rivet/server-shape.md#route-payload-ownership";
+    private const string DomainPurityDoc = "meridian skill: references/rules/backend/keep-domain-free-of-io-and-frameworks.md";
+    private const string AppNoInfraDoc = "meridian skill: references/rules/backend/keep-application-independent-of-infrastructure.md";
+    private const string AcrossModulesDoc = "meridian skill: references/rules/backend/never-reach-into-another-modules-internals.md";
+    private const string ContractClosureDoc = "meridian skill: references/rules/backend/close-published-contracts-over-published-types.md";
+    private const string ConstructorInjectionDoc = "meridian skill: references/rules/backend/inject-dependencies-through-the-constructor.md";
+    private const string RivetPayloadDoc = "meridian skill: references/rules/rivet/own-each-route-payload-in-its-transport-contract.md";
 
     private static readonly DiagnosticDescriptor DomainPurity = new(
         id: "MERBE001",
@@ -155,12 +155,12 @@ public sealed class ModuleBoundaryAnalyzer : DiagnosticAnalyzer
         if (layer == "Domain" &&
             (LayerRef.IsMatch(targetNamespace) || StartsWithAny(targetNamespace, DomainForbiddenPrefixes)))
         {
-            context.ReportDiagnostic(Diagnostic.Create(DomainPurity, node.GetLocation(), targetType, DependencyRulesDoc));
+            context.ReportDiagnostic(Diagnostic.Create(DomainPurity, node.GetLocation(), targetType, DomainPurityDoc));
         }
         else if (layer == "Application" &&
             (InfraRef.IsMatch(targetNamespace) || StartsWithAny(targetNamespace, AppForbiddenPrefixes)))
         {
-            context.ReportDiagnostic(Diagnostic.Create(AppNoInfra, node.GetLocation(), targetType, DependencyRulesDoc));
+            context.ReportDiagnostic(Diagnostic.Create(AppNoInfra, node.GetLocation(), targetType, AppNoInfraDoc));
         }
     }
 
@@ -190,12 +190,12 @@ public sealed class ModuleBoundaryAnalyzer : DiagnosticAnalyzer
         if (layer == "Domain" &&
             (LayerRef.IsMatch(target!) || StartsWithAny(target!, DomainForbiddenPrefixes)))
         {
-            context.ReportDiagnostic(Diagnostic.Create(DomainPurity, node.GetLocation(), target, DependencyRulesDoc));
+            context.ReportDiagnostic(Diagnostic.Create(DomainPurity, node.GetLocation(), target, DomainPurityDoc));
         }
         else if (layer == "Application" &&
             (InfraRef.IsMatch(target!) || StartsWithAny(target!, AppForbiddenPrefixes)))
         {
-            context.ReportDiagnostic(Diagnostic.Create(AppNoInfra, node.GetLocation(), target, DependencyRulesDoc));
+            context.ReportDiagnostic(Diagnostic.Create(AppNoInfra, node.GetLocation(), target, AppNoInfraDoc));
         }
     }
 
@@ -217,7 +217,7 @@ public sealed class ModuleBoundaryAnalyzer : DiagnosticAnalyzer
         }
 
         if (name is not null)
-            context.ReportDiagnostic(Diagnostic.Create(DomainRepository, context.Node.GetLocation(), name, WhatGoesWhereDoc));
+            context.ReportDiagnostic(Diagnostic.Create(DomainRepository, context.Node.GetLocation(), name, DomainPurityDoc));
     }
 
     private static void AnalyzeServiceLocatorIdentifier(SyntaxNodeAnalysisContext context)
@@ -229,7 +229,7 @@ public sealed class ModuleBoundaryAnalyzer : DiagnosticAnalyzer
             context.SemanticModel.GetSymbolInfo(identifier, context.CancellationToken).Symbol as INamedTypeSymbol;
         if (type is null ||
             type.Name != "IServiceProvider" || type.ContainingNamespace.ToDisplayString() != "System") return;
-        context.ReportDiagnostic(Diagnostic.Create(ServiceLocator, identifier.GetLocation(), "IServiceProvider", CodingStyleDoc));
+        context.ReportDiagnostic(Diagnostic.Create(ServiceLocator, identifier.GetLocation(), "IServiceProvider", ConstructorInjectionDoc));
     }
 
     private static void AnalyzeServiceLocatorInvocation(SyntaxNodeAnalysisContext context)
@@ -245,7 +245,7 @@ public sealed class ModuleBoundaryAnalyzer : DiagnosticAnalyzer
             definition.ContainingType?.Name == "ServiceProviderServiceExtensions" &&
             definition.ContainingNamespace.ToDisplayString() == "Microsoft.Extensions.DependencyInjection";
         if (isSystemProviderMember || isMicrosoftDiExtension)
-            context.ReportDiagnostic(Diagnostic.Create(ServiceLocator, invocation.GetLocation(), method.Name, CodingStyleDoc));
+            context.ReportDiagnostic(Diagnostic.Create(ServiceLocator, invocation.GetLocation(), method.Name, ConstructorInjectionDoc));
     }
 
     private static void AnalyzeRivetRouteField(SyntaxNodeAnalysisContext context)

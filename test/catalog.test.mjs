@@ -119,17 +119,18 @@ test("each owner emits its declared ID on bad, not on good, with a valid severit
   assert.deepEqual([...new Set(findingFailures)], []);
 });
 
-// Fixtures reach only some docRefs; this reads every rules/<folder>/<file>.md literal in plumb's tracked sources, the
-// analyzer's constants and the DOC comments included, and each must name a heading. A slug runs to whitespace, a backtick,
-// ), ], a comma, a semicolon, or a quote, less one trailing full stop, as workflow-skills' bundle build delimits a cited anchor.
+// Fixtures reach only some docRefs; this reads every rules/<folder>/<file>.md literal in plumb's
+// tracked sources, the analyzer's constants, the DOC comments, and CONTRIBUTING's worked example
+// included, and each must name a heading. A slug runs to whitespace, a backtick, ), ], a comma,
+// a semicolon, or a quote (a docRef sits inside a string literal), less one trailing full stop.
 test("every docRef literal in plumb's sources names an existing heading", () => {
   assert.ok(
     fs.existsSync(REFERENCES),
     `Meridian references not found at ${REFERENCES}: set MERIDIAN_REFERENCES to the meridian skill's references folder, or install the skill at ${DEFAULT_REFERENCES}`,
   );
-  const tracked = spawnSync("git", ["ls-files", "lib", "checks", "rules", "dotnet/Meridian.Analyzers"], { cwd: HOME, encoding: "utf8" });
+  const tracked = spawnSync("git", ["ls-files", "lib", "checks", "rules", "dotnet/Meridian.Analyzers", "CONTRIBUTING.md"], { cwd: HOME, encoding: "utf8" });
   assert.equal(tracked.status, 0, `git ls-files failed: ${tracked.stderr}`);
-  const sources = tracked.stdout.split("\n").filter((file) => /\.(?:mjs|yml|cs)$/.test(file));
+  const sources = tracked.stdout.split("\n").filter((file) => /\.(?:mjs|yml|cs|md)$/.test(file));
   const slugCache = new Map();
   const failures = [];
   let checked = 0;

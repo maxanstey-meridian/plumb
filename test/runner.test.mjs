@@ -848,9 +848,9 @@ test("mixed in-process, YAML, and legacy findings merge through the real CLI", (
   });
   const out = plumb(r, "--json", "--fail-on", "info");
   assert.deepEqual(JSON.parse(out.stdout), [
-    { rule: "MER-FE-001", severity: "error", location: "app/logic/framework.ts:1", message: "logic/ must not import framework code — keep it pure TypeScript or move it to a composable", docRef: "rules/frontend/logic.md#logic" },
+    { rule: "MER-FE-001", severity: "error", location: "app/logic/framework.ts:1", message: "logic/ must not import framework code — keep it pure TypeScript or move it to a composable", docRef: "rules/frontend/page-ports-and-adapters.md#logic" },
     { rule: "MER-TO-011", severity: "error", location: "App.csproj:0", message: "enable nullable reference types", docRef: "rules/tools/dotnet.md#default-stack" },
-    { rule: "MER-FE-044", severity: "warn", location: "nuxt.config.ts:1", message: "Nuxt SPA config must explicitly set ssr: false", docRef: "rules/frontend/core-principle.md#core-principle" },
+    { rule: "MER-FE-044", severity: "warn", location: "nuxt.config.ts:1", message: "Nuxt SPA config must explicitly set ssr: false", docRef: "rules/frontend/single-page-apps.md#single-page-apps" },
     { rule: "MER-TO-001", severity: "warn", location: "package.json:0", message: "pin pnpm via the packageManager field", docRef: "rules/tools/typescript-vue-nuxt.md#default-stack" },
     { rule: "MER-TO-002", severity: "warn", location: ".oxfmtrc.json:0", message: "no .oxfmtrc.json found — TS repos carry the oxfmt base config (golden: configs/oxfmtrc.json in plumb)", docRef: "rules/tools/typescript-vue-nuxt.md#linting-and-formatting" },
     { rule: "MER-TO-002", severity: "warn", location: ".oxlintrc.json:0", message: "no .oxlintrc.json found — TS repos carry the oxlint base config (golden: configs/oxlintrc.json in plumb)", docRef: "rules/tools/typescript-vue-nuxt.md#linting-and-formatting" },

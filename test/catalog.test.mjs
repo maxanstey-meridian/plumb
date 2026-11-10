@@ -118,3 +118,39 @@ test("each owner emits its declared ID on bad, not on good, with a valid severit
   }
   assert.deepEqual([...new Set(findingFailures)], []);
 });
+
+// Fixtures reach only some docRefs; this reads every rules/<folder>/<file>.md literal in plumb's tracked sources, the
+// analyzer's constants and the DOC comments included, and each must name a heading. A slug runs to whitespace, a backtick,
+// ), ], a comma, a semicolon, or a quote, less one trailing full stop, as workflow-skills' bundle build delimits a cited anchor.
+test("every docRef literal in plumb's sources names an existing heading", () => {
+  assert.ok(
+    fs.existsSync(REFERENCES),
+    `Meridian references not found at ${REFERENCES}: set MERIDIAN_REFERENCES to the meridian skill's references folder, or install the skill at ${DEFAULT_REFERENCES}`,
+  );
+  const tracked = spawnSync("git", ["ls-files", "lib", "checks", "rules", "dotnet/Meridian.Analyzers"], { cwd: HOME, encoding: "utf8" });
+  assert.equal(tracked.status, 0, `git ls-files failed: ${tracked.stderr}`);
+  const sources = tracked.stdout.split("\n").filter((file) => /\.(?:mjs|yml|cs)$/.test(file));
+  const slugCache = new Map();
+  const failures = [];
+  let checked = 0;
+  for (const file of sources) {
+    for (const match of fs.readFileSync(path.join(HOME, file), "utf8").matchAll(/rules\/[a-z-]+\/[a-z0-9-]+\.md(?:#[^\s`)\],;"']+)?/g)) {
+      const docRef = match[0].replace(/\.$/, "");
+      const [docPath, slug] = docRef.split("#");
+      const reference = path.join(REFERENCES, docPath);
+      checked++;
+      if (slug === undefined) {
+        failures.push(`${file}: ${docRef}: names no heading`);
+        continue;
+      }
+      if (!fs.existsSync(reference)) {
+        failures.push(`${file}: ${docRef}: file does not exist: ${reference}`);
+        continue;
+      }
+      if (!slugCache.has(reference)) slugCache.set(reference, githubHeadingSlugs(fs.readFileSync(reference, "utf8")));
+      if (!slugCache.get(reference).has(slug)) failures.push(`${file}: ${docRef}: anchor #${slug} does not exist in ${reference}`);
+    }
+  }
+  assert.ok(checked > 0, "no docRef literals found in plumb's sources");
+  assert.deepEqual(failures, []);
+});

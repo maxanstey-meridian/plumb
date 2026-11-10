@@ -12,7 +12,7 @@
 // like plumb's checks — namespace conventions are not trusted. Alias usings
 // (`using Foo = Modules.Y.Bar;`) are also checked: plumb's regex skips them,
 // but the dependency is just as real, and the compiler can afford the rigor.
-// DOC: each diagnostic cites the rule file and heading plumb's finding for the mirrored ID cites (the *Doc constants below).
+// DOC: each diagnostic cites the rule file or design document and heading plumb's finding for the mirrored ID cites (the *Doc constants below).
 using System;
 using System.Collections.Immutable;
 using System.Linq;
@@ -30,9 +30,9 @@ public sealed class ModuleBoundaryAnalyzer : DiagnosticAnalyzer
     private const string DependencyRulesDoc = "meridian skill: references/rules/backend/dependency-rules.md#non-negotiable-dependency-rules";
     private const string AcrossModulesDoc = "meridian skill: references/rules/backend/dependency-rules.md#across-modules";
     private const string ContractClosureDoc = "meridian skill: references/rules/backend/dependency-rules.md#published-contract-closure";
-    private const string WhatGoesWhereDoc = "meridian skill: references/rules/backend/what-goes-where.md#domain";
+    private const string WhatGoesWhereDoc = "meridian skill: references/rules/backend/module-layout.md#domain";
     private const string CodingStyleDoc = "meridian skill: references/rules/backend/coding-style-rules.md#net";
-    private const string RivetPayloadDoc = "meridian skill: references/rules/rivet/route-payload-ownership.md#route-payload-ownership";
+    private const string RivetPayloadDoc = "meridian skill: references/rules/rivet/server-shape.md#route-payload-ownership";
 
     private static readonly DiagnosticDescriptor DomainPurity = new(
         id: "MERBE001",

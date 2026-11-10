@@ -7,7 +7,7 @@
 // dir (checks/_lib/rivet-variant.mjs), never hardcoded.
 // `import type`-only lines are exempt — a component importing a DTO type is not
 // calling a client.
-// DOC: rules/frontend/components.md#components
+// DOC: rules/frontend/page-ports-and-adapters.md#components
 import fs from "node:fs";
 import path from "node:path";
 import { createManifestRepositoryView, walkFiles } from "./_lib/fs-scan.mjs";
@@ -31,6 +31,6 @@ for (const f of walkFiles(path.resolve(root), path.resolve(root), { filter: (nam
   for (let i = 0; i < lines.length; i++) {
     const m = lines[i].match(IMPORT);
     if (!m || m[2] || !isClientSpec(m[3])) continue;
-    console.log(`MER-FE-003\terror\t${path.relative(root, f)}:${i + 1}\tcomponents must not import generated Rivet clients — inject a port or move the call to a composable\trules/frontend/components.md#components`);
+    console.log(`MER-FE-003\terror\t${path.relative(root, f)}:${i + 1}\tcomponents must not import generated Rivet clients — inject a port or move the call to a composable\trules/frontend/page-ports-and-adapters.md#components`);
   }
 }

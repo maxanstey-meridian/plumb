@@ -7,6 +7,9 @@
         <ImplicitUsings>enable</ImplicitUsings>
         <EnforceCodeStyleInBuild>true</EnforceCodeStyleInBuild>
         <AnalysisLevel>latest</AnalysisLevel>
+        <!-- The editorconfig's rules are warnings until a build fails on them. A NuGet advisory published later is not the tool's code, so it stays a warning. -->
+        <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+        <WarningsNotAsErrors>NU1901;NU1902;NU1903;NU1904</WarningsNotAsErrors>
         <!-- IDE0005 (unused usings) reports in a build only with a documentation file; the tool's types are internal, so CS1591 never fires for the API. -->
         <GenerateDocumentationFile>true</GenerateDocumentationFile>
         <AssemblyName>Plumb.CSharpFacts</AssemblyName>

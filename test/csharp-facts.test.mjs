@@ -755,9 +755,9 @@ test("a migrations snapshot's entities are snapshotTables, not tables, and its n
     ["api/Migrations/AppModelSnapshot.cs", "App.Modules.Forms.Domain.FormEntity", "ToTable", null, "forms"],
     ["api/Migrations/AppModelSnapshot.cs", "App.Modules.Forms.Domain.Holder.Part", "ToTable", null, "parts"],
     ["api/Migrations/AppModelSnapshot.cs", "App.Modules.Forms.Domain.Orders", "ToTable", null, "orders"],
-    // An owned type's table is the owned type's, however deep it is owned.
-    ["api/Migrations/AppModelSnapshot.cs", "App.Modules.Forms.Domain.Orders.Line", "ToTable", null, "order_lines"],
-    ["api/Migrations/AppModelSnapshot.cs", "App.Modules.Forms.Domain.Deep", "ToView", null, "deep_view"],
+    // An owned type's table is its owner's, however deep it is owned and wherever the owned type is declared.
+    ["api/Migrations/AppModelSnapshot.cs", "App.Modules.Forms.Domain.Orders", "ToTable", null, "order_lines"],
+    ["api/Migrations/AppModelSnapshot.cs", "App.Modules.Forms.Domain.Orders", "ToView", null, "deep_view"],
   ]);
   assert.ok(repo.facts.tables.every((table) => !table.file.path.startsWith("api/Migrations/")));
 });

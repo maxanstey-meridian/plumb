@@ -166,7 +166,9 @@ internal sealed partial class DocumentWalker
 
     // `modelBuilder.Entity("<name>", b => …)` in a snapshot: the lambda's own ToTable or ToView
     // call, and an owned type's, which the snapshot writes as
-    // `b.OwnsOne("<owned name>", "<navigation>", b1 => …)` inside the owner's lambda.
+    // `b.OwnsOne("<owned name>", "<navigation>", b1 => …)` inside the owner's lambda. An owned
+    // type's table is a table of the entity that owns it, however deep it is owned: the owned
+    // type may be declared anywhere, but the table belongs to the owner's module.
     private void RecordSnapshotEntity(InvocationExpressionSyntax invocation)
     {
         var arguments = invocation.ArgumentList.Arguments;
@@ -185,7 +187,7 @@ internal sealed partial class DocumentWalker
     }
 
     // The ToTable and ToView calls on the lambda's own parameter, each as a table of `entity`, and
-    // the owned types the lambda declares, each with its own.
+    // the same for the owned types the lambda declares.
     private void RecordSnapshotBuilder(string entity, ExpressionSyntax lambda)
     {
         var parameter = lambda switch
@@ -229,19 +231,16 @@ internal sealed partial class DocumentWalker
                     );
                 }
             }
-            else if (called is "OwnsOne" or "OwnsMany" && OwnedTypeOf(call) is { } owned)
+            else if (called is "OwnsOne" or "OwnsMany" && OwnedBuildOf(call) is { } build)
             {
-                RecordSnapshotBuilder(owned.Name, owned.Build);
+                RecordSnapshotBuilder(entity, build);
             }
         }
     }
 
     // An OwnsOne or OwnsMany call of the snapshot's form,
-    // `("<owned name>", "<navigation>", b => …)`, on an entity or owned-type builder: the owned
-    // type's name and its lambda.
-    private (string Name, ExpressionSyntax Build)? OwnedTypeOf(
-        InvocationExpressionSyntax invocation
-    )
+    // `("<owned name>", "<navigation>", b => …)`, on an entity or owned-type builder: its lambda.
+    private ExpressionSyntax? OwnedBuildOf(InvocationExpressionSyntax invocation)
     {
         var arguments = invocation.ArgumentList.Arguments;
         if (
@@ -253,13 +252,13 @@ internal sealed partial class DocumentWalker
                     ContainingNamespace: { } declaredIn
                 }
             || Names.Namespace(declaredIn) != EntityTypeBuilderNamespace
-            || ConstantString(arguments[0].Expression, out var isString) is not { } name
+            || ConstantString(arguments[0].Expression, out var isString) is null
             || !isString
         )
         {
             return null;
         }
-        return (name.Replace('+', '.'), arguments[^1].Expression);
+        return arguments[^1].Expression;
     }
 
     // `[Table("forms")]` on a class, with its optional `Schema = "…"`.

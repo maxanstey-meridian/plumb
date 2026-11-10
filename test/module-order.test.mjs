@@ -867,8 +867,8 @@ test("a module mapping another module's table is MER-BE-064, whatever the mappin
   assert.equal(at(table("Shelf", "ShelfRow")), `module Shelf maps Books's table app.books — ${read} Books's published contract`);
   assert.equal(at(table("Dispatch", "OrderRef")), `module Dispatch maps Orders's table app.orders — ${read} Orders's published contract`);
   assert.equal(at(table("Picking", "PickRow")), `module Picking maps Stock's table app.stock — ${read} Stock's published contract`);
-  assert.equal(at(table("Courier", "CourierRow")), "table app.shipments is mapped by modules Courier and Shipping (with ToTable or [Table]) — one module owns a table; the other reads it through a port or a published contract");
-  assert.equal(at(table("LedgerOne", "AccountOne")), "table app.accounts is mapped by modules LedgerOne and LedgerTwo (with ToTable or [Table]) — one module owns a table; the other reads it through a port or a published contract");
+  assert.equal(at(table("Courier", "CourierRow")), "table app.shipments is owned by Shipping (migrations snapshot) and mapped by module Courier with ToTable or [Table] — one module owns a table; the other reads it through a port or a published contract");
+  assert.equal(at(table("LedgerOne", "AccountOne")), "table app.accounts is mapped by modules LedgerOne and LedgerTwo with ToTable or [Table] — one module owns a table; the other reads it through a port or a published contract");
   assert.equal(at(table("LedgerTwo", "AccountTwo")), at(table("LedgerOne", "AccountOne")));
 });
 

@@ -3,21 +3,34 @@ using Microsoft.CodeAnalysis;
 
 namespace Plumb.CSharpFacts;
 
-enum TypeOrigin { Source, WantedOutside, Ignored }
-
-// Which types a use is recorded for: every type declared in the repo's own documents, and an outside type only when
-// its full name equals an --external prefix or starts with one followed by `.`, or has an --external-segment segment.
-// A declaration in what a build generated isn't the repo's own.
-sealed class TypeFilter(string root, IReadOnlyList<string> prefixes, IReadOnlyList<string> segments, BuildOutput generated)
+internal enum TypeOrigin
 {
-    readonly ConcurrentDictionary<INamedTypeSymbol, TypeOrigin> cache = new(SymbolEqualityComparer.Default);
+    Source,
+    WantedOutside,
+    Ignored,
+}
+
+// Which types a use is recorded for: every type declared in the repo's own documents, and an
+// outside type only when its full name equals an --external prefix or starts with one followed by
+// `.`, or has an --external-segment segment. A declaration in what a build generated isn't the
+// repo's own.
+internal sealed class TypeFilter(
+    string root,
+    IReadOnlyList<string> prefixes,
+    IReadOnlyList<string> segments,
+    BuildOutput generated
+)
+{
+    private readonly ConcurrentDictionary<INamedTypeSymbol, TypeOrigin> _cache = new(
+        SymbolEqualityComparer.Default
+    );
 
     public TypeOrigin OriginOf(INamedTypeSymbol type)
     {
-        return cache.GetOrAdd(type, Classify);
+        return _cache.GetOrAdd(type, Classify);
     }
 
-    TypeOrigin Classify(INamedTypeSymbol type)
+    private TypeOrigin Classify(INamedTypeSymbol type)
     {
         foreach (var reference in type.DeclaringSyntaxReferences)
         {
@@ -50,21 +63,28 @@ sealed class TypeFilter(string root, IReadOnlyList<string> prefixes, IReadOnlyLi
 }
 
 // A file in a folder a project builds into, which the repository doesn't hold as its own.
-sealed class BuildOutput(string root, IReadOnlyList<string> folders, IReadOnlySet<string> repoFiles)
+internal sealed class BuildOutput(
+    string root,
+    IReadOnlyList<string> folders,
+    IReadOnlySet<string> repoFiles
+)
 {
     public bool Holds(string path)
     {
-        // A generator's tree can carry MSBuild's backslash off Windows: obj\Debug/net10.0/generated/…
+        // A generator's tree can carry MSBuild's backslash off Windows:
+        // obj\Debug/net10.0/generated/…
         var file = Path.DirectorySeparatorChar == '/' ? path.Replace('\\', '/') : path;
-        return folders.Any(folder => Paths.IsUnder(folder, file)) && !repoFiles.Contains(Paths.Relative(root, file));
+        return folders.Any(folder => Paths.IsUnder(folder, file))
+            && !repoFiles.Contains(Paths.Relative(root, file));
     }
 }
 
-static class Paths
+internal static class Paths
 {
     public static bool IsUnder(string root, string? path)
     {
-        return path is not null && path.StartsWith(root + Path.DirectorySeparatorChar, StringComparison.Ordinal);
+        return path is not null
+            && path.StartsWith(root + Path.DirectorySeparatorChar, StringComparison.Ordinal);
     }
 
     public static string Relative(string root, string path)

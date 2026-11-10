@@ -308,6 +308,44 @@ test("a using of a namespace with no type of the module in it is one hit for the
   assert.match(found[0].message, /^module Auth must not use Billing\.Application internals/);
 });
 
+// A namespace above the modules holds a host type too, so it is shared by the app and names no module: a using of it
+// imports the host's types and reaches no module's. The one real hit is the control that the rules still run.
+const sharedNamespaceFiles = (projectText) => ({
+  "api/Api.csproj": projectText,
+  "api/Host.cs": "namespace App;\npublic sealed class Host;\n",
+  ...entity("Forms"),
+  ...entity("Billing"),
+  "api/Modules/Forms/Application/FormsUse.cs": "using App;\nusing App.Modules;\nnamespace App.Modules.Forms.Application;\npublic sealed class FormsUse;\n",
+  "api/Modules/Billing/Application/BillingUse.cs": "namespace App.Modules.Billing.Application;\npublic sealed class BillingUse;\n",
+});
+
+const noModuleFindings = (root) => ["MER-BE-003", "MER-BE-004", "MER-BE-005"].flatMap((id) => run(root, id).findings.map((finding) => [finding.rule, finding.location, finding.message]));
+
+test("a global using, a Common using, and a module's using of a namespace shared by the modules and the host name no module", () => {
+  const files = {
+    ...sharedNamespaceFiles(project()),
+    "api/GlobalUsings.cs": "global using App;\n",
+    "api/Common/Shared.cs": "using App;\nusing App.Modules;\nnamespace App.Common;\npublic sealed class Shared;\n",
+    // The control: a using that does name a Billing type, so the rules are running over these files.
+    "api/Modules/Forms/Application/Reach.cs": "using App.Modules.Billing.Domain;\nnamespace App.Modules.Forms.Application;\npublic sealed class Reach;\n",
+  };
+  const root = build("shared-namespace-using", files);
+  assert.deepEqual(noModuleFindings(root), [
+    ["MER-BE-003", "api/Modules/Forms/Application/Reach.cs:1", "module Forms must not use Billing.Domain — consume a published contract or define a required port"],
+  ]);
+});
+
+test("an MSBuild <Using> of a namespace shared by the modules and the host names no module", () => {
+  const files = {
+    ...sharedNamespaceFiles(project('\n  <ItemGroup>\n    <Using Include="App" />\n    <Using Include="App.Modules" />\n  </ItemGroup>')),
+    "api/Modules/Forms/Application/Reach.cs": "using App.Modules.Billing.Domain;\nnamespace App.Modules.Forms.Application;\npublic sealed class Reach;\n",
+  };
+  const root = build("shared-namespace-item", files);
+  assert.deepEqual(noModuleFindings(root), [
+    ["MER-BE-003", "api/Modules/Forms/Application/Reach.cs:1", "module Forms must not use Billing.Domain — consume a published contract or define a required port"],
+  ]);
+});
+
 test("a global using under nested backend roots is judged once, by the root that classifies the file, and a host file no root classifies is one finding", () => {
   const files = {
     "App.csproj": project(),
@@ -758,8 +796,9 @@ namespace Microsoft.EntityFrameworkCore.Metadata.Builders
 }
 namespace Microsoft.EntityFrameworkCore.Infrastructure { public abstract class ModelSnapshot { } }
 `;
-  // The default schema of the whole backend: ToTable("invoices") and ToView("invoices", "app") are one table.
-  files["api/Persistence/Model.cs"] = "using Microsoft.EntityFrameworkCore;\nnamespace App.Persistence;\npublic sealed class Model { public void Build(ModelBuilder modelBuilder) { modelBuilder.HasDefaultSchema(\"app\"); } }\n";
+  // The default schemas of the host: a name with no schema is compared under both, so ToTable("invoices") and
+  // ToView("invoices", "app") are one table.
+  files["api/Persistence/Model.cs"] = "using Microsoft.EntityFrameworkCore;\nnamespace App.Persistence;\npublic sealed class Model { public void Build(ModelBuilder modelBuilder) { modelBuilder.HasDefaultSchema(\"app\"); modelBuilder.HasDefaultSchema(\"archive\"); } }\n";
   const mapping = (module, entityName, call, extra = "") => {
     files[`api/Modules/${module}/Domain/${entityName}.cs`] = `namespace App.Modules.${module}.Domain;\n${extra}public sealed class ${entityName} { public int Id { get; set; } }\n`;
     files[`api/Modules/${module}/Infrastructure/${entityName}Configuration.cs`] = `using App.Modules.${module}.Domain;\nusing Microsoft.EntityFrameworkCore;\nusing Microsoft.EntityFrameworkCore.Metadata.Builders;\nnamespace App.Modules.${module}.Infrastructure;\npublic sealed class ${entityName}Configuration\n{\n    public void Configure(EntityTypeBuilder<${entityName}> builder)\n    {\n        builder.${call};\n    }\n}\n`;
@@ -788,6 +827,20 @@ namespace Microsoft.EntityFrameworkCore.Infrastructure { public abstract class M
   files["api/Modules/Orders/Domain/OrderEntity.cs"] = "namespace App.Modules.Orders.Domain;\npublic sealed class OrderEntity { public int Id { get; set; } }\n";
   files["api/Migrations/AppSnapshot.cs"] = "using Microsoft.EntityFrameworkCore;\nusing Microsoft.EntityFrameworkCore.Infrastructure;\nnamespace App.Migrations;\npublic sealed class AppSnapshot : ModelSnapshot\n{\n    public void Build(ModelBuilder modelBuilder)\n    {\n        modelBuilder.Entity(\"App.Modules.Orders.Domain.OrderEntity\", b => { b.ToTable(\"orders\"); });\n    }\n}\n";
   mapping("Dispatch", "OrderRef", 'ToView("orders")');
+  // A ToTable in module code does not hide the snapshot's owner: Shipping owns shipments through the snapshot, and
+  // Courier's ToTable("shipments") makes a second owner.
+  files["api/Modules/Shipping/Domain/ShipmentEntity.cs"] = "namespace App.Modules.Shipping.Domain;\npublic sealed class ShipmentEntity { public int Id { get; set; } }\n";
+  files["api/Migrations/AppSnapshot.cs"] = files["api/Migrations/AppSnapshot.cs"].replace("b.ToTable(\"orders\"); });", "b.ToTable(\"orders\"); });\n        modelBuilder.Entity(\"App.Modules.Shipping.Domain.ShipmentEntity\", b => { b.ToTable(\"shipments\"); });");
+  mapping("Courier", "CourierRow", 'ToTable("shipments")');
+  // With two host defaults, a ToView of another module's unqualified table is still one finding.
+  mapping("Stock", "StockRow", 'ToTable("stock")');
+  mapping("Picking", "PickRow", 'ToView("stock")');
+  // A module that declares a default schema of its own maps into it, not into another module's or the host's: the same
+  // unqualified name in two such modules is two tables.
+  for (const [module, schema] of [["Alpha", "alpha"], ["Beta", "beta"]]) {
+    mapping(module, `${module}Setting`, 'ToTable("settings")');
+    files[`api/Modules/${module}/Infrastructure/${module}Context.cs`] = `using Microsoft.EntityFrameworkCore;\nnamespace App.Modules.${module}.Infrastructure;\npublic sealed class ${module}Context { public void Build(ModelBuilder modelBuilder) { modelBuilder.HasDefaultSchema("${schema}"); } }\n`;
+  }
   return { root: build("tables", files), files };
 });
 
@@ -796,9 +849,11 @@ test("a module mapping another module's table is MER-BE-064, whatever the mappin
   const { findings, locations } = run(root, "MER-BE-064");
   const table = (module, entityName) => spot(files, `api/Modules/${module}/Infrastructure/${entityName}Configuration.cs`, "builder.To");
   assert.deepEqual(locations, [
+    table("Courier", "CourierRow"),
     table("Dispatch", "OrderRef"),
     table("LedgerOne", "AccountOne"),
     table("LedgerTwo", "AccountTwo"),
+    table("Picking", "PickRow"),
     table("Reporting", "InvoiceRow"),
     table("SchemaThree", "ItemThree"),
     table("Shelf", "ShelfRow"),
@@ -811,6 +866,8 @@ test("a module mapping another module's table is MER-BE-064, whatever the mappin
   assert.equal(at(table("SchemaThree", "ItemThree")), `module SchemaThree maps SchemaOne's table a.items — ${read} SchemaOne's published contract`);
   assert.equal(at(table("Shelf", "ShelfRow")), `module Shelf maps Books's table app.books — ${read} Books's published contract`);
   assert.equal(at(table("Dispatch", "OrderRef")), `module Dispatch maps Orders's table app.orders — ${read} Orders's published contract`);
+  assert.equal(at(table("Picking", "PickRow")), `module Picking maps Stock's table app.stock — ${read} Stock's published contract`);
+  assert.equal(at(table("Courier", "CourierRow")), "table app.shipments is mapped by modules Courier and Shipping (with ToTable or [Table]) — one module owns a table; the other reads it through a port or a published contract");
   assert.equal(at(table("LedgerOne", "AccountOne")), "table app.accounts is mapped by modules LedgerOne and LedgerTwo (with ToTable or [Table]) — one module owns a table; the other reads it through a port or a published contract");
   assert.equal(at(table("LedgerTwo", "AccountTwo")), at(table("LedgerOne", "AccountOne")));
 });

@@ -187,11 +187,12 @@ test("FE-045 reports each unlabelled control once, including a tests folder insi
   ]);
 });
 
-// A copy of an FE-046 fixture with some files replaced (or, given null, deleted), run through the real CLI.
+// A copy of an FE-046 fixture (or, given null, an empty repository) with some files replaced (or, given null,
+// deleted), run through the real CLI.
 function fe046Repo(fixture, files, check) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "plumb-fe046-"));
   try {
-    fs.cpSync(path.join(HOME, "fixtures", "MER-FE-046", fixture), root, { recursive: true });
+    if (fixture) fs.cpSync(path.join(HOME, "fixtures", "MER-FE-046", fixture), root, { recursive: true });
     for (const [file, content] of Object.entries(files)) {
       if (content === null) fs.rmSync(path.join(root, file));
       else {
@@ -265,6 +266,80 @@ test("FE-046 matches by imported name when it can't resolve the specifier, and n
   // A local function that happens to share the provide's name is not the pair's provide.
   fe046Repo("bad", { "app/pages/b/index.vue": '<script setup lang="ts">\nconst provideAuth = (value: object) => value;\n\nprovideAuth({});\n</script>\n' }, (found) =>
     assert.ok(found.includes("error app/pages/b/ports/auth.ts:5"), found.join(", ")));
+});
+
+const fe046Page = (script, template = "<div />") => `<script setup lang="ts">\n${script}</script>\n\n<template>\n  ${template}\n</template>\n`;
+
+test("FE-046 reads a pair neither side calls, and reports it as soon as one side is", () => {
+  fe046Repo("good", { "app/pages/notes.vue": fe046Page('import { injectNotes } from "../features/notes/port";\n\ninjectNotes();\n') }, (found) =>
+    assert.deepEqual(found, ["error app/features/notes/port.ts:5"]));
+  fe046Repo("good", { "app/pages/notes.vue": fe046Page('import { provideNotes } from "../features/notes/port";\n\nprovideNotes({ save: () => {} });\n') }, (found) =>
+    assert.deepEqual(found, ["warn app/features/notes/port.ts:5"]));
+});
+
+test("FE-046 counts any reference to a pair's names as a use, so a provide it can't trace is not reported missing", async (t) => {
+  const provide = "{ book: async () => {} }";
+  const port = 'import { useProvideInject } from "../../shared/use-provide-inject";\n\nexport type Booking = { book(roomId: string): Promise<void> };\n\nexport const [injectBooking, provideBooking] = useProvideInject<Booking>("Booking");\n';
+  const named = 'import { injectBooking, provideBooking } from "~/features/booking";\n\ninjectBooking();\n';
+  const cases = {
+    "a value alias": { "app/pages/bookings.vue": fe046Page(`${named}const wire = provideBooking;\nwire(${provide});\n`) },
+    "a template expression": { "app/pages/bookings.vue": fe046Page(named, `<button type="button" @click="provideBooking(${provide})">Book</button>`) },
+    "a namespace export": {
+      "app/features/booking/index.ts": 'export * as booking from "./port";\n',
+      "app/pages/bookings.vue": fe046Page(`import { booking } from "~/features/booking";\nimport { injectBooking } from "../features/booking/port";\n\ninjectBooking();\nbooking.provideBooking(${provide});\n`),
+    },
+    "a default export": {
+      "app/features/booking/port.ts": `${port}\nexport default provideBooking;\n`,
+      "app/pages/bookings.vue": fe046Page(`import { injectBooking } from "~/features/booking";\nimport wire from "../features/booking/port";\n\ninjectBooking();\nwire(${provide});\n`),
+    },
+    "a destructured dynamic import": {
+      "app/pages/bookings.vue": fe046Page(`import { injectBooking } from "~/features/booking";\n\ninjectBooking();\nconst { provideBooking: wire } = await import("~/features/booking");\nwire(${provide});\n`),
+    },
+    "a dynamic import read as a value": {
+      "app/pages/bookings.vue": fe046Page(`import { injectBooking } from "~/features/booking";\n\ninjectBooking();\nimport("~/features/booking").then((booking) => booking.provideBooking(${provide}));\n`),
+    },
+    "a namespace passed on as a value": {
+      "app/pages/bookings.vue": fe046Page('import * as booking from "~/features/booking";\nimport { injectBooking } from "../features/booking/port";\n\ninjectBooking();\nconsole.log(booking);\n'),
+    },
+    "a rename through a workspace package": {
+      "app/features/booking/index.ts": 'export { injectBooking, provideBooking as wireBooking } from "./port";\n',
+      "app/pages/bookings.vue": fe046Page(`import { injectBooking, wireBooking } from "@acme/booking";\n\ninjectBooking();\nwireBooking(${provide});\n`),
+    },
+    "a .cts source": { "app/wire.cts": `import { provideBooking } from "./features/booking";\n\nprovideBooking(${provide});\n` },
+    "a .jsx source": { "app/wire.jsx": `import { provideBooking } from "./features/booking";\n\nprovideBooking(${provide});\n` },
+    "a .cjs source": { "app/wire.cjs": `import { provideBooking } from "./features/booking";\n\nprovideBooking(${provide});\n` },
+    "a call inside a class's extends clause": {
+      "app/wire.ts": `import { provideBooking } from "./features/booking";\n\nconst mix = <T>(value: T) => class {};\n\nexport class Wire extends mix(provideBooking(${provide})) {}\n`,
+    },
+  };
+  for (const [label, files] of Object.entries(cases)) {
+    await t.test(label, () => fe046Repo("bad", files, (found) =>
+      assert.ok(!found.some((finding) => finding.includes("app/features/booking/port.ts")), found.join(", "))));
+  }
+  // A mention in a type position provides nothing.
+  await t.test("a type that only names the provide is not a use", () =>
+    fe046Repo("bad", { "app/wire.ts": 'import { provideBooking } from "./features/booking";\n\nexport type Wire = typeof provideBooking;\nexport interface Wired extends Record<string, Wire> {}\n' }, (found) =>
+      assert.ok(found.includes("error app/features/booking/port.ts:5"), found.join(", "))));
+  // The inject side the same way: a pair whose inject is only held as a value is still consumed.
+  await t.test("an inject held as a value", () => fe046Repo("bad", { "app/components/RoomList.vue": fe046Page('import { injectRooms } from "../features/rooms";\n\nconst use = injectRooms;\nuse();\n') }, (found) =>
+    assert.ok(!found.includes("warn app/features/rooms/port.ts:5"), found.join(", "))));
+});
+
+test("FE-046 reports a pair outside every Nuxt app as a warning, since a host application may provide it", () => {
+  const helper = fs.readFileSync(path.join(HOME, "fixtures", "MER-FE-046", "good", "app", "shared", "use-provide-inject.ts"), "utf8");
+  const port = (helperPath, name) => `import { useProvideInject } from "${helperPath}";\n\nexport type ${name} = { open(): void };\n\nexport const [inject${name}, provide${name}] = useProvideInject<${name}>("${name}");\n`;
+  fe046Repo(null, {
+    "apps/web/nuxt.config.ts": "export default defineNuxtConfig({ ssr: false });\n",
+    "apps/web/app/shared/use-provide-inject.ts": helper,
+    "apps/web/app/features/cart/port.ts": port("../../shared/use-provide-inject", "Cart"),
+    "apps/web/app/pages/index.vue": fe046Page('import { injectCart } from "../features/cart/port";\n\ninjectCart();\n'),
+    "packages/ui/src/use-provide-inject.ts": helper,
+    "packages/ui/src/port.ts": port("./use-provide-inject", "Panel"),
+    "packages/ui/src/Panel.vue": fe046Page('import { injectPanel } from "./port";\n\ninjectPanel();\n'),
+  }, (found, out, findings) => {
+    assert.deepEqual(found, ["error apps/web/app/features/cart/port.ts:5", "warn packages/ui/src/port.ts:5"]);
+    assert.match(findings[1].message, /^injectPanel is called \(packages\/ui\/src\/Panel\.vue:4\) but providePanel is called nowhere/);
+  });
 });
 
 test("TE-009 flags hand-written stand-ins, including json/body that replaces a fetched response", () => {

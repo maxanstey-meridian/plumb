@@ -3,14 +3,14 @@ using System.Text.Json;
 
 namespace Plumb.CSharpFacts;
 
-// The output's shape is internal to this tool and lib/engine/csharp-facts.mjs, which are built and tested together:
-// a table of the strings that repeat (files, type names, members), and everything else refers to it by index, with -1
-// for null. References are grouped by file, one row each.
-static class FactsWriter
+// The output's shape is internal to this tool and lib/engine/csharp-facts.mjs, which are built and
+// tested together: a table of the strings that repeat (files, type names, members), and everything
+// else refers to it by index, with -1 for null. References are grouped by file, one row each.
+internal static class FactsWriter
 {
-    sealed class Strings
+    private sealed class Strings
     {
-        readonly Dictionary<string, int> index = new(StringComparer.Ordinal);
+        private readonly Dictionary<string, int> _index = new(StringComparer.Ordinal);
         public List<string> All { get; } = [];
 
         public int Of(string? value)
@@ -19,10 +19,10 @@ static class FactsWriter
             {
                 return -1;
             }
-            if (!index.TryGetValue(value, out var found))
+            if (!_index.TryGetValue(value, out var found))
             {
                 found = All.Count;
-                index[value] = found;
+                _index[value] = found;
                 All.Add(value);
             }
             return found;
@@ -33,11 +33,20 @@ static class FactsWriter
     {
         var strings = new Strings();
         using var stream = File.Create(options.Out);
-        using var json = new Utf8JsonWriter(stream, new JsonWriterOptions { Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping });
+        using var json = new Utf8JsonWriter(
+            stream,
+            new JsonWriterOptions { Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping }
+        );
 
-        // Everything but the string table is written first into memory, so the table can lead the output.
+        // Everything but the string table is written first into memory, so the table can lead the
+        // output.
         using var body = new MemoryStream();
-        using (var writer = new Utf8JsonWriter(body, new JsonWriterOptions { Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping }))
+        using (
+            var writer = new Utf8JsonWriter(
+                body,
+                new JsonWriterOptions { Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping }
+            )
+        )
         {
             writer.WriteStartObject();
             WriteProjects(writer, options, loader);
@@ -63,10 +72,12 @@ static class FactsWriter
         stream.Write(text);
     }
 
-    static void WriteProjects(Utf8JsonWriter writer, Options options, Loader loader)
+    private static void WriteProjects(Utf8JsonWriter writer, Options options, Loader loader)
     {
         writer.WriteStartArray("projects");
-        foreach (var entry in loader.Entries.Values.OrderBy(entry => entry.Path, StringComparer.Ordinal))
+        foreach (
+            var entry in loader.Entries.Values.OrderBy(entry => entry.Path, StringComparer.Ordinal)
+        )
         {
             writer.WriteStartObject();
             writer.WriteString("path", Paths.Relative(options.Root, entry.Path));
@@ -82,7 +93,11 @@ static class FactsWriter
         writer.WriteEndArray();
     }
 
-    static void WriteDocuments(Utf8JsonWriter writer, Strings strings, List<DocumentFacts> documents)
+    private static void WriteDocuments(
+        Utf8JsonWriter writer,
+        Strings strings,
+        List<DocumentFacts> documents
+    )
     {
         writer.WriteStartArray("documents");
         foreach (var document in documents)
@@ -92,10 +107,15 @@ static class FactsWriter
         writer.WriteEndArray();
     }
 
-    static void WriteTypes(Utf8JsonWriter writer, Strings strings, List<DocumentFacts> documents)
+    private static void WriteTypes(
+        Utf8JsonWriter writer,
+        Strings strings,
+        List<DocumentFacts> documents
+    )
     {
         // One entry per type per assembly, its parts from every document that declares it.
-        var grouped = new Dictionary<(string Assembly, string Name), List<(string File, TypePart Part)>>();
+        var grouped =
+            new Dictionary<(string Assembly, string Name), List<(string File, TypePart Part)>>();
         foreach (var document in documents)
         {
             foreach (var part in document.Parts)
@@ -110,7 +130,11 @@ static class FactsWriter
             }
         }
         writer.WriteStartArray("types");
-        foreach (var ((assembly, name), parts) in grouped.OrderBy(pair => pair.Key.Name, StringComparer.Ordinal).ThenBy(pair => pair.Key.Assembly, StringComparer.Ordinal))
+        foreach (
+            var ((assembly, name), parts) in grouped
+                .OrderBy(pair => pair.Key.Name, StringComparer.Ordinal)
+                .ThenBy(pair => pair.Key.Assembly, StringComparer.Ordinal)
+        )
         {
             var first = parts[0].Part;
             writer.WriteStartObject();
@@ -133,7 +157,8 @@ static class FactsWriter
                 writer.WriteNumberValue(strings.Of(file));
                 writer.WriteNumberValue(part.Start);
                 writer.WriteNumberValue(part.End);
-                // The frameworks a multi-target project's part is declared under; a single-target project's has none.
+                // The frameworks a multi-target project's part is declared under; a single-target
+                // project's has none.
                 if (part.Frameworks is { } frameworks)
                 {
                     writer.WriteStartArray();
@@ -151,7 +176,11 @@ static class FactsWriter
         writer.WriteEndArray();
     }
 
-    static void WriteUsings(Utf8JsonWriter writer, Strings strings, List<DocumentFacts> documents)
+    private static void WriteUsings(
+        Utf8JsonWriter writer,
+        Strings strings,
+        List<DocumentFacts> documents
+    )
     {
         writer.WriteStartArray("usings");
         foreach (var document in documents)
@@ -187,8 +216,13 @@ static class FactsWriter
         writer.WriteEndArray();
     }
 
-    // [file, [[start, end, from, fromMember, to, assembly, member, written, qualifier, external, namespace]…]]
-    static void WriteReferences(Utf8JsonWriter writer, Strings strings, List<DocumentFacts> documents)
+    // [file, [[start, end, from, fromMember, to, assembly, member, written, qualifier, external,
+    // namespace]…]]
+    private static void WriteReferences(
+        Utf8JsonWriter writer,
+        Strings strings,
+        List<DocumentFacts> documents
+    )
     {
         writer.WriteStartArray("references");
         foreach (var document in documents)
@@ -222,7 +256,11 @@ static class FactsWriter
         writer.WriteEndArray();
     }
 
-    static void WriteTables(Utf8JsonWriter writer, Strings strings, List<DocumentFacts> documents)
+    private static void WriteTables(
+        Utf8JsonWriter writer,
+        Strings strings,
+        List<DocumentFacts> documents
+    )
     {
         writer.WriteStartArray("tables");
         foreach (var document in documents)

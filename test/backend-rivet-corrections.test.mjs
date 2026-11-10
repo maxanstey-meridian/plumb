@@ -1176,6 +1176,38 @@ test("MER-RV-027 follows a positional record's parameter to the namespace's type
     assert.deepEqual(findings.map((finding) => finding.split(" on a response")[0]), ["api/Contracts/Orders/OrdersContract.cs:11\tParcel.Weight has a default"]);
 });
 
+// The project compiles the bin/ files, so the facts bind them; the rule still doesn't judge, follow, or read them.
+test("MER-RV-027 leaves a response contract, a response type and a JSON options call in a bin/ folder alone, and reports the same outside it", () => {
+    const options = (name) => `namespace App;\n\npublic static class ${name}\n{\n    public static void Use(IServiceCollection services) => services.ConfigureHttpJsonOptions(o => o.SerializerOptions.DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull);\n}\n`;
+    const usings = '<Using Include="System.Text.Json.Serialization" />';
+    const findings = scan("MER-RV-027", {
+        "api/Api.csproj": compiledBin(usings),
+        ...rivetStubs("api"),
+        // A type declared only in bin/ is no payload the rule follows, even from a contract outside it.
+        "api/Contracts/Orders/OrdersContract.cs":
+            "namespace App.Contracts.Orders;\n[RivetContract]\npublic static class OrdersContract\n{\n" +
+            '    public static readonly RouteDefinition<OrderDto> Get = Define.Get<OrderDto>("/api/orders/{id}");\n' +
+            '    public static readonly RouteDefinition<BinOwnedDto> Owned = Define.Get<BinOwnedDto>("/api/owned/{id}");\n}\n' +
+            'public sealed record OrderDto(Guid Id, string Note = "");\n',
+        "api/bin/Debug/BinOwnedDto.cs": 'namespace App.Contracts.Orders;\npublic sealed record BinOwnedDto(Guid Id, string Note = "");\n',
+        "api/Host/Json.cs": options("Json"),
+        "api/bin/Debug/BinJson.cs": options("BinJson"),
+        // A project whose only contract is in bin/ serves no response, so its JSON options are not read, and the
+        // contract's own response type is not judged.
+        "tool/Tool.csproj": compiledBin(usings),
+        ...rivetStubs("tool"),
+        "tool/bin/Debug/BinContract.cs":
+            "namespace App.Contracts.Bin;\n[RivetContract]\npublic static class BinContract\n{\n" +
+            '    public static readonly RouteDefinition<BinResponse> Get = Define.Get<BinResponse>("/api/bin");\n}\n' +
+            'public sealed record BinResponse(string Note = "");\n',
+        "tool/Json.cs": options("ToolJson"),
+    }, undefined, { git: true, restore: true });
+    assert.deepEqual(findings.map((finding) => finding.split(" on a response")[0].replace(/ in the host's JSON options.*/, "")), [
+        "api/Contracts/Orders/OrdersContract.cs:8\tOrderDto.Note has a default",
+        "api/Host/Json.cs:5\tDefaultIgnoreCondition = WhenWritingNull",
+    ], findings.join("\n"));
+});
+
 test("MER-BE-018 says 'declares itself' only for the namespace name, not a using on the same line", () => {
     const findings = scan("MER-BE-018", {
         "api/Api.csproj": '<Project Sdk="Microsoft.NET.Sdk.Web" />\n',

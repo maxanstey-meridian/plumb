@@ -5,28 +5,29 @@ using Microsoft.CodeAnalysis.MSBuild;
 
 namespace Plumb.CSharpFacts;
 
-// Opens each passed project in its own MSBuildWorkspace as it stands, with the build's output going where the project
-// puts it, and keeps every project of every reference closure, each target framework included.
-sealed partial class Loader : IDisposable
+// Opens each passed project in its own MSBuildWorkspace as it stands, with the build's output going
+// where the project puts it, and keeps every project of every reference closure, each target
+// framework included.
+internal sealed partial class Loader : IDisposable
 {
-    static readonly Regex ProjectFile = ProjectFileRegex();
+    private static readonly Regex _projectFile = ProjectFileRegex();
 
-    readonly Options options;
-    readonly string temp;
-    readonly List<MSBuildWorkspace> workspaces = [];
+    private readonly Options _options;
+    private readonly string _temp;
+    private readonly List<MSBuildWorkspace> _workspaces = [];
 
     public Loader(Options options, string temp)
     {
-        this.options = options;
-        this.temp = temp;
+        _options = options;
+        _temp = temp;
     }
 
-    // Project file (absolute) to its entry, and to the projects the workspace built for it (one per target framework, in
-    // the workspace's order), for every project seen.
+    // Project file (absolute) to its entry, and to the projects the workspace built for it (one per
+    // target framework, in the workspace's order), for every project seen.
     public Dictionary<string, ProjectEntry> Entries { get; } = new(StringComparer.Ordinal);
     public Dictionary<string, List<Project>> Projects { get; } = new(StringComparer.Ordinal);
 
-    ProjectEntry EntryOf(string path)
+    private ProjectEntry EntryOf(string path)
     {
         if (!Entries.TryGetValue(path, out var entry))
         {
@@ -39,9 +40,9 @@ sealed partial class Loader : IDisposable
     public async Task OpenAllAsync()
     {
         var index = 0;
-        foreach (var relative in options.Projects.Distinct())
+        foreach (var relative in _options.Projects.Distinct())
         {
-            var path = Path.GetFullPath(Path.Combine(options.Root, relative));
+            var path = Path.GetFullPath(Path.Combine(_options.Root, relative));
             EntryOf(path);
             // A project an earlier passed project already references is loaded in that closure.
             if (Projects.ContainsKey(path))
@@ -53,27 +54,37 @@ sealed partial class Loader : IDisposable
         }
     }
 
-    async Task OpenAsync(string path, int index)
+    private async Task OpenAsync(string path, int index)
     {
         var workspace = MSBuildWorkspace.Create();
-        workspaces.Add(workspace);
+        _workspaces.Add(workspace);
         var failures = new List<string>();
         workspace.RegisterWorkspaceFailedHandler(args =>
         {
-            // A project may give its frameworks one output path. The workspace keeps every framework and reports the rest
-            // as duplicates. That is no failure to load.
-            if (args.Diagnostic.Kind == WorkspaceDiagnosticKind.Failure && !args.Diagnostic.Message.StartsWith("Found project with the same file path and output path", StringComparison.Ordinal))
+            // A project may give its frameworks one output path. The workspace keeps every
+            // framework and reports the rest as duplicates. That is no failure to load.
+            if (
+                args.Diagnostic.Kind == WorkspaceDiagnosticKind.Failure
+                && !args.Diagnostic.Message.StartsWith(
+                    "Found project with the same file path and output path",
+                    StringComparison.Ordinal
+                )
+            )
             {
                 failures.Add(args.Diagnostic.Message);
             }
         });
-        // The build host writes a binary log of the design-time build here (it creates the folder), and it is complete
-        // when the open returns. The logs go with the temp folder at exit.
-        var binlogs = Path.Combine(temp, index.ToString(), "binlogs");
+        // The build host writes a binary log of the design-time build here (it creates the
+        // folder), and it is complete when the open returns. The logs go with the temp folder at
+        // exit.
+        var binlogs = Path.Combine(_temp, index.ToString(), "binlogs");
         Project? opened = null;
         try
         {
-            opened = await workspace.OpenProjectAsync(path, new BinaryLogger { Parameters = Path.Combine(binlogs, "build.binlog") });
+            opened = await workspace.OpenProjectAsync(
+                path,
+                new BinaryLogger { Parameters = Path.Combine(binlogs, "build.binlog") }
+            );
         }
         catch (Exception error)
         {
@@ -93,23 +104,36 @@ sealed partial class Loader : IDisposable
                 EntryOf(project.FilePath);
             }
             // A project in two closures keeps the frameworks of the workspace that saw it first.
-            foreach (var frameworks in closure.GroupBy(project => project.FilePath!, StringComparer.Ordinal))
+            foreach (
+                var frameworks in closure.GroupBy(
+                    project => project.FilePath!,
+                    StringComparer.Ordinal
+                )
+            )
             {
                 Projects.TryAdd(frameworks.Key, frameworks.ToList());
             }
         }
 
-        var known = new HashSet<string>(closure.Select(project => project.FilePath!), StringComparer.Ordinal) { path };
+        var known = new HashSet<string>(
+            closure.Select(project => project.FilePath!),
+            StringComparer.Ordinal
+        )
+        {
+            path,
+        };
         var log = BuildLog.Read(binlogs);
         foreach (var failure in failures)
         {
-            // A build warning is no failure to load: dropped when MSBuild called exactly this text a warning, and never an error.
+            // A build warning is no failure to load: dropped when MSBuild called exactly this text
+            // a warning, and never an error.
             if (log is not null && log.IsWarning(failure))
             {
                 continue;
             }
             Attribute(failure, path, known);
-            // A build error also fails the project whose build raised it, which the message may not name.
+            // A build error also fails the project whose build raised it, which the message may not
+            // name.
             if (log is not null)
             {
                 foreach (var file in log.ErrorFiles(failure))
@@ -123,16 +147,17 @@ sealed partial class Loader : IDisposable
         }
     }
 
-    // A failure goes to the project reference that failed. Each project file the message names is resolved: an absolute
-    // path as it is, a relative one (a reference as the project wrote it) against the folder of the project the message
-    // quotes, else the opener's. The failure goes to the named projects whose file doesn't exist; when none is missing,
-    // to every named project but the opener; with no other, to the opener.
-    void Attribute(string message, string opener, HashSet<string> known)
+    // A failure goes to the project reference that failed. Each project file the message names is
+    // resolved: an absolute path as it is, a relative one (a reference as the project wrote it)
+    // against the folder of the project the message quotes, else the opener's. The failure goes to
+    // the named projects whose file doesn't exist; when none is missing, to every named project but
+    // the opener; with no other, to the opener.
+    private void Attribute(string message, string opener, HashSet<string> known)
     {
         var named = new HashSet<string>(StringComparer.Ordinal);
         var relative = new List<string>();
         string? quoting = null;
-        foreach (Match match in ProjectFile.Matches(message))
+        foreach (Match match in _projectFile.Matches(message))
         {
             var written = match.Groups[1].Success ? match.Groups[1].Value : match.Groups[2].Value;
             if (!Path.IsPathRooted(written))
@@ -183,7 +208,7 @@ sealed partial class Loader : IDisposable
 
     public void Dispose()
     {
-        foreach (var workspace in workspaces)
+        foreach (var workspace in _workspaces)
         {
             workspace.Dispose();
         }

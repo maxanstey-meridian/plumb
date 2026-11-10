@@ -27,9 +27,11 @@ const globalNull = "DefaultIgnoreCondition = WhenWritingNull in the host's JSON 
 const globalDefault = "DefaultIgnoreCondition = WhenWritingDefault in the host's JSON options drops every field holding its type's default (null, 0, false…) from every response, so the client sees all of them as optional — remove it so every field is always sent";
 
 // Every RV-027 finding for a repo root, as `location<TAB>message`, sorted; severity and docRef are checked here.
-function findings(root, rule = RULE) {
+// A repo whose projects aren't restored is a degraded run: it says so on stderr and exits on its own code.
+function findings(root, rule = RULE, { degraded = false } = {}) {
     const result = spawnSync(PLUMB, [root, "--rule", rule, "--ci", "--json"], { encoding: "utf8" });
-    assert.ok([0, 1].includes(result.status), result.stderr);
+    if (degraded) assert.match(result.stderr, /C# facts incomplete for api\/Api\.csproj: not restored/);
+    else assert.ok([0, 1].includes(result.status), result.stderr);
     const all = JSON.parse(result.stdout).filter((finding) => finding.rule === rule);
     for (const finding of all) {
         assert.equal(finding.severity, rule === RULE ? "warn" : "error", finding.message);
@@ -40,15 +42,15 @@ function findings(root, rule = RULE) {
 }
 
 // A throwaway repo holding only `files` (each an array of lines), its projects restored, scanned for RV-027.
-function scan(files, rule = RULE) {
+function scan(files, rule = RULE, { restore = true } = {}) {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "plumb-rv027-"));
     try {
         for (const [file, content] of Object.entries(files)) {
             fs.mkdirSync(path.dirname(path.join(root, file)), { recursive: true });
             fs.writeFileSync(path.join(root, file), Array.isArray(content) ? `${content.join("\n")}\n` : content);
         }
-        restoreProjects(root);
-        return findings(root, rule);
+        if (restore) restoreProjects(root);
+        return findings(root, rule, { degraded: !restore });
     } finally {
         fs.rmSync(root, { recursive: true, force: true });
     }
@@ -171,6 +173,20 @@ test("MER-RV-027 reads a global DefaultIgnoreCondition only where Rivet response
         [`src/Host.Specs/Json.cs:4\t${globalNull}`, `src/Host/Json.cs:4\t${globalNull}`]);
     // A repo that serves no Rivet response has nothing for the setting to strip.
     assert.deepEqual(scan({ "src/Tool/Tool.csproj": project("Microsoft.NET.Sdk", hostItems), "src/Tool/Json.cs": setting("App.Tool") }), []);
+});
+
+test("MER-RV-027 still reads a global DefaultIgnoreCondition in a project whose compiler facts did not load", () => {
+    // Not restored, the project loads no facts: the response types can't be bound, but the host's options and the
+    // contract that makes it serve responses are read from the text.
+    assert.deepEqual(scan({
+        "api/Api.csproj": webApp,
+        ...rivetStubs("api"),
+        "api/Contracts/Orders/OrdersContract.cs": contract("OrderDto", "public sealed record OrderDto(Guid Id);"),
+        "api/Program.cs": [
+            "var builder = WebApplication.CreateBuilder(args);",
+            "builder.Services.ConfigureHttpJsonOptions(o => o.SerializerOptions.DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull);",
+        ],
+    }, RULE, { restore: false }), [`api/Program.cs:2\t${globalNull}`]);
 });
 
 test("MER-RV-027 flags a class, struct or property record response once and reads only its public instance properties", () => {

@@ -127,11 +127,29 @@ const mainFiles = {
         public static Metadata.Builders.EntityTypeBuilder ToView(this Metadata.Builders.EntityTypeBuilder builder, string name) => builder;
         public static Metadata.Builders.OtherBuilder ToTable(this Metadata.Builders.OtherBuilder builder, string name) => builder;
     }
+    public static class RelationalOwnedNavigationBuilderExtensions
+    {
+        public static Metadata.Builders.OwnedNavigationBuilder<TOwner, T> ToTable<TOwner, T>(this Metadata.Builders.OwnedNavigationBuilder<TOwner, T> builder, string name) where TOwner : class where T : class => builder;
+        public static Metadata.Builders.OwnedNavigationBuilder ToTable(this Metadata.Builders.OwnedNavigationBuilder builder, string name) => builder;
+        public static Metadata.Builders.OwnedNavigationBuilder ToView(this Metadata.Builders.OwnedNavigationBuilder builder, string name) => builder;
+    }
 }
 namespace Microsoft.EntityFrameworkCore.Metadata.Builders
 {
-    public class EntityTypeBuilder { }
-    public class EntityTypeBuilder<T> : EntityTypeBuilder where T : class { }
+    public class EntityTypeBuilder
+    {
+        public EntityTypeBuilder OwnsOne(string ownedTypeName, string navigationName, Action<OwnedNavigationBuilder> buildAction) => this;
+        public EntityTypeBuilder OwnsMany(string ownedTypeName, string navigationName, Action<OwnedNavigationBuilder> buildAction) => this;
+    }
+    public class EntityTypeBuilder<T> : EntityTypeBuilder where T : class
+    {
+        public EntityTypeBuilder<T> OwnsMany<TRelated>(System.Linq.Expressions.Expression<Func<T, System.Collections.Generic.IEnumerable<TRelated>>> navigation, Action<OwnedNavigationBuilder<T, TRelated>> buildAction) where TRelated : class => this;
+    }
+    public class OwnedNavigationBuilder
+    {
+        public OwnedNavigationBuilder OwnsOne(string ownedTypeName, string navigationName, Action<OwnedNavigationBuilder> buildAction) => this;
+    }
+    public class OwnedNavigationBuilder<TOwner, T> : OwnedNavigationBuilder where TOwner : class where T : class { }
     public class OtherBuilder { }
 }
 namespace Microsoft.EntityFrameworkCore.Migrations { public abstract class Migration { } }
@@ -170,6 +188,22 @@ public sealed class FormConfiguration
 public sealed class PersonRow { }
 [System.ComponentModel.DataAnnotations.Schema.Table("units", Schema = "dir")]
 public sealed class UnitRow { }
+[System.ComponentModel.DataAnnotations.Schema.Table(name: "named")]
+public sealed class NamedRow { }
+`,
+  // An owned type's own table, through the owner's OwnsMany, is a mapping like an entity's.
+  "api/Modules/Forms/Infrastructure/Owned.cs": `using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Metadata.Builders;
+namespace ${modules}.Forms.Infrastructure;
+public sealed class LineRow { }
+public sealed class Owner { public List<LineRow> Lines { get; } = []; }
+public sealed class OwnedMapping
+{
+    public void Configure(EntityTypeBuilder<Owner> builder)
+    {
+        builder.OwnsMany(owner => owner.Lines, lines => lines.ToTable("form_lines"));
+    }
+}
 `,
   // A ToView that isn't Entity Framework's, and a ToTable on a builder that isn't an EntityTypeBuilder: neither is a mapping.
   "api/Modules/Forms/Infrastructure/Mine.cs": `using ${modules}.Forms.Domain;
@@ -225,6 +259,16 @@ public sealed class AppModelSnapshot : ModelSnapshot
         modelBuilder.HasDefaultSchema("snapshot");
         modelBuilder.Entity("${modules}.Forms.Domain.FormEntity", b => b.ToTable("forms"));
         modelBuilder.Entity("${modules}.Forms.Domain.Holder+Part", b => { b.ToTable("parts"); });
+        // An owned type is written inside its owner's lambda, with a table of its own, and can own another.
+        modelBuilder.Entity("${modules}.Forms.Domain.Orders", b =>
+        {
+            b.ToTable("orders");
+            b.OwnsMany("${modules}.Forms.Domain.Orders+Line", "Lines", b1 =>
+            {
+                b1.ToTable("order_lines");
+                b1.OwnsOne("${modules}.Forms.Domain.Deep", "Deep", b2 => { b2.ToView("deep_view"); });
+            });
+        });
     }
 }
 `,
@@ -696,6 +740,10 @@ test("tables: ToTable and ToView on an EntityTypeBuilder, a [Table] attribute, a
     ["api/Modules/Forms/Infrastructure/FormConfiguration.cs", 12, "ToView", "audit", "forms"],
     ["api/Modules/Forms/Infrastructure/FormConfiguration.cs", 17, "Table", null, "people"],
     ["api/Modules/Forms/Infrastructure/FormConfiguration.cs", 19, "Table", "dir", "units"],
+    // `[Table(name: "named")]` names the constructor's parameter.
+    ["api/Modules/Forms/Infrastructure/FormConfiguration.cs", 21, "Table", null, "named"],
+    // An owned type's own table, through the owner's OwnsMany.
+    ["api/Modules/Forms/Infrastructure/Owned.cs", 10, "ToTable", null, "form_lines"],
   ]);
   // A ToTable or ToView whose schema argument isn't a constant leaves the table unknown, so Schemas.cs gives none.
   assert.ok(!repo.facts.tables.some((table) => table.file.path.endsWith("Schemas.cs")));
@@ -706,6 +754,10 @@ test("a migrations snapshot's entities are snapshotTables, not tables, and its n
   assert.deepEqual(repo.facts.snapshotTables.map((table) => [table.file.path, table.entity, table.method, table.schema, table.table]), [
     ["api/Migrations/AppModelSnapshot.cs", "App.Modules.Forms.Domain.FormEntity", "ToTable", null, "forms"],
     ["api/Migrations/AppModelSnapshot.cs", "App.Modules.Forms.Domain.Holder.Part", "ToTable", null, "parts"],
+    ["api/Migrations/AppModelSnapshot.cs", "App.Modules.Forms.Domain.Orders", "ToTable", null, "orders"],
+    // An owned type's table is the owned type's, however deep it is owned.
+    ["api/Migrations/AppModelSnapshot.cs", "App.Modules.Forms.Domain.Orders.Line", "ToTable", null, "order_lines"],
+    ["api/Migrations/AppModelSnapshot.cs", "App.Modules.Forms.Domain.Deep", "ToView", null, "deep_view"],
   ]);
   assert.ok(repo.facts.tables.every((table) => !table.file.path.startsWith("api/Migrations/")));
 });
@@ -733,6 +785,33 @@ test("positions are offsets into Plumb's text: a BOM counts, and \\r\\n line end
   // A BOM file's usings and parts are shifted the same way.
   const [using] = repo.facts.usings(repo.context.file("api/Common/Bom.cs"));
   assert.equal(sourceOf(repo, "api/Common/Bom.cs").slice(using.start, using.start + 5), "using");
+});
+
+// The tool opens a passed project's whole reference closure and skips a passed project an earlier one opened, so the projects
+// are handed referrers first: `top` references `mid`, which references `lib`, and path order would open each alone and again.
+const referrers = lazy(() => repository("referrers-first", {
+  "lib/Lib.csproj": project(),
+  "lib/Lib.cs": "namespace Lib;\npublic class Thing { }\n",
+  "mid/Mid.csproj": project('\n  <ItemGroup><ProjectReference Include="../lib/Lib.csproj" /></ItemGroup>'),
+  "mid/Mid.cs": "namespace Mid;\npublic class Thing { Lib.Thing? lib; }\n",
+  "other/Other.csproj": project(),
+  "other/Other.cs": "namespace Other;\npublic class Thing { }\n",
+  "top/Top.csproj": project('\n  <ItemGroup><ProjectReference Include="../mid/Mid.csproj" /></ItemGroup>'),
+  "top/Top.cs": "namespace Top;\npublic class Thing { Mid.Thing? mid; }\n",
+}));
+
+test("a project is handed to the tool after every passed project that references it, ties by path", () => {
+  const repo = referrers();
+  assert.deepEqual(projectsHanded(repo.handed[0]), ["other/Other.csproj", "top/Top.csproj", "mid/Mid.csproj", "lib/Lib.csproj"]);
+  assert.deepEqual(repo.diagnostics, []);
+  assert.deepEqual(repo.facts.projects.map((entry) => [entry.path, entry.loaded]), [
+    ["lib/Lib.csproj", true],
+    ["mid/Mid.csproj", true],
+    ["other/Other.csproj", true],
+    ["top/Top.csproj", true],
+  ]);
+  // Every project's code is read, whichever project opened it.
+  for (const name of ["Lib.Thing", "Mid.Thing", "Other.Thing", "Top.Thing"]) assert.ok(repo.facts.types.has(name), name);
 });
 
 test("a file under two projects' folders, compiled by both, is read once, from the nearer project", () => {
@@ -1593,6 +1672,14 @@ test("the message names the least error by file, line, id, and message, and coun
   refused(repo, "least/Least.csproj", ["least/Alpha.cs", "least/Zed.cs"], /^does not compile: least\/Alpha\.cs:2 CS0246: The type or namespace name 'Aardvark' could not be found \(are you missing a using directive or an assembly reference\?\) \(and 3 more\)\. Run dotnet build/);
 });
 
+test("the does-not-compile message points at a README heading that exists", () => {
+  const [message] = entryOf(errors(), "least/Least.csproj").messages;
+  const heading = message.match(/see (.+) in Plumb's README$/)?.[1];
+  assert.ok(heading, message);
+  const readme = fs.readFileSync(new URL("../README.md", import.meta.url), "utf8");
+  assert.ok(readme.split("\n").some((line) => /^#{2,6} /.test(line) && line.replace(/^#+ /, "") === heading), `README has no heading "${heading}"`);
+});
+
 test("a loaded project's use of a type in a project that doesn't compile has no parts, and the broken project is reported", () => {
   const repo = errors();
   assert.equal(entryOf(repo, "user/User.csproj").loaded, true);
@@ -2114,6 +2201,17 @@ test("a project with two frameworks and its own literal output and intermediate 
   const generated = csharpUnder(repo, "o/intermediate");
   assert.ok(generated.length > 0);
   for (const file of generated) assert.equal(repo.facts.hasFacts(file), false, file);
+});
+
+// The tool's own build follows the repo's .NET tooling rules: the canonical editorconfig is held by dotnet/.editorconfig, the
+// SDK is pinned, and CSharpier is in the tool manifest.
+test("the facts tool is built under the canonical editorconfig, a pinned SDK, and a CSharpier manifest", () => {
+  const here = (relative) => fs.readFileSync(new URL(`../${relative}`, import.meta.url), "utf8");
+  const held = new Set(here("dotnet/.editorconfig").split("\n"));
+  const missing = here("configs/editorconfig.dotnet").split("\n").filter((line) => line.trim() && !held.has(line));
+  assert.deepEqual(missing, []);
+  assert.equal(JSON.parse(here("global.json")).sdk.version.split(".")[0], "10");
+  assert.ok(JSON.parse(here(".config/dotnet-tools.json")).tools.csharpier);
 });
 
 // The diagnostics, through an injected `dotnet` lookup, `run`, and tool folder over an in-memory repository.

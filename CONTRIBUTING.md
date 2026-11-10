@@ -10,6 +10,10 @@ The test suite and `./plumb --self-test` use every one of Plumb's [prerequisites
 
 The test suite also needs the `meridian` skill from [workflow-skills](https://github.com/maxanstey-meridian/workflow-skills), which `./plumb --self-test` doesn't: the catalog test checks every emitted docRef, and every docRef literal in plumb's sources, against its `references/` folder, read from `MERIDIAN_REFERENCES` when set, else `~/.claude/skills/meridian/references`
 
+## The C# Facts Tool
+
+`dotnet/Plumb.CSharpFacts/` is built with the SDK that `global.json` pins and under `dotnet/.editorconfig`, a copy of `configs/editorconfig.dotnet` that its build enforces. It is formatted with CSharpier from `.config/dotnet-tools.json`: run `dotnet tool restore`, then `dotnet csharpier format dotnet/Plumb.CSharpFacts`, before `pnpm build:csharp`, since a formatted source is a changed source.
+
 ## Add A Rule
 
 1. Add a descriptor-backed rule under `lib/in-process-rules/` when the existing path, text, configuration, TypeScript, Vue, C#, resolution, frontend graph, or .NET project analysis is sufficient.

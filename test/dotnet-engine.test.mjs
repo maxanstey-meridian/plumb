@@ -191,7 +191,7 @@ test("a project is test code by a test folder's name rule or a test framework pa
   assert.equal(evidence("helpers/A.cs").test, false);
 });
 
-test("one using parse with offsets serves the resolver and MER-BE-018: every C# directive form and every <Using> item form", () => {
+test("one using parse with offsets serves the rules that read it: every C# directive form and every <Using> item form", () => {
   const props = '<Project>\n  <!-- <ItemGroup><Using Include="Commented.Out" /></ItemGroup> -->\n  <ItemGroup />\n' +
     "  <ItemGroup Label=\"a > b\">\n    <Using\n      Include=\"App.One; global::App.Two\" Alias='Two' />\n    <Using Include=\"App.Statics\" Static=\"true\" />\n" +
     "    <Using Include=\"App.ItemTest\" Condition=\" 'TRUE' == '$(IsTestProject)' \" />\n    <Using Include=\"App.NotTest\" Condition=\"'$(IsTestProject)' != 'true'\" />\n  </ItemGroup>\n" +
@@ -202,12 +202,6 @@ test("one using parse with offsets serves the resolver and MER-BE-018: every C# 
     ["Directory.Build.props", props],
     ["api/Api.csproj", "<Project />"],
     ["api/Usings.cs", usings],
-    ["api/Item.cs", "namespace App.Wire;\npublic sealed record Page<T>(T Item);\npublic sealed record Item(int A);\n"],
-    ["api/ItemTest.cs", "namespace App.ItemTest;\npublic sealed record OnlyTests(int A);\n"],
-    ["api/GroupTest.cs", "namespace App.GroupTest;\npublic sealed record GroupOnly(int A);\n"],
-    ["api/NotTest.cs", "namespace App.NotTest;\npublic sealed record Production(int A);\n"],
-    ["tests/Api.Tests/Api.Tests.csproj", '<Project><PropertyGroup><IsTestProject>true</IsTestProject></PropertyGroup></Project>'],
-    ["tests/Api.Tests/Uses.cs", "namespace Tests;\npublic sealed record Uses(int A);\n"],
   ]), [Capability.CSHARP, Capability.DOTNET_PROJECTS]);
   const { csharp } = f.context;
   const file = (name) => csharp.csharpFiles.find((value) => value.path === name) ?? f.context.file(name);
@@ -233,50 +227,6 @@ test("one using parse with offsets serves the resolver and MER-BE-018: every C# 
   ]);
   // A multi-line item is located at its `<Using`.
   assert.deepEqual(items.map((item) => file("Directory.Build.props").lineMap().lineAt(item.offset)), [5, 5, 7, 8, 9, 12]);
-
-  // The resolver reads the same parse: a generic alias names the generic type, and test-only <Using> items reach
-  // test projects only.
-  const at = (from, name) => csharp.resolveType(name, from, from.text().length - 1)?.fullName ?? null;
-  assert.equal(at(source, "Wire"), "App.Wire.Page");
-  assert.equal(at(file("api/Item.cs"), "Production"), "App.NotTest.Production");
-  for (const name of ["OnlyTests", "GroupOnly"]) assert.equal(at(file("api/Item.cs"), name), null, name);
-  const tests = file("tests/Api.Tests/Uses.cs");
-  for (const name of ["OnlyTests", "GroupOnly", "Production"]) assert.notEqual(at(tests, name), null, name);
-});
-
-test("enclosing types and type references come from the resolver's scan", () => {
-  const f = fixture(new Map([
-    ["api/Ids.cs", "namespace App.Ids\n{\n    public static class Outer<T> where T : class\n    {\n        public sealed record Done(int A);\n" +
-      "        public static class Inner\n        {\n            public const string AId = \"a\";\n        }\n        public const string BId = \"b\";\n    }\n}\n"],
-    ["api/Refs.cs", "using App.Ids;\nnamespace App.Refs;\npublic sealed record Refs(global::App.Ids.Outer<Refs>.Inner Value, List<Outer<Refs>> Items)\n{\n" +
-      "    public int Count => Items?.Count ?? this.Value.ToString().Length; // Outer in a comment\n" +
-      "    public object[] Copy => [.. Seeds, ..Spare];\n}\npublic enum Reason { [Display(Name = Cap)] Inner, Spent = Done,\n#if DEBUG\n    Probe,\n#endif\n    [Kind(typeof(int[]))] Wide, Both = Inner | Spent }\n"],
-  ]), [Capability.CSHARP]);
-  const { csharp } = f.context;
-  const ids = f.context.file("api/Ids.cs"), text = ids.text();
-  assert.deepEqual(csharp.enclosingTypes(ids, text.indexOf("AId")), ["Outer", "Inner"]);
-  assert.deepEqual(csharp.enclosingTypes(ids, text.indexOf("BId")), ["Outer"]);
-  // A type's own parameter list is outside its body.
-  assert.deepEqual(csharp.enclosingTypes(ids, text.indexOf("int A")), ["Outer"]);
-  assert.deepEqual(csharp.enclosingTypes(ids, 0), []);
-
-  const refs = f.context.file("api/Refs.cs");
-  const written = csharp.typeReferences(refs).map((reference) => reference.written);
-  // Each segment of a dotted name, no declared names (the namespace, the record, the enum's members), no member
-  // accesses, no comments; a collection spread's operand (`[.. Seeds]`) is a name, not a member access, and so are an
-  // enum member's attribute and initializer.
-  for (const name of ["App", "App.Ids", "global::App.Ids.Outer", "Refs", "List", "Outer", "Items", "Value", "Seeds", "Spare", "Display", "Done"]) {
-    assert.ok(written.includes(name), name);
-  }
-  // A member after a preprocessor line or a nested-bracket attribute is declared too, and so is a sibling an
-  // initializer names.
-  for (const name of ["App.Refs", "ToString", "Length", "Reason", "Inner", "Spent", "Probe", "Wide"]) assert.ok(!written.includes(name), name);
-  assert.ok(written.includes("Kind"));
-  assert.equal(written.filter((name) => name === "Refs").length, 2);
-  assert.equal(written.filter((name) => name === "Outer").length, 1);
-  const reference = csharp.typeReferences(refs).find((value) => value.written === "global::App.Ids.Outer");
-  assert.equal(refs.text().slice(reference.offset, reference.offset + 5), "Outer");
-  assert.equal(csharp.resolveType(reference.written, refs, reference.offset)?.fullName, "App.Ids.Outer");
 });
 
 test("project ownership, test evidence, references, cycles, and providers share one parse", () => {
@@ -399,129 +349,6 @@ test("TE rules agree with the shared C# and frontend test-source definitions", (
   }
 });
 
-test("C# type names resolve the way the compiler looks them up: nested types, namespaces and parents, usings, aliases", () => {
-  const f = fixture(new Map([
-    ["api/Api.csproj", '<Project Sdk="Microsoft.NET.Sdk.Web"><ItemGroup><Using Include="App.Shared" /><Using Include="App.Wire" Alias="Wire" /><Using Include="App.Statics" Static="true" /></ItemGroup></Project>'],
-    ["api/Contracts/Orders/OrderModels.cs", "namespace App.Contracts.Orders;\npublic sealed record OrderDto(Guid Id);\n"],
-    ["api/Modules/Orders/Contracts/OrderDto.cs", "namespace App.Modules.Orders.Contracts;\npublic sealed record OrderDto(Guid Id, int Version = 1);\npublic sealed record OnlyHere(int A);\n"],
-    ["api/Modules/Billing/Contracts/OnlyHere.cs", "namespace App.Modules.Billing.Contracts\n{\n    public sealed record OnlyHere(int B);\n}\n"],
-    ["api/Common/Paging.cs", "namespace App;\npublic sealed record Paging(int Page);\n"],
-    ["api/Shared/Money.cs", "namespace App.Shared;\npublic readonly record struct Money(decimal Amount);\n"],
-    ["api/Wire/Envelope.cs", "namespace App.Wire;\npublic sealed record Envelope(int A);\n"],
-    ["api/Outer.cs", "namespace App.Contracts.Orders;\npublic static class Outer\n{\n    public sealed record Inner(int A);\n    public sealed record UsesInner(Inner Value);\n}\npublic sealed record Inner(int B);\n"],
-    ["api/Noise.cs", "namespace App.Noise;\npublic static class Noise\n{\n    static void Run<T>(List<OrderDto> records) where T : class\n    {\n        foreach (var record in records) { }\n    }\n}\n"],
-    ["api/Nested.cs", "namespace App.Contracts.Orders;\npublic sealed record Shipment(IReadOnlyList<Parcel> Parcels)\n{\n    public sealed record Parcel(int Weight);\n}\n" +
-      "public sealed record Crate(IReadOnlyList<Box> Boxes)\n{\n    public sealed record Box(int Size);\n}\npublic sealed record Box(int Size = 0);\n"],
-    ["api/Pragma.cs", "#nullable enable\nrecord Loose(int A);\n#region Response record types\n#endregion\n"],
-    ["api/Shadow.cs", "using Inner = App.Wire.Envelope;\nusing Paging = App.Wire.Envelope;\nusing Envelopes = App.Wire.Envelope[];\nnamespace App.Contracts.Orders;\n" +
-      "public static class Shadow\n{\n    public sealed record Inner(int A);\n    public sealed record UsesInner(Inner Value);\n}\npublic sealed record UsesPaging(Paging P, Envelopes E);\n"],
-    // Directives written inside a namespace belong to it: they beat its parents' members, and reach only its block.
-    ["api/Inside.cs", "namespace App.Contracts.Orders\n{\n    using Paging = App.Wire.Envelope;\n    public sealed record UsesInsideAlias(Paging P);\n}\n" +
-      "namespace App.Contracts.Orders\n{\n    public sealed record OutsideTheBlock(Paging P);\n}\n"],
-    // An alias bound outside the scan stays bound: an unreferenced project's App.Json is not what it names.
-    ["api/Outside.cs", "using Json = System.Text.Json.Nodes.JsonObject;\nusing Monies = App.Shared.Money?[];\nnamespace App.Contracts.Orders;\npublic sealed record UsesJson(Json J, Monies M);\n"],
-    ["tools/Other/Other.csproj", '<Project Sdk="Microsoft.NET.Sdk" />'],
-    ["tools/Other/Json.cs", "namespace App;\npublic sealed record Json(int A);\n"],
-    ["api/Usings.cs", "global using App.Globals;\n"],
-    ["api/Globals/Flag.cs", "namespace App.Globals;\npublic sealed record Flag(bool On);\n"],
-    ["Directory.Build.props", '<Project><ItemGroup><Using Include="App.Props" /></ItemGroup></Project>'],
-    ["api/Props/Setting.cs", "namespace App.Props;\npublic sealed record Setting(int A);\n"],
-    ["api/Referrer.cs",
-      "using App.Modules.Orders.Contracts;\nusing App.Modules.Billing.Contracts;\nusing Published = App.Modules.Orders.Contracts;\nusing Dto = App.Contracts.Orders.OrderDto;\n" +
-      "namespace App.Contracts.Orders.Deep;\npublic sealed record Referrer(OrderDto A);\n"],
-  ]), [Capability.CSHARP, Capability.DOTNET_PROJECTS]);
-  const { csharp } = f.context;
-  const file = (name) => csharp.csharpFiles.find((value) => value.path === name);
-  const referrer = file("api/Referrer.cs"), at = referrer.text().indexOf("public sealed record Referrer");
-  const resolved = (name, from = referrer, offset = at) => csharp.resolveType(name, from, offset)?.fullName ?? null;
-
-  // A parent namespace (App.Contracts.Orders) wins over a using of the same short name.
-  assert.equal(resolved("OrderDto"), "App.Contracts.Orders.OrderDto");
-  assert.equal(resolved("Paging"), "App.Paging");
-  assert.equal(resolved("App.Modules.Orders.Contracts.OrderDto"), "App.Modules.Orders.Contracts.OrderDto");
-  assert.equal(resolved("global::App.Modules.Orders.Contracts.OrderDto"), "App.Modules.Orders.Contracts.OrderDto");
-  assert.equal(resolved("Published.OrderDto"), "App.Modules.Orders.Contracts.OrderDto");
-  assert.equal(resolved("Dto"), "App.Contracts.Orders.OrderDto");
-  // Project-level <Using>, plain and aliased; a Static one imports no types. A `global using` in any of the
-  // project's files and a <Using> in its Directory.Build.props reach it too.
-  assert.equal(resolved("Money"), "App.Shared.Money");
-  assert.equal(resolved("Wire.Envelope"), "App.Wire.Envelope");
-  assert.equal(resolved("Flag"), "App.Globals.Flag");
-  assert.equal(resolved("Setting"), "App.Props.Setting");
-  // A declaration after a preprocessor line, with no modifier, is still a declaration; a keyword on the
-  // preprocessor line itself declares nothing.
-  assert.equal(resolved("Loose"), "Loose");
-  assert.equal(resolved("types"), null);
-  // Two usings bring the same name in: CS0104, so ambiguous.
-  assert.equal(resolved("OnlyHere"), null);
-  assert.equal(resolved("Guid"), null);
-  // A nested type wins inside its outer type; outside, the namespace's own Inner.
-  const outer = file("api/Outer.cs");
-  assert.equal(resolved("Inner", outer, outer.text().indexOf("UsesInner")), "App.Contracts.Orders.Outer.Inner");
-  assert.equal(resolved("Inner", outer, outer.text().lastIndexOf("record Inner")), "App.Contracts.Orders.Inner");
-  // A file's aliases come after enclosing types and every enclosing namespace's own members; an array alias
-  // names its element type.
-  const shadow = file("api/Shadow.cs");
-  assert.equal(resolved("Inner", shadow, shadow.text().indexOf("UsesInner")), "App.Contracts.Orders.Shadow.Inner");
-  assert.equal(resolved("Paging", shadow, shadow.text().indexOf("UsesPaging")), "App.Paging");
-  assert.equal(resolved("Envelopes", shadow, shadow.text().indexOf("UsesPaging")), "App.Wire.Envelope");
-  const inside = file("api/Inside.cs");
-  assert.equal(resolved("Paging", inside, inside.text().indexOf("UsesInsideAlias")), "App.Wire.Envelope");
-  assert.equal(resolved("Paging", inside, inside.text().indexOf("OutsideTheBlock")), "App.Paging");
-  const outside = file("api/Outside.cs");
-  assert.equal(resolved("Json", outside, outside.text().indexOf("UsesJson")), null);
-  assert.equal(resolved("Monies", outside, outside.text().indexOf("UsesJson")), "App.Shared.Money");
-  // A positional record's parameter list is outside its body, so it doesn't see its nested types (CS0246): an
-  // unqualified Parcel there finds nothing, and Box finds the namespace's own Box.
-  const nested = file("api/Nested.cs");
-  assert.equal(resolved("Parcel", nested, nested.text().indexOf("record Shipment")), null);
-  assert.equal(resolved("Box", nested, nested.text().indexOf("record Crate")), "App.Contracts.Orders.Box");
-  // `where T : class` and `var record in` declare nothing.
-  assert.equal(resolved("App.Noise.Noise.where"), null);
-  assert.equal(resolved("App.Noise.Noise.in"), null);
-});
-
-test("C# type names prefer the declaration in the referrer's project closure", () => {
-  const f = fixture(new Map([
-    ["one/One.csproj", "<Project />"],
-    ["one/OrderDto.cs", "namespace App.Contracts;\npublic sealed record OrderDto(int A);\n"],
-    ["one/Uses.cs", "namespace App.Contracts;\npublic sealed record Uses(OrderDto A);\n"],
-    ["two/Two.csproj", "<Project />"],
-    ["two/OrderDto.cs", "namespace App.Contracts;\npublic sealed record OrderDto(int B);\n"],
-    // An unreferenced project's App.Manifest sits in a parent namespace, but the referrer's own using wins.
-    ["one/Shared/Manifest.cs", "namespace App.Shared;\npublic sealed record Manifest(string? Returns = null);\n"],
-    ["one/UsesManifest.cs", "using App.Shared;\nnamespace App.Contracts;\npublic sealed record UsesManifest(Manifest M);\n"],
-    ["two/Manifest.cs", "namespace App;\npublic sealed record Manifest(int X);\n"],
-    // Only an unreferenced project declares Remote: the whole scan is the fallback.
-    ["two/Remote.cs", "namespace App.Contracts;\npublic sealed record Remote(int X);\n"],
-    // Two of one/'s usings bring Clash in (CS0104); two/'s App.Clash must not win through the fallback.
-    ["one/Left/Clash.cs", "namespace App.Left;\npublic sealed record Clash(int A);\n"],
-    ["one/Right/Clash.cs", "namespace App.Right;\npublic sealed record Clash(int B);\n"],
-    ["one/UsesClash.cs", "using App.Left;\nusing App.Right;\nnamespace App.Contracts;\npublic sealed record UsesClash(Clash C);\n"],
-    ["two/Clash.cs", "namespace App;\npublic sealed record Clash(int C);\n"],
-    // Aliases bound to the unreferenced project's Remote and to a type outside the scan.
-    ["one/UsesAliases.cs", "using Far = App.Contracts.Remote;\nusing Thing = Vendor.Http.Thing;\nnamespace App.Contracts;\npublic sealed record UsesAliases(Far F, Thing T);\n"],
-  ]), [Capability.CSHARP, Capability.DOTNET_PROJECTS]);
-  const { csharp } = f.context;
-  const file = (name) => csharp.csharpFiles.find((value) => value.path === name);
-  const uses = file("one/Uses.cs");
-  const result = csharp.resolveType("OrderDto", uses, uses.text().indexOf("record Uses"));
-  assert.deepEqual(result.declarations.map((declaration) => declaration.file.path), ["one/OrderDto.cs"]);
-  const manifest = file("one/UsesManifest.cs");
-  assert.equal(csharp.resolveType("Manifest", manifest, manifest.text().indexOf("record UsesManifest"))?.fullName, "App.Shared.Manifest");
-  assert.equal(csharp.resolveType("Remote", uses, uses.text().indexOf("record Uses"))?.fullName, "App.Contracts.Remote");
-  const clash = file("one/UsesClash.cs");
-  assert.equal(csharp.resolveType("Clash", clash, clash.text().indexOf("record UsesClash")), null);
-  // visibleOnly: an unreferenced project's type is no fallback, but an alias names its target wherever it is, with no
-  // declarations when the scan has none.
-  const visibleOnly = (name, from, offset) => csharp.resolveType(name, from, offset, { visibleOnly: true });
-  assert.equal(visibleOnly("Remote", uses, uses.text().indexOf("record Uses")), null);
-  const aliases = file("one/UsesAliases.cs"), inAliases = aliases.text().indexOf("record UsesAliases");
-  assert.equal(visibleOnly("Far", aliases, inAliases)?.fullName, "App.Contracts.Remote");
-  assert.deepEqual(visibleOnly("Thing", aliases, inAliases), { fullName: "Vendor.Http.Thing", declarations: [] });
-  assert.equal(csharp.resolveType("Thing", aliases, inAliases), null);
-});
-
 test("C# declarations: nested types, bodyless records, attribute starts, constraint keywords, block and file-scoped namespaces, kinds, modifiers and parents", async () => {
   const { csharpDeclarations } = await import("../lib/engine/csharp-types.mjs");
   const shape = (text) => {
@@ -572,4 +399,16 @@ test("C# declarations: nested types, bodyless records, attribute starts, constra
     ],
     namespaces: [{ fullName: "App.Shipping", text: fileScoped }],
   });
+  // A preprocessor line ends a declaration's lead-in, and a keyword on one (`#region ... record types`) declares
+  // nothing; a keyword after a word that is no modifier (`var record in`, `Order record` in code) declares nothing.
+  const loose = "#nullable enable\nrecord Loose(int A);\n#region Response record types\n#endregion\n" +
+    "class Host\n{\n    void Run() { foreach (var record in records) { } }\n    // Order record Draft\n}\n";
+  assert.deepEqual(shape(loose).types.map(({ name, kind, modifiers }) => ({ name, kind, modifiers })), [
+    { name: "Loose", kind: "record", modifiers: [] },
+    { name: "Host", kind: "class", modifiers: [] },
+  ]);
+  // A header replaced before its body opens (an #if pair) ends at the next header, not at the end of the file.
+  const conditional = 'public static class Outer\n{\n#if X\n    public class Fake : B\n#else\n    public class Fake : C\n#endif\n    {\n    }\n    public const string XId = "x";\n}\n';
+  const owners = csharpDeclarations(maskCSharpText(conditional)).types.filter((type) => type.start < conditional.indexOf("XId") && conditional.indexOf("XId") < type.end).map((type) => type.name);
+  assert.deepEqual(owners, ["Outer"]);
 });

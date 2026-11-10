@@ -6,6 +6,8 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { restoreProjects } from "../scripts/dotnet-restore.mjs";
+import { newtonsoftStubs, rivetStubs } from "./helpers/rivet-stubs.mjs";
 
 const HOME = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const FIXTURES = path.join(HOME, "fixtures", "MER-RV-027");
@@ -13,6 +15,8 @@ const PLUMB = path.join(HOME, "plumb");
 const RULE = "MER-RV-027";
 const FIELDS_REF = "rules/rivet/take-every-response-field-positionally.md";
 const HOST_OPTIONS_REF = "rules/rivet/keep-wire-changing-settings-out-of-host-json-options.md";
+// The one other rule this file scans for, MER-RV-011.
+const PAYLOAD_REF = "rules/rivet/own-each-route-payload-in-its-transport-contract.md";
 
 const omitNull = "is [JsonIgnore(Condition = WhenWritingNull)] on a response, so the server drops it from the JSON when it is null and the client sees the field as optional — remove the attribute so it is always sent";
 const optional = "is [RivetOptional] on a response, so the client type marks it optional though the server always sends it — drop the attribute";
@@ -23,33 +27,44 @@ const globalNull = "DefaultIgnoreCondition = WhenWritingNull in the host's JSON 
 const globalDefault = "DefaultIgnoreCondition = WhenWritingDefault in the host's JSON options drops every field holding its type's default (null, 0, false…) from every response, so the client sees all of them as optional — remove it so every field is always sent";
 
 // Every RV-027 finding for a repo root, as `location<TAB>message`, sorted; severity and docRef are checked here.
-function findings(root) {
-    const result = spawnSync(PLUMB, [root, "--rule", RULE, "--ci", "--json"], { encoding: "utf8" });
+function findings(root, rule = RULE) {
+    const result = spawnSync(PLUMB, [root, "--rule", rule, "--ci", "--json"], { encoding: "utf8" });
     assert.ok([0, 1].includes(result.status), result.stderr);
-    const all = JSON.parse(result.stdout).filter((finding) => finding.rule === RULE);
+    const all = JSON.parse(result.stdout).filter((finding) => finding.rule === rule);
     for (const finding of all) {
-        assert.equal(finding.severity, "warn", finding.message);
-        assert.equal(finding.docRef, finding.message.startsWith("DefaultIgnoreCondition") ? HOST_OPTIONS_REF : FIELDS_REF, finding.message);
+        assert.equal(finding.severity, rule === RULE ? "warn" : "error", finding.message);
+        const fieldRef = finding.message.startsWith("DefaultIgnoreCondition") ? HOST_OPTIONS_REF : FIELDS_REF;
+        assert.equal(finding.docRef, rule === RULE ? fieldRef : PAYLOAD_REF, finding.message);
     }
     return all.map((finding) => `${finding.location}\t${finding.message}`).sort();
 }
 
-// A throwaway repo holding only `files` (each an array of lines), scanned for RV-027.
-function scan(files) {
+// A throwaway repo holding only `files` (each an array of lines), its projects restored, scanned for RV-027.
+function scan(files, rule = RULE) {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "plumb-rv027-"));
     try {
         for (const [file, content] of Object.entries(files)) {
             fs.mkdirSync(path.dirname(path.join(root, file)), { recursive: true });
             fs.writeFileSync(path.join(root, file), Array.isArray(content) ? `${content.join("\n")}\n` : content);
         }
-        return findings(root);
+        restoreProjects(root);
+        return findings(root, rule);
     } finally {
         fs.rmSync(root, { recursive: true, force: true });
     }
 }
 
 const sorted = (values) => [...values].sort();
-const webProject = '<Project Sdk="Microsoft.NET.Sdk.Web" />\n';
+// A net10.0 project the facts can read: its SDK, and the items of one ItemGroup. It compiles on its own, so it is a library
+// unless it holds an entry point, and brings in the implicit usings and the namespaces the sources name without a using.
+const usings = (...names) => names.map((name) => `<Using Include="${name}" />`).join("");
+// A plain project that names the host's services references the framework that holds them.
+const hostItems = `<FrameworkReference Include="Microsoft.AspNetCore.App" />${usings("Microsoft.Extensions.DependencyInjection")}`;
+const project = (sdk = "Microsoft.NET.Sdk", items = "", outputType = "Library") =>
+    `<Project Sdk="${sdk}">\n  <PropertyGroup>\n    <TargetFramework>net10.0</TargetFramework>\n    <OutputType>${outputType}</OutputType>\n    <ImplicitUsings>enable</ImplicitUsings>\n  </PropertyGroup>\n  <ItemGroup>${usings("System.Text.Json", "System.Text.Json.Serialization")}${sdk.endsWith(".Web") ? usings("Microsoft.AspNetCore.Http.Json") : ""}${items}</ItemGroup>\n</Project>\n`;
+const testSdk = '<PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.0.0" />';
+const webProject = project("Microsoft.NET.Sdk.Web");
+const webApp = project("Microsoft.NET.Sdk.Web", "", "Exe");
 const contract = (route, ...types) => [
     "namespace App.Contracts.Orders;",
     "[RivetContract]",
@@ -92,7 +107,9 @@ test("MER-RV-027 fixtures: the good tree stays clean and the bad tree pins the p
 
 test("MER-RV-027 flags a DefaultIgnoreCondition in every host JSON options form, bare or qualified, and nothing that only reads or names it", () => {
     const actual = scan({
-        "api/Api.csproj": webProject,
+        "api/Api.csproj": webApp,
+        ...rivetStubs("api"),
+        ...newtonsoftStubs("api"),
         "api/Contracts/Orders/OrdersContract.cs": contract("OrderDto", "public sealed record OrderDto(Guid Id);"),
         "api/Program.cs": [
             "var builder = WebApplication.CreateBuilder(args);",
@@ -100,7 +117,7 @@ test("MER-RV-027 flags a DefaultIgnoreCondition in every host JSON options form,
             "builder.Services.AddControllers().AddJsonOptions(o => o.JsonSerializerOptions.DefaultIgnoreCondition =",
             "    System.Text.Json.Serialization.JsonIgnoreCondition . WhenWritingDefault);",
             "builder.Services.Configure<Microsoft.AspNetCore.Http.Json.JsonOptions>(o => o.SerializerOptions.DefaultIgnoreCondition = global::System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull);",
-            "builder.Services.PostConfigure<JsonOptions>(o =>",
+            "builder.Services.PostConfigure<Microsoft.AspNetCore.Mvc.JsonOptions>(o =>",
             "    o.JsonSerializerOptions.DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingDefault);",
             // An adapter's own options write what it sends elsewhere, not a response.
             "var options = new JsonSerializerOptions { DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull };",
@@ -114,9 +131,13 @@ test("MER-RV-027 flags a DefaultIgnoreCondition in every host JSON options form,
             "settings.NullValueHandling = NullValueHandling.Ignore;",
             "builder.Services.AddOptions<JsonOptions>().Configure(o => o.SerializerOptions.DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull);",
             // A source-generated context's options and an API client's are their own.
-            "[JsonSourceGenerationOptions(DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull)]",
-            "partial class Wire : JsonSerializerContext;",
             "client.JsonSerializerOptions.DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull;",
+            "[JsonSourceGenerationOptions(DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull)]",
+            "[JsonSerializable(typeof(string))]",
+            "partial class Wire : JsonSerializerContext;",
+            // What the statements above name: Newtonsoft's settings and an API client's options.
+            "partial class Program { static JsonSerializerSettings settings = new(); static Client client = new(); }",
+            "class Client { public JsonSerializerOptions JsonSerializerOptions { get; } = new(); }",
         ],
     });
     assert.deepEqual(actual, sorted([
@@ -132,32 +153,32 @@ test("MER-RV-027 reads a global DefaultIgnoreCondition only where Rivet response
     const setting = (namespace) => [`namespace ${namespace};`, "static class Json", "{", "    public static void Use(IServiceCollection services) => services.ConfigureHttpJsonOptions(o => o.SerializerOptions.DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull);", "}"];
     const files = {
         // The host references the contracts project, so its JSON options write the responses.
-        "src/Contracts/Contracts.csproj": '<Project Sdk="Microsoft.NET.Sdk" />\n',
+        "src/Contracts/Contracts.csproj": project(),
+        ...rivetStubs("src/Contracts"),
         "src/Contracts/Orders/OrdersContract.cs": contract("OrderDto", "public sealed record OrderDto(Guid Id);"),
-        "src/Host/Host.csproj": '<Project Sdk="Microsoft.NET.Sdk.Web"><ItemGroup><ProjectReference Include="../Contracts/Contracts.csproj" /></ItemGroup></Project>\n',
+        "src/Host/Host.csproj": project("Microsoft.NET.Sdk.Web", '<ProjectReference Include="../Contracts/Contracts.csproj" />'),
         "src/Host/Json.cs": setting("App.Host"),
         // A tool beside them configures a host that serves no Rivet response.
-        "src/Tool/Tool.csproj": '<Project Sdk="Microsoft.NET.Sdk" />\n',
+        "src/Tool/Tool.csproj": project("Microsoft.NET.Sdk", hostItems),
         "src/Tool/Json.cs": setting("App.Tool"),
         // A test project known only by its test SDK (not its folder or file name) is test code.
-        "src/Host.Specs/Host.Specs.csproj":
-            '<Project Sdk="Microsoft.NET.Sdk"><ItemGroup><PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.0.0" />' +
-            '<ProjectReference Include="../Host/Host.csproj" /></ItemGroup></Project>\n',
+        "src/Host.Specs/Host.Specs.csproj": project("Microsoft.NET.Sdk", `${testSdk}${hostItems}<ProjectReference Include="../Host/Host.csproj" />`),
         "src/Host.Specs/Json.cs": setting("App.Host.Specs"),
     };
     assert.deepEqual(scan(files), [`src/Host/Json.cs:4\t${globalNull}`]);
     // Without the test SDK the same project is production and its options are read.
-    assert.deepEqual(scan({ ...files, "src/Host.Specs/Host.Specs.csproj": '<Project Sdk="Microsoft.NET.Sdk"><ItemGroup><ProjectReference Include="../Host/Host.csproj" /></ItemGroup></Project>\n' }),
+    assert.deepEqual(scan({ ...files, "src/Host.Specs/Host.Specs.csproj": project("Microsoft.NET.Sdk", `${hostItems}<ProjectReference Include="../Host/Host.csproj" />`) }),
         [`src/Host.Specs/Json.cs:4\t${globalNull}`, `src/Host/Json.cs:4\t${globalNull}`]);
     // A repo that serves no Rivet response has nothing for the setting to strip.
-    assert.deepEqual(scan({ "src/Tool/Tool.csproj": '<Project Sdk="Microsoft.NET.Sdk" />\n', "src/Tool/Json.cs": setting("App.Tool") }), []);
+    assert.deepEqual(scan({ "src/Tool/Tool.csproj": project("Microsoft.NET.Sdk", hostItems), "src/Tool/Json.cs": setting("App.Tool") }), []);
 });
 
 test("MER-RV-027 flags a class, struct or property record response once and reads only its public instance properties", () => {
     const actual = scan({
         "api/Api.csproj": webProject,
+        ...rivetStubs("api"),
         "api/Contracts/Orders/OrdersContract.cs": contract("OrderView",
-            "public sealed class OrderView",
+            "public class OrderView : IOrder",
             "{",
             "    public OrderView(Guid id) => Id = id;",
             "    [property: JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingDefault)] public Guid Id { get; }",
@@ -190,6 +211,7 @@ test("MER-RV-027 flags a class, struct or property record response once and read
             "}",
             // The namespace's namesake of a nested type isn't what the property names.
             "public sealed record Parts(int Count);",
+            "public interface IOrder { string? Code { get; } }",
         ),
     });
     const at = (line, message) => `api/Contracts/Orders/OrdersContract.cs:${line}\t${message}`;
@@ -203,12 +225,11 @@ test("MER-RV-027 flags a class, struct or property record response once and read
     ]));
 });
 
-test("MER-RV-027 skips property types never sent, fieldless and abstract-only types, ErrorResponse, and types outside the scan or ambiguous", () => {
+test("MER-RV-027 skips property types never sent, fieldless and abstract-only types, ErrorResponse, and types outside the scan", () => {
     const actual = scan({
         "api/Api.csproj": webProject,
+        ...rivetStubs("api"),
         "api/Contracts/Orders/OrdersContract.cs": [
-            "using App.Modules.Billing.Contracts;",
-            "using App.Modules.Shipping.Contracts;",
             ...contract("OrderView",
                 "public sealed class OrderView",
                 "{",
@@ -217,7 +238,6 @@ test("MER-RV-027 skips property types never sent, fieldless and abstract-only ty
                 "    [JsonIgnore(Condition = JsonIgnoreCondition.Never)] public Kind Kind { get; init; } = new();",
                 "    public ErrorResponse? Error { get; init; }",
                 "    public Money Total { get; init; }",
-                "    public Carrier Carrier { get; init; }",
                 "    public Base Base { get; init; }",
                 "    public Empty Empty { get; init; }",
                 "}",
@@ -229,21 +249,22 @@ test("MER-RV-027 skips property types never sent, fieldless and abstract-only ty
                 "public sealed record Empty;",
             ),
         ],
-        // Carrier comes in through both usings: ambiguous, so neither class is followed. Money is outside the scan.
-        "api/Modules/Billing/Contracts/Carrier.cs": "namespace App.Modules.Billing.Contracts;\npublic sealed class Carrier { [RivetOptional] public string? Name { get; init; } }\n",
-        "api/Modules/Shipping/Contracts/Carrier.cs": "namespace App.Modules.Shipping.Contracts;\npublic sealed class Carrier { [RivetOptional] public string? Name { get; init; } }\n",
+        // Money is outside the scan: the compiler binds it, but no file in the scan declares it.
+        ".plumbignore": "Outside/\n",
+        "api/Outside/Money.cs": "namespace App.Contracts.Orders;\npublic sealed class Money { [RivetOptional] public string? Currency { get; init; } }\n",
     });
     const at = (line, message) => `api/Contracts/Orders/OrdersContract.cs:${line}\t${message}`;
     assert.deepEqual(actual, sorted([
-        at(9, `Response type OrderView is a class with properties${positional}`),
+        at(7, `Response type OrderView is a class with properties${positional}`),
         // Kind's [JsonIgnore(Condition = Never)] property is always sent, so its class is followed.
-        at(21, `Response type Kind is a class with properties${positional}`),
+        at(18, `Response type Kind is a class with properties${positional}`),
     ]));
 });
 
 test("MER-RV-027 merges a partial response's parts, leaves a request-only class alone, and marks a class used both ways", () => {
     const actual = scan({
         "api/Api.csproj": webProject,
+        ...rivetStubs("api"),
         "api/Contracts/Orders/OrdersContract.cs": [
             "namespace App.Contracts.Orders;",
             "[RivetContract]",
@@ -277,10 +298,13 @@ test("MER-RV-027 merges a partial response's parts, leaves a request-only class 
 
 test("MER-RV-027 takes test code from the project analysis: a test-SDK project's records and routes are skipped", () => {
     const files = {
-        "api/Api.csproj": webProject,
+        // ProbeDto is declared only in Api.Specs, so the contract's project references it to name it.
+        "api/Api.csproj": project("Microsoft.NET.Sdk.Web", '<ProjectReference Include="../src/Api.Specs/Api.Specs.csproj" />'),
+        ...rivetStubs("api"),
         "api/Contracts/Orders/OrdersContract.cs": contract("ProbeDto"),
         // Declared only in a project known as test code by its test SDK, not by its folder or file name.
-        "src/Api.Specs/Api.Specs.csproj": '<Project Sdk="Microsoft.NET.Sdk"><ItemGroup><PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.0.0" /></ItemGroup></Project>\n',
+        "src/Api.Specs/Api.Specs.csproj": project("Microsoft.NET.Sdk", testSdk),
+        ...rivetStubs("src/Api.Specs"),
         "src/Api.Specs/Probe.cs": [
             "namespace App.Contracts.Orders;",
             "public sealed record ProbeDto(int Attempt = 0);",
@@ -294,7 +318,7 @@ test("MER-RV-027 takes test code from the project analysis: a test-SDK project's
     };
     assert.deepEqual(scan(files), []);
     // The same project without the test SDK is production: the record and its own route are both read.
-    assert.deepEqual(scan({ ...files, "src/Api.Specs/Api.Specs.csproj": '<Project Sdk="Microsoft.NET.Sdk" />\n' }), [
+    assert.deepEqual(scan({ ...files, "src/Api.Specs/Api.Specs.csproj": project() }), [
         `src/Api.Specs/Probe.cs:2\tProbeDto.Attempt ${defaulted}`,
         `src/Api.Specs/Probe.cs:8\tSpecDto.Attempt ${defaulted}`,
     ]);
@@ -303,14 +327,12 @@ test("MER-RV-027 takes test code from the project analysis: a test-SDK project's
 test("MER-RV-027 follows a union base's [JsonDerivedType] cases, nested ones before the namespace's namesakes, and checks each as a response", () => {
     const actual = scan({
         "api/Api.csproj": webProject,
+        ...rivetStubs("api"),
         "api/Contracts/Orders/OrdersContract.cs": [
-            "using App.Modules.Billing.Contracts;",
-            "using App.Modules.Shipping.Contracts;",
             ...contract("Payment",
                 "[JsonPolymorphic(TypeDiscriminatorPropertyName = \"$kind\")]",
                 "[JsonDerivedType(typeof(Card), \"card\"), JsonDerivedType(typeof(Payment.Transfer), \"transfer\")]",
                 "[JsonDerivedType(typeof(Voucher), \"voucher\")]",
-                "[JsonDerivedType(typeof(Courier), \"courier\")]",
                 "[JsonDerivedType(typeof(Missing), \"missing\")]",
                 "public abstract record Payment",
                 "{",
@@ -328,19 +350,20 @@ test("MER-RV-027 follows a union base's [JsonDerivedType] cases, nested ones bef
                 "public sealed record Unrelated(int Value = 0);",
             ),
         ],
-        // Courier comes in through both usings: ambiguous, so neither case is followed. Missing is outside the scan.
-        "api/Modules/Billing/Contracts/Courier.cs": "namespace App.Modules.Billing.Contracts;\npublic sealed record Courier(string? Name = null);\n",
-        "api/Modules/Shipping/Contracts/Courier.cs": "namespace App.Modules.Shipping.Contracts;\npublic sealed record Courier(string? Name = null);\n",
+        // Missing is outside the scan: the compiler binds it, but no file in the scan declares it.
+        ".plumbignore": "Outside/\n",
+        "api/Outside/Missing.cs": "namespace App.Contracts.Orders;\npublic sealed record Missing(string? Name = null);\n",
     });
     const at = (line, message) => `api/Contracts/Orders/OrdersContract.cs:${line}\t${message}`;
     assert.deepEqual(actual, sorted([
-        at(16, `Card.Last4 ${defaulted}`),
-        at(17, `Transfer.Reference ${defaulted}`),
-        at(21, `Voucher.Code ${optional}`),
+        at(13, `Card.Last4 ${defaulted}`),
+        at(14, `Transfer.Reference ${defaulted}`),
+        at(18, `Voucher.Code ${optional}`),
     ]));
     // Adjustment is reached only through a response, so its case is checked once it is.
     const withAdjustment = scan({
         "api/Api.csproj": webProject,
+        ...rivetStubs("api"),
         "api/Contracts/Orders/OrdersContract.cs": contract("Adjustment",
             "[JsonDerivedType(typeof(Refund), \"refund\")]",
             "public abstract record Adjustment;",
@@ -353,6 +376,7 @@ test("MER-RV-027 follows a union base's [JsonDerivedType] cases, nested ones bef
 test("MER-RV-027 flags a positional response record's settable body auto-properties, keeps the attribute checks on them, and leaves the rest alone", () => {
     const actual = scan({
         "api/Api.csproj": webProject,
+        ...rivetStubs("api"),
         "api/Contracts/Orders/OrdersContract.cs": contract("OrderDto",
             "public sealed record OrderDto(Guid Id) : AuditedDto",
             "{",
@@ -386,6 +410,7 @@ test("MER-RV-027 flags a positional response record's settable body auto-propert
 test("MER-RV-027 skips ignored, redeclared and converter-written members, reads array properties, and reads past methods and operators", () => {
     const actual = scan({
         "api/Api.csproj": webProject,
+        ...rivetStubs("api"),
         "api/Contracts/Orders/OrdersContract.cs": contract("OrderDto",
             "public sealed record OrderDto(string Name, Money Total, Stamp At, Echo E, Split S) : Base",
             "{",
@@ -414,6 +439,13 @@ test("MER-RV-027 skips ignored, redeclared and converter-written members, reads 
             "public partial class Split { }",
             "public partial class Split { public int A { get; init; } }",
         ),
+        // The converters the attributes name; a converter type isn't checked when the attribute is written.
+        "api/Contracts/Orders/Converters.cs": [
+            "namespace App.Contracts.Orders;",
+            "public sealed class MoneyConverter;",
+            "public sealed class SplitConverter;",
+            "public sealed class StampConverter;",
+        ],
         "api/Contracts/Orders/HolderContract.cs": [
             "namespace App.Contracts.Orders;",
             "[RivetContract]",
@@ -438,6 +470,7 @@ test("MER-RV-027 skips ignored, redeclared and converter-written members, reads 
 test("MER-RV-027 gives the positional reason, not the builder one, when no property can be left out", () => {
     const actual = scan({
         "api/Api.csproj": webProject,
+        ...rivetStubs("api"),
         "api/Contracts/Orders/OrdersContract.cs": contract("TicketView",
             "public sealed class TicketView(Guid id)",
             "{",
@@ -448,5 +481,281 @@ test("MER-RV-027 gives the positional reason, not the builder one, when no prope
     });
     assert.deepEqual(actual, [
         "api/Contracts/Orders/OrdersContract.cs:7\tResponse type TicketView is a class with properties; response records take every field positionally — declare it as a positional record",
+    ]);
+});
+
+// A type one multi-target project declares differently under each framework is judged under each framework, as the
+// header that framework compiles, and the facts hold the headers of both. The shapes are the compiled forms of #if around
+// a header, a file removed from one framework, a file compiled by both, and a partial part beside the headers.
+test("MER-RV-027 judges a response type under each target framework: each header, never the headers read as one type", () => {
+    const orders = "api/Contracts/Orders";
+    const contractFile = `${orders}/OrdersContract.cs`;
+    const multiTarget = (items) => project("Microsoft.NET.Sdk.Web", items).replace("<TargetFramework>net10.0</TargetFramework>", "<TargetFrameworks>net10.0;net9.0</TargetFrameworks>");
+    const actual = scan({
+        "api/Api.csproj": multiTarget(
+            `<Compile Remove="Contracts/Orders/Removed.Ten.cs" Condition="'$(TargetFramework)' == 'net9.0'" /><Compile Remove="Contracts/Orders/Removed.Nine.cs" Condition="'$(TargetFramework)' == 'net10.0'" />`,
+        ),
+        ...rivetStubs("api"),
+        [contractFile]: `namespace App.Contracts.Orders;
+
+[RivetContract]
+public static class OrdersContract
+{
+    public static readonly RouteDefinition<PosBoth> A = Define.Get<PosBoth>("/a");
+    public static readonly RouteDefinition<Mixed> B = Define.Get<Mixed>("/b");
+    public static readonly RouteDefinition<MixedReversed> C = Define.Get<MixedReversed>("/c");
+    public static readonly RouteDefinition<ConverterOne> D = Define.Get<ConverterOne>("/d");
+    public static readonly RouteDefinition<PartialOne> E = Define.Get<PartialOne>("/e");
+    public static readonly RouteDefinition<PartialCross> F = Define.Get<PartialCross>("/f");
+    public static readonly RouteDefinition<WholeFile> G = Define.Get<WholeFile>("/g");
+    public static readonly RouteDefinition<Removed> H = Define.Get<Removed>("/h");
+    public static readonly RouteDefinition<Holder> I = Define.Get<Holder>("/i");
+    public static readonly RouteDefinition<KindSplit> J = Define.Get<KindSplit>("/j");
+    public static readonly RouteDefinition<PropertyOptional> K = Define.Get<PropertyOptional>("/k");
+    public static readonly RouteDefinition<Namesake> L = Define.Get<Namesake>("/l");
+    public static readonly RouteDefinition<Shared> M = Define.Get<Shared>("/m");
+}
+
+// Both headers positional, each parameter with a default.
+#if NET9_0
+public record PosBoth(string? Note = "nine");
+#else
+public record PosBoth(string? Note = "ten");
+#endif
+
+// Positional under one framework, a class under the other.
+#if NET9_0
+public record Mixed(string? Note = null);
+#else
+public class Mixed
+{
+    public string? Note { get; set; }
+}
+#endif
+
+#if NET9_0
+public class MixedReversed
+{
+    public string? Note { get; set; }
+}
+#else
+public record MixedReversed(string? Note);
+#endif
+
+// A converter writes it under one framework only.
+#if NET9_0
+[JsonConverter(typeof(ConverterOneConverter))]
+public class ConverterOne
+{
+    public string? Note { get; set; }
+}
+#else
+public class ConverterOne
+{
+    public string? Note { get; set; }
+}
+#endif
+
+public sealed class ConverterOneConverter : JsonConverter<ConverterOne>
+{
+    public override ConverterOne? Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options) => null;
+    public override void Write(Utf8JsonWriter writer, ConverterOne value, JsonSerializerOptions options) { }
+}
+
+// Partial under one framework, not under the other.
+#if NET9_0
+public partial class PartialOne
+{
+    public string? Note { get; set; }
+}
+#else
+public class PartialOne
+{
+    public string? Note { get; set; }
+}
+#endif
+
+// Partial under one framework with a second part in another file, plain under the other framework.
+#if NET9_0
+public partial class PartialCross
+{
+    public string? Note { get; set; }
+}
+#else
+public class PartialCross
+{
+    public string? Note { get; set; }
+}
+#endif
+
+// Each header names a member type only its framework sees.
+#if NET9_0
+public class Holder
+{
+    public InnerNine Inner { get; set; } = new("x");
+}
+public record InnerNine(string Value = "");
+#else
+public class Holder
+{
+    public InnerTen Inner { get; set; } = new("x");
+}
+public record InnerTen(string Value = "");
+#endif
+
+// A class under one framework, a record with properties under the other.
+#if NET9_0
+public class KindSplit
+{
+    public string? Note { get; set; }
+}
+#else
+public record KindSplit
+{
+    public string? Note { get; set; }
+}
+#endif
+
+// A property that is [RivetOptional] on each header.
+#if NET9_0
+public class PropertyOptional
+{
+    [RivetOptional] public string? Note { get; set; } = "nine";
+}
+#else
+public class PropertyOptional
+{
+    [RivetOptional] public string? Note { get; set; } = "ten";
+}
+#endif
+
+// A partial part both frameworks compile, and one more part for each.
+public partial class Shared
+{
+    [RivetOptional] public string? Both { get; set; }
+}
+#if NET9_0
+public partial class Shared
+{
+    [RivetOptional] public string? Nine { get; set; }
+}
+#else
+public partial class Shared
+{
+    [RivetOptional] public string? Ten { get; set; }
+}
+#endif
+`,
+        // The second part of PartialCross, which only net9.0 compiles.
+        [`${orders}/PartialCross.Second.cs`]: `namespace App.Contracts.Orders;
+
+#if NET9_0
+public partial class PartialCross
+{
+    [RivetOptional] public string? Second { get; set; }
+}
+#endif
+`,
+        // Each file is compiled by one framework only: by a #if around its header, and by a removal from the other framework.
+        [`${orders}/WholeFile.Nine.cs`]: "namespace App.Contracts.Orders;\n\n#if NET9_0\npublic class WholeFile\n{\n    public string? Note { get; set; }\n}\n#endif\n",
+        [`${orders}/WholeFile.Ten.cs`]: "namespace App.Contracts.Orders;\n\n#if !NET9_0\npublic class WholeFile\n{\n    public string? Note { get; set; }\n}\n#endif\n",
+        [`${orders}/Removed.Nine.cs`]: "namespace App.Contracts.Orders;\n\npublic class Removed\n{\n    public string? Note { get; set; }\n}\n",
+        [`${orders}/Removed.Ten.cs`]: "namespace App.Contracts.Orders;\n\npublic class Removed\n{\n    public string? Note { get; set; }\n}\n",
+        // Two types of one name that both frameworks compile: a file-local class is its own type beside the public one.
+        [`${orders}/Namesake.File.cs`]: "namespace App.Contracts.Orders;\n\nfile class Namesake\n{\n    public string? Local { get; set; }\n}\n",
+        [`${orders}/Namesake.cs`]: "namespace App.Contracts.Orders;\n\npublic class Namesake\n{\n    public string? Note { get; set; }\n}\n",
+    });
+    const at = (file, line, message) => `${file}:${line}\t${message}`;
+    const here = (line, message) => at(contractFile, line, message);
+    const classOf = (name) => `Response type ${name} is a class with properties${positional}`;
+    assert.deepEqual(actual, sorted([
+        // Both headers are positional records with a default, one finding each.
+        here(23, `PosBoth.Note ${defaulted}`),
+        here(25, `PosBoth.Note ${defaulted}`),
+        // The record's default and the class's shape, and the class's property is not "set in the record body".
+        here(30, `Mixed.Note ${defaulted}`),
+        here(32, classOf("Mixed")),
+        // The class alone has a finding; the clean positional record has none.
+        here(39, classOf("MixedReversed")),
+        // The header with [JsonConverter] is written by it; the other is not.
+        here(55, classOf("ConverterOne")),
+        // One finding per header, whichever of them is partial.
+        here(69, classOf("PartialOne")),
+        here(74, classOf("PartialOne")),
+        // The net9.0 header with its second part is one type, the net10.0 header another.
+        here(82, classOf("PartialCross")),
+        here(87, classOf("PartialCross")),
+        at(`${orders}/PartialCross.Second.cs`, 6, `PartialCross.Second ${optional}`),
+        at(`${orders}/WholeFile.Nine.cs`, 4, classOf("WholeFile")),
+        at(`${orders}/WholeFile.Ten.cs`, 4, classOf("WholeFile")),
+        at(`${orders}/Removed.Nine.cs`, 3, classOf("Removed")),
+        at(`${orders}/Removed.Ten.cs`, 3, classOf("Removed")),
+        // Each header and the type only its framework names.
+        here(95, classOf("Holder")),
+        here(99, `InnerNine.Value ${defaulted}`),
+        here(101, classOf("Holder")),
+        here(105, `InnerTen.Value ${defaulted}`),
+        // Each header's own shape.
+        here(110, classOf("KindSplit")),
+        here(115, `Response type KindSplit is a record whose fields are properties${positional}`),
+        here(123, classOf("PropertyOptional")),
+        here(125, `PropertyOptional.Note ${optional}`),
+        here(128, classOf("PropertyOptional")),
+        here(130, `PropertyOptional.Note ${optional}`),
+        // The part both frameworks compile is read under each and reported once, with the part each framework adds.
+        here(135, classOf("Shared")),
+        here(137, `Shared.Both ${optional}`),
+        here(142, `Shared.Nine ${optional}`),
+        here(147, `Shared.Ten ${optional}`),
+        // The public Namesake is the response type, judged from its own file; the file-local one beside it is another type.
+        at(`${orders}/Namesake.cs`, 3, classOf("Namesake")),
+    ]));
+});
+
+// Each project's assembly is its own, so two `Api` projects' `Foo` are two types, each judged from its own file.
+test("MER-RV-027 judges each project's response type when two projects with one assembly name declare one type name", () => {
+    const side = (folder, property) => ({
+        [`${folder}/Api.csproj`]: webProject,
+        ...rivetStubs(folder),
+        [`${folder}/Contracts/Orders/OrdersContract.cs`]: contract("Foo"),
+        [`${folder}/Contracts/Orders/Foo.cs`]: `namespace App.Contracts.Orders;\n\npublic class Foo\n{\n    public string? ${property} { get; set; }\n}\n`,
+    });
+    const actual = scan({ ...side("a/api", "A"), ...side("b/api", "B") });
+    assert.deepEqual(actual, sorted([
+        `a/api/Contracts/Orders/Foo.cs:3\tResponse type Foo is a class with properties${positional}`,
+        `b/api/Contracts/Orders/Foo.cs:3\tResponse type Foo is a class with properties${positional}`,
+    ]));
+});
+
+// A file-local class is its own type beside a public one of the same name, so the contract's `Foo` is the public class
+// (judged, and reported from its file), never read as a second declaration of it that leaves the type unjudged.
+test("MER-RV-027 judges the public response type beside a file-local class of the same name in another file", () => {
+    const actual = scan({
+        "api/Api.csproj": webProject,
+        ...rivetStubs("api"),
+        "api/Contracts/Orders/OrdersContract.cs": contract("Foo"),
+        // Sorts before Foo.cs, so the file-local part is the first declaration the facts list.
+        "api/Contracts/Orders/Foo.File.cs": "namespace App.Contracts.Orders;\n\nfile class Foo\n{\n    public string? Local { get; set; }\n}\n",
+        "api/Contracts/Orders/Foo.cs": "namespace App.Contracts.Orders;\n\npublic class Foo\n{\n    public string? Note { get; set; }\n}\n",
+    });
+    assert.deepEqual(actual, sorted([
+        `api/Contracts/Orders/Foo.cs:3\tResponse type Foo is a class with properties${positional}`,
+    ]));
+});
+
+// MER-RV-011 judges a payload type under each target framework, as its declarations that framework compiles: a type
+// declared once per framework in differently placed files is owned wrongly under the framework whose file is misplaced.
+test("MER-RV-011 judges a payload type under each target framework: one declared in a wrong owner's file under one framework is reported", () => {
+    const multiTarget = project("Microsoft.NET.Sdk.Web").replace("<TargetFramework>net10.0</TargetFramework>", "<TargetFrameworks>net10.0;net9.0</TargetFrameworks>");
+    const declaration = (symbol) => `namespace App.Contracts.Orders;\n\n#if ${symbol}\npublic class Line\n{\n    public string? Note { get; set; }\n}\n#endif\n`;
+    const actual = scan({
+        "api/Api.csproj": multiTarget,
+        ...rivetStubs("api"),
+        "api/Contracts/Orders/OrdersContract.cs": contract("Line"),
+        "api/Contracts/Orders/Line.cs": declaration("NET10_0"),
+        "api/Modules/Billing/Line.cs": declaration("NET9_0"),
+    }, "MER-RV-011");
+    assert.deepEqual(actual, [
+        "api/Contracts/Orders/OrdersContract.cs:5\troute payload Line is owned by api/Modules/Billing/Line.cs — define it in Contracts/Orders/",
     ]);
 });

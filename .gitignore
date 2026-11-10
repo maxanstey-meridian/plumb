@@ -3,3 +3,4 @@ dotnet/**/bin/
 dotnet/**/obj/
 drafts/
 .plans/
+fixtures/**/obj/

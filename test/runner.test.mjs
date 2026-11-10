@@ -13,6 +13,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { restoreProjects } from "../scripts/dotnet-restore.mjs";
 import { spawnProducer } from "./helpers/run-producer.mjs";
 
 const HOME = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -26,12 +27,13 @@ const MIGRATED = [
   "MER-BE-013", "MER-BE-014", "MER-BE-015", "MER-BE-016", "MER-BE-017", "MER-BE-020", "MER-BE-021", "MER-BE-022",
   "MER-BE-023", "MER-BE-024", "MER-BE-030", "MER-BE-031", "MER-BE-032", "MER-BE-040", "MER-BE-041", "MER-BE-042",
   "MER-BE-051", "MER-BE-052", "MER-BE-053", "MER-BE-054", "MER-BE-055", "MER-BE-060", "MER-BE-018",
+  "MER-BE-061", "MER-BE-062", "MER-BE-063", "MER-BE-064",
   "MER-BT-001", "MER-BT-002", "MER-BT-004", "MER-BT-010", "MER-BT-011", "MER-BT-012",
   "MER-BT-013", "MER-BT-014", "MER-BT-015", "MER-BT-016", "MER-BT-017", "MER-BT-020",
   "MER-BT-003", "MER-BT-005", "MER-FE-041", "MER-FE-043",
   "MER-FE-004", "MER-FE-007", "MER-FE-008", "MER-FE-010", "MER-FE-011",
   "MER-FE-013", "MER-FE-014", "MER-FE-015", "MER-FE-020", "MER-FE-021", "MER-FE-022",
-  "MER-FE-030", "MER-FE-031", "MER-FE-032", "MER-FE-040", "MER-FE-044", "MER-FE-045",
+  "MER-FE-030", "MER-FE-031", "MER-FE-032", "MER-FE-040", "MER-FE-044", "MER-FE-045", "MER-FE-046",
   "MER-RV-001", "MER-RV-002", "MER-RV-003", "MER-RV-006", "MER-RV-007", "MER-RV-008", "MER-RV-009", "MER-RV-010", "MER-RV-011",
   "MER-RV-020", "MER-RV-021", "MER-RV-025", "MER-RV-027", "MER-CP-001", "MER-CP-002",
   "MER-TE-001", "MER-TE-002", "MER-TE-003", "MER-TE-005", "MER-TE-006", "MER-TE-007", "MER-TE-008", "MER-TE-009",
@@ -41,15 +43,24 @@ const MIGRATED = [
 const cleanup = [];
 process.on("exit", () => { for (const d of cleanup) fs.rmSync(d, { recursive: true, force: true }); });
 
+// A fixture's restored obj/ and bin/ stay behind: a repo restores its own projects (restoredRepo).
+const sourceOnly = (source) => !/[\\/](?:obj|bin)$/.test(source);
+
 function repo(fixtureBads = [], files = {}) {
   const d = fs.mkdtempSync(path.join(os.tmpdir(), "plumb-harness-"));
   cleanup.push(d);
-  for (const id of fixtureBads) fs.cpSync(path.join(FIX, id, "bad"), d, { recursive: true });
+  for (const id of fixtureBads) fs.cpSync(path.join(FIX, id, "bad"), d, { recursive: true, filter: sourceOnly });
   for (const [p, content] of Object.entries(files)) {
     fs.mkdirSync(path.dirname(path.join(d, p)), { recursive: true });
     fs.writeFileSync(path.join(d, p), content);
   }
   return d;
+}
+
+// The rules that read C# facts need every SDK project restored before Plumb runs over it.
+function restoredRepo(directory) {
+  restoreProjects(directory);
+  return directory;
 }
 
 function plumb(...args) {
@@ -76,7 +87,8 @@ function isolatedPlumb(producers) {
   fs.cpSync(path.join(HOME, "configs"), path.join(home, "configs"), { recursive: true });
   fs.copyFileSync(path.join(HOME, "lib", "rivet-context.mjs"), path.join(home, "lib", "rivet-context.mjs"));
   fs.mkdirSync(path.join(home, "node_modules", "@vue"), { recursive: true });
-  for (const dependency of ["ignore", "fast-xml-parser", "yaml", "picomatch", "braces", "@vue/compiler-sfc"]) {
+  fs.mkdirSync(path.join(home, "node_modules", "@dagrejs"), { recursive: true });
+  for (const dependency of ["ignore", "fast-xml-parser", "yaml", "picomatch", "braces", "@vue/compiler-sfc", "@dagrejs/graphlib"]) {
     const target = path.join(home, "node_modules", ...dependency.split("/"));
     fs.symlinkSync(fs.realpathSync(path.join(HOME, "node_modules", ...dependency.split("/"))), target, "dir");
   }
@@ -176,17 +188,20 @@ test("clean repo → zero findings, exit 0", () => {
 });
 
 test("gitignored build/vendor-style paths do not affect scan", () => {
+  // MER-BE-008 reads the text of every Domain file it is given, so a copy outside vendor/ is flagged and the ignored
+  // one must not be.
+  const repository = "namespace Acme.Modules.Auth.Domain; public interface IOrderRepository { }\n";
   const d = repo([], {
     ".gitignore": "vendor/\n",
     "App.csproj": "<Project/>\n",
-    "vendor/api/Modules/Auth/Application/U.cs": "namespace Acme.Modules.Auth.Application; using Acme.Modules.Billing.Application.Ports;\n",
-    "vendor/api/Modules/Billing/Application/Ports/IBilling.cs": "namespace Acme.Modules.Billing.Application.Ports; public interface IBilling {}\n",
-    "vendor/api/Common/Shared.cs": "namespace Acme.Common; public sealed class Shared {}\n",
+    "vendor/api/Modules/Auth/Domain/IOrderRepository.cs": repository,
+    "api/Modules/Auth/Domain/IOrderRepository.cs": repository,
   });
   spawnSync("git", ["init", "-q"], { cwd: d });
-  const out = plumb(d, "--rule", "MER-BE-005");
-  assert.equal(out.status, 0);
-  assert.ok(!out.ids.includes("MER-BE-005"), `gitignored vendor finding leaked: ${out.ids}`);
+  const out = plumb(d, "--rule", "MER-BE-008", "--json");
+  assert.equal(out.status, 1, out.stderr);
+  const locations = JSON.parse(out.stdout).map((finding) => finding.location);
+  assert.deepEqual(locations, ["api/Modules/Auth/Domain/IOrderRepository.cs:1"], `gitignored vendor finding leaked: ${locations}`);
 });
 
 test(".plumbignore and repeatable --exclude patterns remove files from every rule engine", () => {
@@ -439,7 +454,7 @@ test("MER-TO-011 ignores XML comments and conditional property values", () => {
 });
 
 test("error finding → exit 1; warn-only → 0 by default, 1 with --fail-on warn", () => {
-  const errRepo = repo(["MER-BE-005"], { "App.csproj": "<Project/>\n" });
+  const errRepo = restoredRepo(repo(["MER-BE-005"], { "App.csproj": "<Project/>\n" }));
   assert.equal(plumb(errRepo).status, 1);
   const warnRepo = repo(["MER-TE-005"]); // tests/ dir is its own TE marker; TE-005 is warn
   const warn = plumb(warnRepo);
@@ -451,9 +466,11 @@ test("error finding → exit 1; warn-only → 0 by default, 1 with --fail-on war
 // ---- pack gating (§5 marker table) ----
 
 test("BE pack gates on csproj + Modules: same violation, marker decides", () => {
-  const unmarked = plumb(repo(["MER-BE-005"])); // Modules/ present, no csproj
+  const bare = repo(["MER-BE-005"]); // Modules/ present, no csproj
+  fs.rmSync(path.join(bare, "api", "Api.csproj"));
+  const unmarked = plumb(bare);
   assert.ok(!unmarked.ids.some((id) => id.startsWith("MER-BE-")), `BE leaked without marker: ${unmarked.ids}`);
-  const marked = plumb(repo(["MER-BE-005"], { "App.csproj": "<Project/>\n" }));
+  const marked = plumb(restoredRepo(repo(["MER-BE-005"], { "App.csproj": "<Project/>\n" })));
   assert.ok(marked.ids.includes("MER-BE-005"));
 });
 
@@ -475,16 +492,6 @@ test("TE-001 executes for an applicable modular .NET repo without a tests direct
   assert.ok(out.ids.includes("MER-TE-001"), `TE-001 missing for modular .NET repo: ${out.ids}`);
 });
 
-test("MER-TE-001 does not accept Meridian.Analyzers from an unrelated project", () => {
-  const r = repo([], {
-    "app/App.csproj": '<Project Sdk="Microsoft.NET.Sdk" />\n',
-    "app/Modules/Auth/Login.cs": "namespace App.Modules.Auth; public sealed class Login;\n",
-    "tools/Tools.csproj": '<Project><ItemGroup><PackageReference Include="Meridian.Analyzers" /></ItemGroup></Project>\n',
-  });
-  const { findings } = focusedFindings(r, "MER-TE-001");
-  assert.ok(findings.some((finding) => finding.location === "app/App.csproj:1"));
-});
-
 test("MER-TE-001 does not accept an unexecuted architecture rule declaration", () => {
   const r = repo([], {
     "App.csproj": '<Project Sdk="Microsoft.NET.Sdk" />\n',
@@ -495,14 +502,14 @@ test("MER-TE-001 does not accept an unexecuted architecture rule declaration", (
   assert.ok(findings.some((finding) => finding.location === "App.csproj:1"));
 });
 
-test("MER-TE-001 accepts Meridian.Analyzers from an ancestor Directory.Build.props", () => {
+test("MER-TE-001 doesn't accept a Meridian.Analyzers reference", () => {
   const r = repo([], {
     "Directory.Build.props": '<Project><ItemGroup><PackageReference Include="Meridian.Analyzers" /></ItemGroup></Project>\n',
     "src/App/App.csproj": '<Project Sdk="Microsoft.NET.Sdk" />\n',
     "src/App/Modules/Auth/Login.cs": "namespace App.Modules.Auth; public sealed class Login;\n",
   });
   const { findings } = focusedFindings(r, "MER-TE-001");
-  assert.deepEqual(findings, []);
+  assert.ok(findings.some((finding) => finding.location === "src/App/App.csproj:1"));
 });
 
 test("MER-TE-001 accepts an architecture API only when a test executes it", () => {
@@ -510,6 +517,16 @@ test("MER-TE-001 accepts an architecture API only when a test executes it", () =
     "App.csproj": '<Project Sdk="Microsoft.NET.Sdk" />\n',
     "Modules/Auth/Login.cs": "namespace App.Modules.Auth; public sealed class Login;\n",
     "Tests/ArchitectureTests.cs": "var rule = ArchRuleDefinition.Types().Should().BeSealed();\nrule.Check(architecture);\n",
+  });
+  const { findings } = focusedFindings(r, "MER-TE-001");
+  assert.deepEqual(findings, []);
+});
+
+test("MER-TE-001 accepts a Taskfile task whose command is the list item `- cmd: plumb .`", () => {
+  const r = repo([], {
+    "App.csproj": '<Project Sdk="Microsoft.NET.Sdk" />\n',
+    "Modules/Auth/Login.cs": "namespace App.Modules.Auth; public sealed class Login;\n",
+    "Taskfile.yml": 'version: "3"\n\ntasks:\n  check:\n    cmds:\n      - cmd: plumb .\n',
   });
   const { findings } = focusedFindings(r, "MER-TE-001");
   assert.deepEqual(findings, []);
@@ -610,7 +627,7 @@ test("RV pack detected from the artifact fingerprint alone (no Contract.cs, no c
 // ---- filters ----
 
 test("--rule and --pack filter the merged findings", () => {
-  const r = repo(["MER-BE-005", "MER-TE-005"], { "App.csproj": "<Project/>\n" });
+  const r = restoredRepo(repo(["MER-BE-005", "MER-TE-005"], { "App.csproj": "<Project/>\n" }));
   const byRule = plumb(r, "--rule", "MER-BE-005");
   assert.ok(byRule.ids.length > 0);
   assert.ok(byRule.ids.every((id) => id === "MER-BE-005"));
@@ -744,12 +761,12 @@ test("selected TypeScript owners share one source parse without frontend graph w
 });
 
 test("selected C# owners share source masks and parse each visible project once", () => {
-  const r = repo([], {
-    "App.csproj": "<Project><PropertyGroup><Nullable>enable</Nullable><ImplicitUsings>enable</ImplicitUsings></PropertyGroup></Project>\n",
+  const r = restoredRepo(repo([], {
+    "App.csproj": '<Project Sdk="Microsoft.NET.Sdk"><PropertyGroup><TargetFramework>net10.0</TargetFramework><Nullable>enable</Nullable><ImplicitUsings>enable</ImplicitUsings></PropertyGroup></Project>\n',
     "Modules/Auth/Domain/Clock.cs": "public sealed class Clock { public static DateTime Now => DateTime.UtcNow; }\n",
     "Modules/Auth/Application/RunUseCase.cs": "public sealed class RunUseCase { public Task ExecuteAsync(CancellationToken ct) => Task.CompletedTask; }\n",
-    "tests/App.Tests.csproj": "<Project><PropertyGroup><IsTestProject>true</IsTestProject></PropertyGroup></Project>\n",
-  });
+    "tests/App.Tests.csproj": '<Project Sdk="Microsoft.NET.Sdk"><PropertyGroup><TargetFramework>net10.0</TargetFramework><IsTestProject>true</IsTestProject></PropertyGroup></Project>\n',
+  }));
   const out = plumb(r, "--pack", "BE", "--json", "--profile");
   assert.ok([0, 1].includes(out.status), out.stderr);
   assert.match(out.stderr, /analysis-counters .*csharp-read=2 csharp-mask=2 csharp-classification=2 dotnet-project-parse=2 dotnet-project-graph-build=1 /);
@@ -858,7 +875,7 @@ test("manifest temporary files are removed when a producer fails", () => {
 // ---- --json shape ----
 
 test("--json emits an array of {rule, severity, location, message, docRef}", () => {
-  const out = plumb(repo(["MER-BE-005"], { "App.csproj": "<Project/>\n" }), "--json");
+  const out = plumb(restoredRepo(repo(["MER-BE-005"], { "App.csproj": "<Project/>\n" })), "--json");
   const arr = JSON.parse(out.stdout);
   assert.ok(Array.isArray(arr) && arr.length > 0);
   for (const f of arr) {
@@ -959,7 +976,7 @@ test("graph check without dependency-cruiser degrades while TypeScript remains a
 // ---- --baseline ratchet (§5, 2026-06-11) ----
 
 test("baseline: write → rerun clean exit 0 with visible suppressed count; new finding still fails", () => {
-  const r = repo(["MER-BE-005"], { "App.csproj": "<Project/>\n" });
+  const r = restoredRepo(repo(["MER-BE-005"], { "App.csproj": "<Project/>\n" }));
   const bl = path.join(r, ".plumb-baseline.json");
   const write = plumb(r, "--write-baseline", bl);
   assert.equal(write.status, 0);
@@ -970,15 +987,17 @@ test("baseline: write → rerun clean exit 0 with visible suppressed count; new 
   assert.deepEqual(ratcheted.ids, []);
   assert.match(ratcheted.stdout, /\+\d+ baselined by \.plumb-baseline\.json, baseline holds \d+/);
   // a NEW violation in a different file is not absorbed by the allowance
-  fs.cpSync(path.join(FIX, "MER-BE-005", "bad", "api", "Modules", "Auth", "Application", "U.cs"),
-    path.join(r, "api", "Modules", "Auth", "Application", "U2.cs"));
+  // The copy renames its types: a second `U` in the namespace wouldn't compile.
+  const source = fs.readFileSync(path.join(FIX, "MER-BE-005", "bad", "api", "Modules", "Auth", "Application", "U.cs"), "utf8");
+  fs.writeFileSync(path.join(r, "api", "Modules", "Auth", "Application", "U2.cs"),
+    source.replace("class U ", "class U2 ").replace("class FullyQualifiedU(", "class FullyQualifiedU2("));
   const withNew = plumb(r, "--baseline", bl);
   assert.equal(withNew.status, 1);
   assert.ok(withNew.ids.includes("MER-BE-005"));
 });
 
 test("baseline: the repo's own .plumb-baseline.json applies without --baseline; --no-baseline shows everything", () => {
-  const r = repo(["MER-BE-005"], { "App.csproj": "<Project/>\n" });
+  const r = restoredRepo(repo(["MER-BE-005"], { "App.csproj": "<Project/>\n" }));
   const flagged = plumb(r).ids.length;
   assert.ok(flagged > 0);
   assert.equal(plumb(r, "--write-baseline", path.join(r, ".plumb-baseline.json")).status, 0);
@@ -1091,7 +1110,7 @@ test("baseline: a degraded run refuses --write-baseline and leaves the file unto
 });
 
 test("baseline: a narrowed --write-baseline replaces only what the run checked and keeps the rest", () => {
-  const r = repo(["MER-BE-005"], { "App.csproj": "<Project/>\n", "package.json": "{}\n" });
+  const r = restoredRepo(repo(["MER-BE-005"], { "App.csproj": "<Project/>\n", "package.json": "{}\n" }));
   const bl = path.join(r, ".plumb-baseline.json");
   const entriesOf = () => JSON.parse(fs.readFileSync(bl, "utf8")).entries;
   assert.equal(plumb(r, "--write-baseline", bl).status, 0);
@@ -1261,7 +1280,7 @@ test("MER-RV-024: a convention it can't check exits 2 with a reason, so a --ci b
 });
 
 test("baseline: shrinking is reported and suggests ratcheting down", () => {
-  const r = repo(["MER-BE-005"], { "App.csproj": "<Project/>\n" });
+  const r = restoredRepo(repo(["MER-BE-005"], { "App.csproj": "<Project/>\n" }));
   const bl = path.join(r, ".plumb-baseline.json");
   plumb(r, "--write-baseline", bl);
   // fix the violation → suppressed < baseline total → shrink message
@@ -1318,7 +1337,7 @@ test("baseline: shrinking is reported and suggests ratcheting down", () => {
   assert.ok(ratchets(plumb(r, "--baseline", bl), bl));
   assert.ok(ratchets(plumb(r, "--baseline", bl, "--rule", "MER-BE-005", "--ci"), bl));
   // …nor count as one when they're the only entries that run couldn't produce.
-  const kept = repo(["MER-BE-005"], { "App.csproj": "<Project/>\n" });
+  const kept = restoredRepo(repo(["MER-BE-005"], { "App.csproj": "<Project/>\n" }));
   const keptBaseline = path.join(kept, ".plumb-baseline.json");
   plumb(kept, "--write-baseline", keptBaseline);
   const written = JSON.parse(fs.readFileSync(keptBaseline, "utf8"));
@@ -1373,7 +1392,7 @@ test("baseline: shrinking is reported and suggests ratcheting down", () => {
 });
 
 test("baseline: --json emits only actionable findings; unreadable baseline → exit 2", () => {
-  const r = repo(["MER-BE-005"], { "App.csproj": "<Project/>\n" });
+  const r = restoredRepo(repo(["MER-BE-005"], { "App.csproj": "<Project/>\n" }));
   const bl = path.join(r, ".plumb-baseline.json");
   plumb(r, "--write-baseline", bl);
   const out = plumb(r, "--baseline", bl, "--json");
@@ -1741,6 +1760,20 @@ test("MER-CP-001 takes no server ids from a test project, known by metadata, and
   });
   const findings = JSON.parse(plumb(r, "--rule", "MER-CP-001", "--json").stdout);
   assert.deepEqual(findings.map((finding) => finding.message.match(/is the server's (\S+);/)?.[1]), ["Crm.Hooks.HookId", "Crm.CrmId"]);
+});
+
+// A pair of `#if` headers, only one of which has the body, ends the first where the second starts: the const after the
+// body is Outer's. Without the fix, the first `Fake` header runs to the end of the file, and the const is named
+// `Outer.Fake.XId`.
+test("MER-CP-001 names a const by the type that holds it when an #if pair of headers comes before it", () => {
+  const r = repo([], {
+    "api/Modules/Crm/Contracts/Outer.cs": "public class B { }\npublic class C { }\npublic static class Outer\n{\n#if X\n    public class Fake : B\n#else\n" +
+      '    public class Fake : C\n#endif\n    {\n    }\n    public const string XId = "x-id";\n}\n',
+    "nuxt.config.ts": "export default defineNuxtConfig({ ssr: false });\n",
+    "app/pages/index.vue": '<script setup lang="ts">\nconst ids = ["x-id"];\n</script>\n',
+  });
+  const findings = JSON.parse(plumb(r, "--rule", "MER-CP-001", "--json").stdout);
+  assert.deepEqual(findings.map((finding) => finding.message.match(/is the server's (\S+);/)?.[1]), ["Outer.XId"]);
 });
 
 test("MER-CP-002 reads a rule from any level-2 heading that starts with its ID, and reports each missing field or title, unknown or repeated rule ID, rule headed at another level, ID without three digits, file with no rule, and cited name that isn't in the code", () => {

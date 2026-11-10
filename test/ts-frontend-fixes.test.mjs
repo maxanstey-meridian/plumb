@@ -187,6 +187,86 @@ test("FE-045 reports each unlabelled control once, including a tests folder insi
   ]);
 });
 
+// A copy of an FE-046 fixture with some files replaced (or, given null, deleted), run through the real CLI.
+function fe046Repo(fixture, files, check) {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "plumb-fe046-"));
+  try {
+    fs.cpSync(path.join(HOME, "fixtures", "MER-FE-046", fixture), root, { recursive: true });
+    for (const [file, content] of Object.entries(files)) {
+      if (content === null) fs.rmSync(path.join(root, file));
+      else {
+        fs.mkdirSync(path.dirname(path.join(root, file)), { recursive: true });
+        fs.writeFileSync(path.join(root, file), content);
+      }
+    }
+    assert.equal(spawnSync("git", ["init", "-q"], { cwd: root }).status, 0);
+    const out = spawnSync(path.join(HOME, "plumb"), [root, "--rule", "MER-FE-046", "--json", "--ci"], { encoding: "utf8" });
+    assert.ok([0, 1].includes(out.status), out.stderr);
+    check(JSON.parse(out.stdout || "[]").map((finding) => `${finding.severity} ${finding.location}`), out, JSON.parse(out.stdout || "[]"));
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+}
+
+test("FE-046 reports an orphaned inject at the pair's declaration and the reverse as a warning", () => {
+  const out = spawnSync(path.join(HOME, "plumb"), [path.join(HOME, "fixtures", "MER-FE-046", "bad"), "--rule", "MER-FE-046", "--json", "--ci"], { encoding: "utf8" });
+  assert.equal(out.status, 1, out.stderr);
+  const findings = JSON.parse(out.stdout);
+  assert.deepEqual(findings.map((finding) => `${finding.severity} ${finding.location}`), [
+    // Injected through a renamed import, a Nuxt alias, and the feature index; provided only by a test.
+    "error app/features/booking/port.ts:5",
+    // Names that don't follow the convention, re-exported under another name, called through a namespace import.
+    "error app/features/clock/port.ts:5",
+    // Page b's pair: page a's same-named pair is provided and stays clean.
+    "error app/pages/b/ports/auth.ts:5",
+    "warn app/features/rooms/port.ts:5",
+  ]);
+  assert.match(findings[0].message, /^injectBooking is called \(app\/pages\/bookings\.vue:4\) but provideBooking is called only in test sources \(tests\/pages\/bookings\.spec\.ts:3\)/);
+  assert.match(findings[1].message, /^readClock is called \(app\/pages\/index\.vue:4\) but installClock is called nowhere/);
+  assert.match(findings[3].message, /^provideRooms is called \(app\/app\.vue:4\) but injectRooms is called nowhere/);
+
+  const good = runProducer("MER-FE-046", "good");
+  assert.equal(good.status, 0, good.stderr);
+  assert.equal(good.stdout, "");
+});
+
+test("FE-046 passes the good fixture only because each provide and inject is called", () => {
+  const appVue = (script) => `<script setup lang="ts">\n${script}</script>\n\n<template>\n  <NuxtPage />\n</template>\n`;
+  // Without the namespace-import provide, the renamed inject in the layout is orphaned.
+  fe046Repo("good", { "app/app.vue": appVue("installTheme({ dark: false });\n") }, (found) =>
+    assert.deepEqual(found, ["error app/features/session/port.ts:5"]));
+  // Without the auto-imported provide, the inject renamed by the feature index is orphaned.
+  fe046Repo("good", { "app/app.vue": appVue('import * as session from "./features/session";\n\nsession.provideSession({ userId: "u1" });\n') }, (found) =>
+    assert.deepEqual(found, ["error app/features/theme/port.ts:5"]));
+  // Page b stops providing its own pair: page a's same-named provide doesn't cover it.
+  fe046Repo("good", { "app/pages/b/index.vue": "<template>\n  <div />\n</template>\n" }, (found) =>
+    assert.deepEqual(found, ["error app/pages/b/ports/auth.ts:5"]));
+  // The reverse alone is a warning, and a warning doesn't fail the run.
+  fe046Repo("good", { "app/layouts/default.vue": "<template>\n  <slot />\n</template>\n" }, (found, out) => {
+    assert.deepEqual(found, ["warn app/features/session/port.ts:5"]);
+    assert.equal(out.status, 0);
+  });
+});
+
+test("FE-046 fixes clear the bad fixture, and a comment or string naming provideX provides nothing", () => {
+  const fixes = {
+    "app/pages/bookings.vue": '<script setup lang="ts">\nimport { injectBooking as useBooking, provideBooking as wire } from "~/features/booking";\n\nwire({ book: async () => {} });\nconst booking = useBooking();\n</script>\n',
+    "app/pages/index.vue": '<script setup lang="ts">\nimport * as clock from "../features/clock";\n\nclock.installClock({ now: () => new Date() });\nconst now = clock.currentClock().now();\n</script>\n',
+    "app/pages/b/index.vue": '<script setup lang="ts">\nimport { provideAuth } from "./ports/auth";\n\nprovideAuth({ signOut: () => {} });\n</script>\n',
+    "app/components/RoomList.vue": '<script setup lang="ts">\nimport { injectRooms } from "../features/rooms";\n\nconst rooms = injectRooms();\n</script>\n',
+  };
+  fe046Repo("bad", fixes, (found) => assert.deepEqual(found, []));
+  fe046Repo("bad", { ...fixes, "app/pages/b/index.vue": '<script setup lang="ts">\n// provideAuth({ signOut: () => {} });\nconst hint = "provideAuth()";\n</script>\n' }, (found) =>
+    assert.deepEqual(found, ["error app/pages/b/ports/auth.ts:5"]));
+});
+
+test("FE-046 matches by imported name when it can't resolve the specifier, and never by the local alias", () => {
+  // A workspace package specifier isn't resolved: the imported name still finds the pair through a rename.
+  fe046Repo("bad", { "app/pages/b/index.vue": '<script setup lang="ts">\nimport { provideAuth as wireAuth } from "@acme/auth";\n\nwireAuth({ signOut: () => {} });\n</script>\n' }, (found) =>
+    assert.ok(!found.includes("error app/pages/b/ports/auth.ts:5"), found.join(", ")));
+  // A local function that happens to share the provide's name is not the pair's provide.
+  fe046Repo("bad", { "app/pages/b/index.vue": '<script setup lang="ts">\nconst provideAuth = (value: object) => value;\n\nprovideAuth({});\n</script>\n' }, (found) =>
+    assert.ok(found.includes("error app/pages/b/ports/auth.ts:5"), found.join(", ")));
+});
+
 test("TE-009 flags hand-written stand-ins, including json/body that replaces a fetched response", () => {
   const bad = runProducer("MER-TE-009", "bad");
   assert.equal(bad.status, 0, bad.stderr);

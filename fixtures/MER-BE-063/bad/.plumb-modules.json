@@ -1,0 +1,19 @@
+{
+  "modules": {
+    "Billing": {
+      "Cases": "an invoice is raised against a case"
+    },
+    "Cases": {
+      "Cases": "a case is a case",
+      "Forms": "a case is opened from a form",
+      "Records": ""
+    },
+    "Forms": {
+      "Cases": "a form is filled in for a case"
+    },
+    "Records": {
+      "People": "a record has a holder",
+      "People": "a record names its holder"
+    }
+  }
+}

@@ -13,12 +13,18 @@ It sits where a folder of lint configs and a review checklist would, but the che
 - Git, for the file inventory. Outside a Git repository Plumb walks the filesystem instead.
 - [ast-grep](https://ast-grep.github.io/) on `PATH`, for the YAML rules. Without it those rules are skipped with a diagnostic.
 - go-task (`task`) and the target repository's own toolchain, only for the `--ci` check that regenerates Rivet output. Rivet is the generator that turns C# routes into an OpenAPI document and a typed client.
+- The .NET 10 SDK on `PATH`, and `pnpm build:csharp` run once after install, for the rules that read C# facts. Without either, those rules are skipped and the run is degraded.
 
 ## Install
 
+Install Plumb's Node dependencies and build the C# facts tool:
+
 ```sh
 pnpm install
+pnpm build:csharp
 ```
+
+`pnpm build:csharp` also restores the fixtures of the rules that read C# facts, which needs nuget.org the first time (for `Microsoft.NET.Test.Sdk` and its dependencies).
 
 Each runtime dependency has one job:
 
@@ -27,10 +33,11 @@ Each runtime dependency has one job:
 - `dependency-cruiser`: frontend dependency graphs.
 - `fast-xml-parser`: `.csproj` and `Directory.Build.props` parsing.
 - `ignore`: `.plumbignore` and `--exclude` matching.
-- `yaml`: CSharpier YAML config, read for comment widths.
+- `yaml`: CSharpier YAML config, read for comment widths, and key positions and duplicate keys in `.plumb-modules.json`.
 - `picomatch` and `braces`: CSharpier override and `.editorconfig` section globs.
+- `@dagrejs/graphlib`: module dependency loops.
 
-If `typescript`, `@vue/compiler-sfc`, or `dependency-cruiser` is missing, only the rules that need it are skipped, with a diagnostic. The other five are required.
+If `typescript`, `@vue/compiler-sfc`, or `dependency-cruiser` is missing, only the rules that need it are skipped, with a diagnostic. The other six are required.
 
 ## What it checks
 
@@ -133,16 +140,53 @@ With a baseline, the summary line gains ` (+B baselined by FILE, baseline holds 
 - An entry at a directory or a missing file is always checked, since a finding there is never hidden.
 - A degraded run refuses to write and exits 2, because it would drop entries for findings it missed. A baseline that exists but can't be read also exits 2 and is left untouched.
 
+### Module order
+
+Module dependencies run one way, and which way is a fact about the domain that no graph can show. A repository writes those facts in `.plumb-modules.json` at its root, beside `.plumbignore` and `.plumb-baseline.json`: a map from a module to the modules it depends on, each with its reason.
+
+```json
+{
+  "modules": {
+    "Cases": {
+      "Submissions": "a Case is made from a submission and keeps its id",
+      "CaseTypes": "a typed Case's stages, statuses, and permissions come from its pinned Case type version"
+    },
+    "Submissions": { "Forms": "a submission answers one pinned form version" }
+  }
+}
+```
+
+Each entry is one claim: the module can't keep its rules without the other. A module may depend on what it claims, and through those claims on what they claim; modules with no claim between them stay unordered. The claims apply in every backend root. Edit the file by hand, one claim and its reason at a time, since the reason is what a reviewer checks. A claim may run ahead of the code, and Plumb never writes the file.
+
+Plumb reads the edges from what the compiler binds: a using, a name however it is written or inferred, a type of code outside the modules (host, transport-contract, or `Common/`) that a module uses and that uses another module, and a table mapped by name. The persistence root's type is no route, because meridian allows it. A module that calls one of its members that reads another module's data is. Each finding names one reference and what to do about it:
+
+- `MER-BE-061`: a reference against the claims, because the other module claims, directly or through other claims, to depend on this one.
+- `MER-BE-062`: a reference inside a loop the claims don't explain. It is a question: if the module can't keep its rules without the other, add that claim with its reason; if not, replace the reference with a consumer-owned required port bridged at the host.
+- `MER-BE-063`: the claims file is wrong, with what happens to the claim: a misspelt or unknown module name, a claim on itself, an empty reason, a duplicate key, claims that loop, or text that isn't the shape above.
+- `MER-BE-064`: a module maps another module's table with `ToTable`, `ToView`, or `[Table]`, or two modules both own one. That mapping is also an edge in the graph.
+
+There is one finding per edge and file, at the file's first reference. A loop is a gap, so no decision record stands in for its fix; a repository that holds a finding open does it with a hand-made baseline entry and a tracked fix.
+
 ## What it doesn't do
 
-- **C# is read without compiling.** The C# checks mask comments and literals while keeping offsets, then apply structural checks for house conventions. There is no Roslyn semantic analysis.
-- **.NET projects are parsed, not evaluated.** Plumb reads project XML and models ownership, project and package references, test evidence, and the nearest inherited `Directory.Build.props`. It runs no MSBuild evaluation, follows no arbitrary imports or conditions, and builds no `MSBuildWorkspace`.
+- **Most C# is read without compiling.** Those checks mask comments and literals while keeping offsets, then apply structural checks for house conventions. Only the rules that decide what a name refers to read Roslyn (see [How C# is read](#how-c-is-read)).
+- **.NET projects are parsed, not evaluated, outside the C# facts tool.** Plumb reads project XML and models ownership, project and package references, test evidence, and the nearest inherited `Directory.Build.props`. Only the C# facts tool loads projects with `MSBuildWorkspace` and runs MSBuild evaluations.
 - **TypeScript and Vue get real parsers.** Those rules use the TypeScript compiler API and the Vue SFC compiler. Frontend graph rules use dependency-cruiser, with compiler-backed import extraction for a component dependency-cruiser can't parse.
+- **A wired port isn't proven reachable.** `MER-FE-046` reports a port pair whose `injectX` is called in app code while its `provideX` is called nowhere outside tests (an error: the inject throws at runtime), and the reverse (a warning). It asks only whether each side is called anywhere in the repository. It doesn't check that the provider is an ancestor of the injector, so a pair provided in one page and injected in another passes and still throws. It follows imports, renames, and re-exports across relative paths and Nuxt's `~` and `@` aliases; through a workspace package or a tsconfig path it matches by the imported name, so a pair re-exported there under another name isn't followed.
 - **Rivet rules read the OpenAPI output only.** A generated folder is one that holds `openapi.json` and `schema.d.ts`.
 
+### How C# is read
+
+Most C# source checks are syntax-light: they preserve offsets while masking comments and literals, then apply convention-specific structural checks, without compiling. The rules that decide what a name refers to read Roslyn instead, through `dotnet/Plumb.CSharpFacts`. They are the module-boundary rules (MER-BE-003 to 005), the module rules (MER-BE-061 to 064), MER-BE-001, 002, 006, 007, 009, and 016, and MER-RV-003, 007, 011, and 027. Roslyn gives them every type each file uses, however its name is written or inferred, each type's base types, and each EF `ToTable`/`ToView`. Types from outside the repo are seen only where a rule judges them: the framework namespaces of MER-BE-001 and 002, any type with an `Application` or `Infrastructure` segment in its name, and `System.IServiceProvider`, and never inside EF migrations code. These rules need the .NET 10 SDK and every project restored, test projects included; without them the run is degraded. They see what the compiler binds, so they don't see a dependency made by reflection or a name in a string. The strings they read are table names given as constants to `ToTable`, `ToView`, or `[Table]`, and the tables in the EF migrations snapshot. In a repo with no migrations snapshot, a table EF names by convention has no owner, so another module mapping it isn't caught: only running the repo's own EF model would name it. A call through a virtual member depends on the member the compiler binds, not on an override, so an override in the persistence root routes nowhere. A file outside every project isn't compiled, so they don't read it.
+
+Loading a project runs its design-time build, as an IDE does when it opens the project, so the MSBuild targets the project's packages and the repo hook into compilation run, `<Exec>` included, and the build's output goes where the project puts it, `obj/` and `bin/` as a rule. So a checkout that was never built has to be writable. A build step that writes in the project folder still writes there. The usual case is Reqnroll, a test package that generates a C# class from each `.feature` file: it writes each `.feature.cs` beside its `.feature` file unless the project sets `ReqnrollUseIntermediateOutputPathForCodeBehind` to `true`, which puts it under `obj/`.
+
+The rules that read Roslyn read a project under each of its target frameworks, and the facts are the union. A type's kind, namespace, and containing type are the first framework's, except that a type that is an interface under any framework reads as one; a type whose namespace or containing type differs by framework (a namespace `A.B` holding `C` under one, a class `B` in `A` holding `C` under another) makes the run degraded, naming the first such type, because a rule can misjudge it. A project whose code doesn't compile as Plumb loads it gets no facts, and the run is degraded, naming the first compiler error. That's what a stale restore, a `<Reference>` or generator whose file is missing, or a generator or referenced project that hasn't been built comes to, so run `dotnet build` first, in the configuration the run reads: the project's default, or `Configuration` from the environment. A file `.plumbignore` leaves out still counts, as it's compiled into the project. Two shapes stay unbound however often the project is built: a build step that adds code only outside what a design-time build runs, and a reference to a multi-target project whose frameworks share one output or intermediate path. Such a project stays degraded, and the run names what doesn't bind, as Plumb can't read that code without running the real build. A restore that's out of date but leaves every name bound changes nothing these rules read, and isn't reported. A warning the project promotes to an error doesn't count. The tool doesn't read generated files in the folders a project builds into unless they're in Plumb's file inventory, which in a git repo means git doesn't ignore them, and the rules skip any file under a folder named `obj` or `bin` whatever the inventory says, so keep `obj/` and `bin/` in `.gitignore`.
+
+.NET project analysis parses project XML and models project ownership, references, package references, test evidence, and the nearest inherited `Directory.Build.props`. The C# facts tool loads projects with MSBuildWorkspace, and its restore check runs dotnet msbuild evaluations; nothing else evaluates MSBuild.
 ## Also in the box
 
-- [`dotnet/Meridian.Analyzers/`](dotnet/Meridian.Analyzers): an optional Roslyn analyzer that rejects the module-boundary breaks at build time. It has its own test harness (`dotnet/test.sh`) and isn't a mirror of the Node rules.
+- [`dotnet/Plumb.CSharpFacts/`](dotnet/Plumb.CSharpFacts): the C# facts tool the Roslyn-backed rules read.
 - [`configs/`](configs): the canonical `.editorconfig`, oxlint, and oxfmt settings the tooling rules compare a repository against.
 - [`fixtures/`](fixtures): a `bad` and a `good` repository for every rule, which define what each rule accepts.
 

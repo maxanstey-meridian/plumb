@@ -1,0 +1,9 @@
+<script setup lang="ts">
+import { injectAuth } from "../ports/auth";
+
+const auth = injectAuth();
+</script>
+
+<template>
+  <button type="button" @click="auth.signOut()">Sign out</button>
+</template>

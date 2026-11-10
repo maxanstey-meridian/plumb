@@ -1,0 +1,7 @@
+{
+  "modules": {
+    "Cases": {
+      "CaseTypes": "a typed Case's stages, statuses, and permissions come from its pinned Case type version"
+    }
+  }
+}

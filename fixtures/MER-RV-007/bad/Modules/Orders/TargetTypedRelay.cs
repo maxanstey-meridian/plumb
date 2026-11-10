@@ -34,3 +34,23 @@ public sealed class TargetTypedGlobal
 {
     public global::Microsoft.AspNetCore.Mvc.ObjectResult Send(RivetActionResult adapted) => new(adapted.Value);
 }
+
+// The same, returned from a conversion operator to an ObjectResult: the operator's type is its target.
+public sealed record AdaptedEnvelope(RivetActionResult Adapted)
+{
+    public static implicit operator ObjectResult(AdaptedEnvelope e)
+    {
+        RivetActionResult a = e.Adapted;
+        return new(a.Value) { StatusCode = a.StatusCode };
+    }
+}
+
+// The same, to a global::-qualified ObjectResult: the qualifier is part of the operator's type.
+public sealed record QualifiedAdaptedEnvelope(RivetActionResult Adapted)
+{
+    public static implicit operator global::Microsoft.AspNetCore.Mvc.ObjectResult(QualifiedAdaptedEnvelope e)
+    {
+        RivetActionResult a = e.Adapted;
+        return new(a.Value) { StatusCode = a.StatusCode };
+    }
+}

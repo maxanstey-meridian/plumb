@@ -164,6 +164,7 @@ Plumb reads the edges from what the compiler binds: a using, a name however it i
 - `MER-BE-062`: a reference inside a loop the claims don't explain. It is a question: if the module can't keep its rules without the other, add that claim with its reason; if not, replace the reference with a consumer-owned required port bridged at the host.
 - `MER-BE-063`: the claims file is wrong, with what happens to the claim: a misspelt or unknown module name, a claim on itself, an empty reason, a duplicate key, claims that loop, or text that isn't the shape above.
 - `MER-BE-064`: a module maps another module's table with `ToTable`, `ToView`, or `[Table]`, or two modules both own one. That mapping is also an edge in the graph.
+- `MER-BE-065`: a reference outside any loop that no claim covers, in a repository that has a claims file. It is the same question as `MER-BE-062`: add the claim with its reason, or replace the reference with a consumer-owned required port bridged at the host. A repository with no claims file gets only the loops.
 
 There is one finding per edge and file, at the file's first reference. A loop is a gap, so no decision record stands in for its fix; a repository that holds a finding open does it with a hand-made baseline entry and a tracked fix.
 

@@ -497,13 +497,27 @@ test("claims that loop are dropped with one MER-BE-063, so the edge they would h
   assert.ok(run(root, "MER-BE-062").locations.includes("api/Modules/LoopA/Application/Use.cs:1"));
 });
 
-test("an undecided edge outside any loop is quiet", () => {
+test("an undecided edge outside any loop is MER-BE-065 where the claims are stated, and quiet where there is no claims file", () => {
   const { root } = claimsFiles();
   claims(root, CLAIMED);
   const { locations } = run(root, "MER-BE-062");
   // Cases → Audit (Use.cs:4) loops with nothing.
   assert.ok(!locations.includes("api/Modules/Cases/Application/Use.cs:4"), locations.join("\n"));
   assert.ok(!locations.some((location) => location.startsWith("api/Modules/Cases/")), locations.join("\n"));
+  // The references no claim covers and no loop holds: Cases → Forms, Cases → Audit, Forms → Connectors, and
+  // Notes → Connectors; and LoopQ → LoopX and LoopY → LoopP, whose loop goes once the two edges against the claims do.
+  const unclaimed = run(root, "MER-BE-065");
+  assert.deepEqual(unclaimed.locations, [
+    "api/Modules/Cases/Application/Use.cs:3",
+    "api/Modules/Cases/Application/Use.cs:4",
+    "api/Modules/Forms/Application/Use.cs:1",
+    "api/Modules/LoopQ/Application/Use.cs:1",
+    "api/Modules/LoopY/Application/Use.cs:1",
+    "api/Modules/Notes/Application/Use.cs:2",
+  ]);
+  assert.equal(unclaimed.findings[1].message, "module Cases depends on Audit and .plumb-modules.json has no claim that covers it — if Cases can't keep its rules without Audit, add that claim with its reason; if not, replace this reference with a consumer-owned required port bridged at the host");
+  noClaims(root);
+  assert.deepEqual(run(root, "MER-BE-065").findings, []);
 });
 
 test("claims text that won't parse is one MER-BE-063 at line 1, and the loops are still MER-BE-062", () => {

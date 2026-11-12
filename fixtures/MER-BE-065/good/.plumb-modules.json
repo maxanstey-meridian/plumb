@@ -1,0 +1,7 @@
+{
+  "modules": {
+    "Cases": {
+      "Deadlines": "a Case in a timed stage moves on when its deadline passes"
+    }
+  }
+}

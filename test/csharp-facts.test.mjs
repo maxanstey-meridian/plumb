@@ -989,6 +989,139 @@ test("an external segment alone records an outside type with that segment in its
   assert.deepEqual(outside(repo), [["web/Http.cs", "IActionContextAccessor", "Microsoft.AspNetCore.Mvc.Infrastructure", "qualified"]]);
 });
 
+// A package-like project outside the scanned root holds a context under a name no prefix matches, and the app references it.
+const derivesFiles = {
+  "../derives-outside/Data/Data.csproj": project(),
+  "../derives-outside/Data/Data.cs": `namespace Microsoft.EntityFrameworkCore { public class DbContext { } }
+namespace Microsoft.AspNetCore.Mvc
+{
+    public class ControllerBase { }
+    public class Controller : ControllerBase, System.IDisposable { public void Dispose() { } }
+}
+namespace Acme.Data
+{
+    public class AcmeDbContext : Microsoft.EntityFrameworkCore.DbContext { }
+    public class Plain { }
+}
+`,
+  "app/App.csproj": project('\n  <ItemGroup><ProjectReference Include="../../derives-outside/Data/Data.csproj" /></ItemGroup>'),
+  "app/Use.cs": "namespace App;\npublic sealed class Use { Acme.Data.AcmeDbContext? ctx; Acme.Data.Plain? plain; System.Collections.Generic.List<int>? list; Microsoft.AspNetCore.Mvc.Controller? controller; }\n",
+  "app/RepoContext.cs": "namespace App;\npublic sealed class RepoContext : Microsoft.EntityFrameworkCore.DbContext { }\n",
+};
+let derivesRaw;
+const derives = lazy(() => repository("derives", derivesFiles, {
+  restore: ["app"],
+  runtime: {
+    // Keeps the tool's own output, which the run deletes once it is read.
+    run: (command, args) => {
+      const result = spawnSync(command, args, { encoding: "utf8", maxBuffer: 64 * 1024 * 1024 });
+      derivesRaw = JSON.parse(fs.readFileSync(args[args.indexOf("--out") + 1], "utf8"));
+      return result;
+    },
+  },
+}));
+
+test("a type declared outside the root is recorded when a base class matches a prefix, and derivesFrom follows its chain", () => {
+  const repo = derives();
+  assert.deepEqual(repo.diagnostics, []);
+  assert.deepEqual(outside(repo), [
+    ["app/RepoContext.cs", "DbContext", "Microsoft.EntityFrameworkCore", "qualified"],
+    // `Acme.Data.AcmeDbContext` matches no prefix; its base class `DbContext` does.
+    ["app/Use.cs", "AcmeDbContext", "Acme.Data", "qualified"],
+    ["app/Use.cs", "Controller", "Microsoft.AspNetCore.Mvc", "qualified"],
+  ]);
+  assert.equal(repo.facts.derivesFrom("Acme.Data.AcmeDbContext", "Microsoft.EntityFrameworkCore.DbContext"), true);
+  assert.equal(repo.facts.derivesFrom("Acme.Data.AcmeDbContext", "Acme.Data.AcmeDbContext"), true);
+  // The outside type is no repository type.
+  assert.equal(repo.facts.types.has("Acme.Data.AcmeDbContext"), false);
+});
+
+test("a repository type deriving from DbContext derives from it through types", () => {
+  const repo = derives();
+  assert.deepEqual(repo.facts.types.get("App.RepoContext").baseTypes.slice(0, 2), ["Microsoft.EntityFrameworkCore.DbContext", "System.Object"]);
+  assert.equal(repo.facts.derivesFrom("App.RepoContext", "Microsoft.EntityFrameworkCore.DbContext"), true);
+  assert.equal(repo.facts.derivesFrom("App.Use", "Microsoft.EntityFrameworkCore.DbContext"), false);
+});
+
+test("an outside type with no wanted base is not recorded, and derivesFrom is false for it and for a name nobody recorded", () => {
+  const repo = derives();
+  assert.ok(!outside(repo).some(([, name]) => name === "Plain" || name === "List"));
+  assert.equal(repo.facts.derivesFrom("Acme.Data.Plain", "Microsoft.EntityFrameworkCore.DbContext"), false);
+  assert.equal(repo.facts.derivesFrom("System.Collections.Generic.List`1", "Microsoft.EntityFrameworkCore.DbContext"), false);
+  assert.equal(repo.facts.derivesFrom("Acme.Data.AcmeDbContext", "Microsoft.AspNetCore.Mvc.ControllerBase"), false);
+  assert.equal(repo.facts.derivesFrom("No.Such.Type", "Microsoft.EntityFrameworkCore.DbContext"), false);
+  assert.equal(repo.facts.derivesFrom("No.Such.Type", "No.Such.Type"), true);
+});
+
+test("outsideTypes holds each outside type recorded by prefix once, with base classes first and then interfaces, and no repository type", () => {
+  const repo = derives();
+  const strings = derivesRaw.strings;
+  const shape = derivesRaw.outsideTypes.map((entry) => ({ name: strings[entry.name], assembly: strings[entry.assembly], baseTypes: entry.baseTypes.map((index) => strings[index]) }));
+  // A project outside the root is keyed by its project file, relative to the root.
+  const assembly = "../derives-outside/Data/Data.csproj";
+  assert.deepEqual(shape, [
+    { name: "Acme.Data.AcmeDbContext", assembly, baseTypes: ["Microsoft.EntityFrameworkCore.DbContext", "System.Object"] },
+    { name: "Microsoft.AspNetCore.Mvc.Controller", assembly, baseTypes: ["Microsoft.AspNetCore.Mvc.ControllerBase", "System.Object", "System.IDisposable"] },
+    { name: "Microsoft.EntityFrameworkCore.DbContext", assembly, baseTypes: ["System.Object"] },
+  ]);
+  // The repository's own types stay in `types` alone.
+  assert.ok(!derivesRaw.types.some((entry) => strings[entry.name].startsWith("Acme.") || strings[entry.name].startsWith("Microsoft.")));
+  assert.equal(repo.facts.derivesFrom("Microsoft.AspNetCore.Mvc.Controller", "Microsoft.AspNetCore.Mvc.ControllerBase"), true);
+  assert.equal(repo.facts.derivesFrom("Microsoft.AspNetCore.Mvc.Controller", "System.IDisposable"), true);
+});
+
+// A multi-target project compiles its file once per framework, and a referenced outside type has a different chain under each.
+const twoFrameworks = (extra = "") => `<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFrameworks>net10.0;net9.0</TargetFrameworks>
+    <ImplicitUsings>disable</ImplicitUsings>
+  </PropertyGroup>${extra}
+</Project>
+`;
+let mergedRaw;
+const merged = lazy(() => repository("merged-outside", {
+  "../merged-data/Data/Data.csproj": twoFrameworks(),
+  "../merged-data/Data/Data.cs": `namespace Microsoft.EntityFrameworkCore { public class DbContext { } }
+namespace Acme.Data
+{
+    public interface INine { }
+    public interface ITen { }
+#if NET9_0
+    public class AcmeDbContext : Microsoft.EntityFrameworkCore.DbContext, INine { }
+#else
+    public class AcmeDbContext : Microsoft.EntityFrameworkCore.DbContext, ITen { }
+#endif
+}
+`,
+  "app/App.csproj": twoFrameworks('\n  <ItemGroup><ProjectReference Include="../../merged-data/Data/Data.csproj" /></ItemGroup>'),
+  "app/Use.cs": "namespace App;\npublic sealed class Use { Acme.Data.AcmeDbContext? ctx; }\n",
+}, {
+  restore: ["app"],
+  runtime: {
+    run: (command, args) => {
+      const result = spawnSync(command, args, { encoding: "utf8", maxBuffer: 64 * 1024 * 1024 });
+      mergedRaw = JSON.parse(fs.readFileSync(args[args.indexOf("--out") + 1], "utf8"));
+      return result;
+    },
+  },
+}));
+
+test("a file two frameworks compile gives each outside type once in outsideTypes, with the union of its chains", () => {
+  const repo = merged();
+  assert.deepEqual(repo.diagnostics, []);
+  // The file is compiled twice, once per framework.
+  assert.deepEqual(repo.facts.types.get("App.Use").parts.map((part) => part.frameworks), [["App(net10.0)", "App(net9.0)"]]);
+  const strings = mergedRaw.strings;
+  const shape = mergedRaw.outsideTypes.map((entry) => ({ name: strings[entry.name], baseTypes: entry.baseTypes.map((index) => strings[index]).sort() }));
+  assert.deepEqual(shape, [
+    // net9.0 binds INine and net10.0 binds ITen: the chain holds both.
+    { name: "Acme.Data.AcmeDbContext", baseTypes: ["Acme.Data.INine", "Acme.Data.ITen", "Microsoft.EntityFrameworkCore.DbContext", "System.Object"] },
+  ]);
+  for (const base of ["Acme.Data.INine", "Acme.Data.ITen", "Microsoft.EntityFrameworkCore.DbContext"]) {
+    assert.equal(repo.facts.derivesFrom("Acme.Data.AcmeDbContext", base), true, base);
+  }
+});
+
 const failFiles = {
   "p/P.csproj": project(`\n  <ItemGroup><ProjectReference Include="../x/Util/Util.csproj" /><ProjectReference Include="../y/Util/Util.csproj" /></ItemGroup>`),
   "p/P.cs": "namespace P;\npublic class PClass { }\n",
@@ -2348,7 +2481,7 @@ test("the incomplete-facts diagnostic carries the project's first message on one
     toolFolder: toolFolder("tool-whitespace"),
     run: (command, args) => {
       scratchDir = scratchOf(args);
-      const raw = { strings: [], projects: [{ path: "a/A.csproj", loaded: false, messages }], documents: [], types: [], usings: [], references: [], tables: [], snapshotTables: [], defaultSchemas: [] };
+      const raw = { strings: [], projects: [{ path: "a/A.csproj", loaded: false, messages }], documents: [], types: [], outsideTypes: [], usings: [], references: [], tables: [], snapshotTables: [], defaultSchemas: [] };
       fs.writeFileSync(args[args.indexOf("--out") + 1], JSON.stringify(raw));
       return { status: 0, stderr: "" };
     },

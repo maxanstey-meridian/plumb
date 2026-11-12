@@ -100,6 +100,22 @@ internal static class Names
         );
     }
 
+    // A type's bases as a source type's facts list them: its base classes up to the top, then
+    // every interface it implements, each by its original definition.
+    public static List<string> BaseTypes(INamedTypeSymbol symbol)
+    {
+        var baseTypes = new List<string>();
+        for (var current = symbol.BaseType; current is not null; current = current.BaseType)
+        {
+            baseTypes.Add(Type(current.OriginalDefinition));
+        }
+        foreach (var @interface in symbol.AllInterfaces)
+        {
+            baseTypes.Add(Type(@interface.OriginalDefinition));
+        }
+        return baseTypes;
+    }
+
     // The same name with each arity marker removed, which the external prefixes and segments are
     // matched against.
     public static string WithoutArity(string name)

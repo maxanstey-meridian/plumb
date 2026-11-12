@@ -43,6 +43,7 @@ internal sealed partial class DocumentWalker : CSharpSyntaxWalker
     private readonly bool _declarationsOnly;
     private readonly Stack<TypeContext> _types = new();
     private readonly HashSet<ReferenceFact> _seen = [];
+    private readonly HashSet<string> _outside = new(StringComparer.Ordinal);
     private string? _member;
 
     private DocumentWalker(
@@ -297,15 +298,7 @@ internal sealed partial class DocumentWalker : CSharpSyntaxWalker
                 Accessibility.Private => "private",
                 _ => "internal",
             };
-        var baseTypes = new List<string>();
-        for (var current = symbol.BaseType; current is not null; current = current.BaseType)
-        {
-            baseTypes.Add(Names.Type(current.OriginalDefinition));
-        }
-        foreach (var @interface in symbol.AllInterfaces)
-        {
-            baseTypes.Add(Names.Type(@interface.OriginalDefinition));
-        }
+        var baseTypes = Names.BaseTypes(symbol);
         _facts.Parts.Add(
             new TypePart(
                 Names.Type(symbol),
@@ -347,6 +340,10 @@ internal sealed partial class DocumentWalker : CSharpSyntaxWalker
                     type = Names.Type(named.OriginalDefinition);
                     assembly = Names.Assembly(named.ContainingAssembly, _solution, _root);
                     external = !Names.IsProject(named.ContainingAssembly, _solution, _root);
+                    if (_filter.OriginOf(named.OriginalDefinition) == TypeOrigin.WantedOutside)
+                    {
+                        RecordOutside(named.OriginalDefinition);
+                    }
                 }
                 // The types inside the target: when it is a plain named type, the type arguments of
                 // it and of each type it is nested in (`Dictionary<Thing, int>.KeyCollection` holds
@@ -371,6 +368,10 @@ internal sealed partial class DocumentWalker : CSharpSyntaxWalker
                     )
                     {
                         arguments.Add(reference);
+                    }
+                    if (reference.External)
+                    {
+                        RecordOutside(inner.OriginalDefinition);
                     }
                 }
                 break;

@@ -283,6 +283,26 @@ internal sealed partial class DocumentWalker
         if (_seen.Add(fact))
         {
             _facts.References.Add(fact);
+            if (origin == TypeOrigin.WantedOutside)
+            {
+                RecordOutside(to);
+            }
+        }
+    }
+
+    // An outside type the facts record, with its bases, once per document.
+    private void RecordOutside(INamedTypeSymbol type)
+    {
+        var name = Names.Type(type);
+        if (_outside.Add(name))
+        {
+            _facts.OutsideTypes.Add(
+                new OutsideTypeFact(
+                    name,
+                    Names.Assembly(type.ContainingAssembly, _solution, _root),
+                    Names.BaseTypes(type)
+                )
+            );
         }
     }
 

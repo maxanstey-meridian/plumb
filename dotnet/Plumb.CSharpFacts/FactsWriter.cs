@@ -52,6 +52,7 @@ internal static class FactsWriter
             WriteProjects(writer, options, loader);
             WriteDocuments(writer, strings, documents);
             WriteTypes(writer, strings, documents);
+            WriteOutsideTypes(writer, strings, documents);
             WriteUsings(writer, strings, documents);
             WriteReferences(writer, strings, documents);
             WriteTables(writer, strings, documents);
@@ -169,6 +170,35 @@ internal static class FactsWriter
                     writer.WriteEndArray();
                 }
                 writer.WriteEndArray();
+            }
+            writer.WriteEndArray();
+            writer.WriteEndObject();
+        }
+        writer.WriteEndArray();
+    }
+
+    // The outside types the facts record, each once with its bases, apart from `types` because
+    // those are the repo's own.
+    private static void WriteOutsideTypes(
+        Utf8JsonWriter writer,
+        Strings strings,
+        List<DocumentFacts> documents
+    )
+    {
+        writer.WriteStartArray("outsideTypes");
+        foreach (
+            var outside in OutsideTypeFact.Union(
+                documents.SelectMany(document => document.OutsideTypes)
+            )
+        )
+        {
+            writer.WriteStartObject();
+            writer.WriteNumber("name", strings.Of(outside.Name));
+            writer.WriteNumber("assembly", strings.Of(outside.Assembly));
+            writer.WriteStartArray("baseTypes");
+            foreach (var baseType in outside.BaseTypes)
+            {
+                writer.WriteNumberValue(strings.Of(baseType));
             }
             writer.WriteEndArray();
             writer.WriteEndObject();

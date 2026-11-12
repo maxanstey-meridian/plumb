@@ -58,6 +58,31 @@ internal readonly record struct ReferenceFact(
     string Namespace
 );
 
+// An outside type the facts record, with the bases it has (as a source type's baseTypes lists
+// them), so a rule can ask what a type declared in a package derives from.
+internal readonly record struct OutsideTypeFact(
+    string Name,
+    string Assembly,
+    IReadOnlyList<string> BaseTypes
+)
+{
+    // One fact per name, with the union of the chains in order of first appearance. A type's
+    // assembly differs by framework (System.Runtime, netstandard) and it's still one type, so the
+    // facts are joined by name, and the ordinally first assembly stands.
+    public static List<OutsideTypeFact> Union(IEnumerable<OutsideTypeFact> facts)
+    {
+        return facts
+            .GroupBy(fact => fact.Name, StringComparer.Ordinal)
+            .Select(group => new OutsideTypeFact(
+                group.Key,
+                group.Select(fact => fact.Assembly).Min(StringComparer.Ordinal)!,
+                group.SelectMany(fact => fact.BaseTypes).Distinct(StringComparer.Ordinal).ToList()
+            ))
+            .OrderBy(fact => fact.Name, StringComparer.Ordinal)
+            .ToList();
+    }
+}
+
 internal readonly record struct TableFact(int Start, string Method, string? Schema, string Table);
 
 internal readonly record struct SnapshotTableFact(
@@ -80,6 +105,7 @@ internal sealed class DocumentFacts(string file, string assembly)
     public List<TypePart> Parts { get; } = [];
     public List<UsingFact> Usings { get; } = [];
     public List<ReferenceFact> References { get; } = [];
+    public List<OutsideTypeFact> OutsideTypes { get; } = [];
     public List<TableFact> Tables { get; } = [];
     public List<SnapshotTableFact> SnapshotTables { get; } = [];
     public List<DefaultSchemaFact> DefaultSchemas { get; } = [];
@@ -242,6 +268,9 @@ internal sealed class DocumentFacts(string file, string assembly)
             frameworks
                 .SelectMany(framework => framework.References)
                 .DistinctBy(fact => fact with { Assembly = fact.External ? "" : fact.Assembly })
+        );
+        merged.OutsideTypes.AddRange(
+            OutsideTypeFact.Union(frameworks.SelectMany(framework => framework.OutsideTypes))
         );
         merged.Tables.AddRange(frameworks.SelectMany(framework => framework.Tables).Distinct());
         merged.SnapshotTables.AddRange(

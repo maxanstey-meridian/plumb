@@ -6,6 +6,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { underModuleFolder } from "../lib/in-process-rules/be-csharp.mjs";
 import { restoreProjects } from "../scripts/dotnet-restore.mjs";
 import { rivetStubs } from "./helpers/rivet-stubs.mjs";
 
@@ -360,10 +361,10 @@ test("BE's layer, module-shape, style and placement rules exempt a test project'
     const rules = ["MER-BE-001", "MER-BE-002", "MER-BE-003", "MER-BE-004", "MER-BE-005", "MER-BE-007", "MER-BE-008", "MER-BE-009",
         "MER-BE-010", "MER-BE-011", "MER-BE-012", "MER-BE-013", "MER-BE-014", "MER-BE-016", "MER-BE-017", "MER-BE-020", "MER-BE-021",
         "MER-BE-022", "MER-BE-023", "MER-BE-024", "MER-BE-030", "MER-BE-031", "MER-BE-032", "MER-BE-042", "MER-BE-051", "MER-BE-052",
-        "MER-BE-053", "MER-BE-054", "MER-BE-055", "MER-BE-060"];
+        "MER-BE-053", "MER-BE-054", "MER-BE-055", "MER-BE-060", "MER-BE-067"];
     // The rules that read C# facts need a real net10.0 project, restored, and one that compiles: the copied files get the
     // project their fixture has (its SDK, implicit usings and nullable setting), as a test project of their own.
-    const onFacts = new Set(["MER-BE-001", "MER-BE-002", "MER-BE-003", "MER-BE-004", "MER-BE-005", "MER-BE-007", "MER-BE-009", "MER-BE-016"]);
+    const onFacts = new Set(["MER-BE-001", "MER-BE-002", "MER-BE-003", "MER-BE-004", "MER-BE-005", "MER-BE-007", "MER-BE-009", "MER-BE-016", "MER-BE-030", "MER-BE-031", "MER-BE-067"]);
     const fixtureProject = (rule) => {
         const file = fs.readdirSync(path.join(FIXTURES, rule, "bad"), { recursive: true }).find((name) => name.endsWith(".csproj") && !/(?:^|\/)(?:obj|bin)\//.test(name));
         return fs.readFileSync(path.join(FIXTURES, rule, "bad", file), "utf8");
@@ -1132,6 +1133,301 @@ test("MER-BE-066 judges what the compiler binds, and leaves the root, a sibling 
         "api/Modules/Forms/Application/Inferred.cs:7\tmodule Forms Application must not use App.Modules.Forms.FormsOptions",
         "api/Modules/Forms/Infrastructure/Aliased.cs:1\tmodule Forms Infrastructure must not use App.Modules.Forms.FormsOptions",
     ], findings.join("\n"));
+});
+
+// The transport rules (MER-BE-030, 031, and 067) judge each use a transport class makes. The framework types the
+// repositories below use are stand-ins in their real namespaces, since the rules judge a type by its full name.
+const mvcStubs = {
+    "api/Stubs/Mvc.cs": [
+        "namespace Microsoft.AspNetCore.Mvc { public abstract class ControllerBase { } }",
+        "namespace Microsoft.AspNetCore.Mvc.RazorPages { public abstract class PageModel { } }",
+        "namespace Microsoft.AspNetCore.SignalR { public abstract class Hub { } }",
+        "namespace Microsoft.AspNetCore.Authentication { public class RemoteAuthenticationEvents { } }",
+        "namespace Microsoft.AspNetCore.Authentication.Cookies { public class CookieAuthenticationEvents { } }",
+        "namespace Microsoft.AspNetCore.Authentication.JwtBearer { public class JwtBearerEvents { } }",
+    ].join("\n") + "\n",
+};
+const persistenceStubs = {
+    "api/Stubs/Persistence.cs": [
+        "namespace Microsoft.EntityFrameworkCore { public class DbContext { } public static class EntityFrameworkQueryableExtensions { public static Task<List<T>> ToListAsync<T>(this IQueryable<T> source, CancellationToken cancellationToken = default) => Task.FromResult(source.ToList()); } }",
+        "namespace Microsoft.EntityFrameworkCoreExtras { public sealed class Helper { } }",
+        "namespace Npgsql { public sealed class NpgsqlConnection { } }",
+    ].join("\n") + "\n",
+};
+const tail = " — a controller calls use cases only; call a use case instead";
+const unTailed = (finding) => finding.replace(tail, "");
+
+// A throwaway repo scanned for each rule in turn: its projects are restored, and `beside` holds files next to the
+// repo's folder (a project it references from outside the scanned root).
+function scanTransport(rules, files, beside = {}) {
+    const parent = fs.mkdtempSync(path.join(os.tmpdir(), "plumb-transport-"));
+    const root = path.join(parent, "repo");
+    try {
+        for (const [base, entries] of [[parent, beside], [root, files]]) {
+            for (const [file, content] of Object.entries(entries)) {
+                fs.mkdirSync(path.dirname(path.join(base, file)), { recursive: true });
+                fs.writeFileSync(path.join(base, file), content);
+            }
+        }
+        restoreProjects(root);
+        return Object.fromEntries(rules.map((rule) => {
+            const result = spawnSync(PLUMB, [root, "--rule", rule, "--ci", "--json"], { encoding: "utf8" });
+            assert.ok([0, 1].includes(result.status), result.stderr);
+            return [rule, JSON.parse(result.stdout).filter((finding) => finding.rule === rule).map((finding) => `${finding.location}\t${finding.message}`)];
+        }));
+    } finally {
+        fs.rmSync(parent, { recursive: true, force: true });
+    }
+}
+
+const property = (type) => `public ${type}? Db { get; set; }`;
+
+test("MER-BE-030 reports a controller and an events class that use a DbContext, the app's own or DbContext itself", () => {
+    assert.equal(run("MER-BE-030", "good"), "");
+    const context = (from, type) => `${from} must not use ${type}, a DbContext${tail}`;
+    assertFindings("MER-BE-030", "bad", [
+        ["Auth/FormsCookieEvents.cs:5", context("App.Auth.FormsCookieEvents", "Microsoft.EntityFrameworkCore.DbContext")],
+        ["Auth/FormsCookieEvents.cs:7", context("App.Auth.FormsCookieEvents", "Microsoft.EntityFrameworkCore.DbContext")],
+        ["Modules/Forms/FormsController.cs:6", context("App.Modules.Forms.FormsController", "App.Data.AppDbContext")],
+        ["Modules/Forms/FormsController.cs:8", context("App.Modules.Forms.FormsController", "App.Data.AppDbContext")],
+    ]);
+});
+
+// A transport class is a type of a *Controller.cs or *Endpoints.cs file (by type: a partial class's other parts too), a
+// type deriving from a framework transport base, or a type nested in one. Nothing else is, whatever it uses.
+test("a transport class is a *Controller.cs or *Endpoints.cs type, a framework transport base's subclass, or a type nested in one", () => {
+    const { "MER-BE-030": findings } = scanTransport(["MER-BE-030"], {
+        "api/App.csproj": net10("<OutputType>Exe</OutputType>"),
+        ...mvcStubs,
+        ...persistenceStubs,
+        "api/Data/AppDbContext.cs": "namespace App.Data;\npublic sealed class AppDbContext : Microsoft.EntityFrameworkCore.DbContext { }\npublic static class Holder { public static AppDbContext Current() => new(); }\n",
+        // By file name alone: no base type.
+        "api/Web/FormsController.cs": `namespace App.Web;\npublic sealed class FormsController\n{\n    ${property("App.Data.AppDbContext")}\n}\n`,
+        // Nested two deep in a controller.
+        "api/Web/ReportsController.cs": `namespace App.Web;\npublic sealed class ReportsController\n{\n    public sealed class Row\n    {\n        public sealed class Cell\n        {\n            ${property("App.Data.AppDbContext")}\n        }\n    }\n}\n`,
+        // A controller whose second part is in a file with no transport name.
+        "api/Web/OrdersController.cs": "namespace App.Web;\npublic sealed partial class OrdersController { }\n",
+        "api/Web/OrdersLookups.cs": `namespace App.Web;\npublic sealed partial class OrdersController\n{\n    ${property("App.Data.AppDbContext")}\n}\n`,
+        // Each framework base, and a subclass of a repository type that derives from one.
+        "api/Web/Handlers.cs": [
+            "namespace App.Web;",
+            `public sealed class ChatHub : Microsoft.AspNetCore.SignalR.Hub { ${property("App.Data.AppDbContext")} }`,
+            `public sealed class IndexModel : Microsoft.AspNetCore.Mvc.RazorPages.PageModel { ${property("App.Data.AppDbContext")} }`,
+            `public sealed class BearerEvents : Microsoft.AspNetCore.Authentication.JwtBearer.JwtBearerEvents { ${property("App.Data.AppDbContext")} }`,
+            `public sealed class RemoteEvents : Microsoft.AspNetCore.Authentication.RemoteAuthenticationEvents { ${property("App.Data.AppDbContext")} }`,
+            `public sealed class CookieEvents : Microsoft.AspNetCore.Authentication.Cookies.CookieAuthenticationEvents { ${property("App.Data.AppDbContext")} }`,
+            "public abstract class BaseApi : Microsoft.AspNetCore.Mvc.ControllerBase { }",
+            `public sealed class ThingApi : BaseApi { ${property("App.Data.AppDbContext")} }`,
+            `public sealed class Plain { ${property("App.Data.AppDbContext")} }`,
+            // Types nested in a base-derived class, in a file with no transport name: only the nesting makes them transport.
+            "public sealed class NestedHub : Microsoft.AspNetCore.SignalR.Hub",
+            "{",
+            "    public sealed class Inner",
+            "    {",
+            `        public sealed class Deeper { ${property("App.Data.AppDbContext")} }`,
+            "    }",
+            "}",
+            "",
+        ].join("\n"),
+        // A static endpoints class, with the context reached only through `var`.
+        "api/Web/StatusEndpoints.cs": "namespace App.Web;\npublic static class StatusEndpoints\n{\n    public static bool Ready()\n    {\n        var context = App.Data.Holder.Current();\n        return context is not null;\n    }\n}\n",
+        // Not transport: a use case, an adapter, the host's registration, and a test project's controller.
+        "api/Modules/Forms/Application/CreateForm/CreateFormUseCase.cs": `namespace App.Modules.Forms.Application.CreateForm;\npublic sealed class CreateFormUseCase { ${property("App.Data.AppDbContext")} }\n`,
+        "api/Modules/Forms/Infrastructure/FormStore.cs": `namespace App.Modules.Forms.Infrastructure;\npublic sealed class FormStore { ${property("App.Data.AppDbContext")} }\n`,
+        "api/Program.cs": "var context = new App.Data.AppDbContext();\nSystem.Console.WriteLine(context);\n",
+        "tests/Api.Tests/Api.Tests.csproj": testProject('<ProjectReference Include="../../api/App.csproj" />'),
+        // Test code, one class by file name and one by its base: neither is judged.
+        "tests/Api.Tests/Web/FormsController.cs": `namespace App.Tests;\npublic sealed class FormsController { ${property("App.Data.AppDbContext")} }\npublic sealed class FakeApi : Microsoft.AspNetCore.Mvc.ControllerBase { ${property("App.Data.AppDbContext")} }\n`,
+    });
+    assert.deepEqual(findings.map((finding) => unTailed(finding)), [
+        ["api/Web/FormsController.cs:4", "App.Web.FormsController"],
+        ["api/Web/Handlers.cs:14", "App.Web.NestedHub.Inner.Deeper"],
+        ["api/Web/Handlers.cs:2", "App.Web.ChatHub"],
+        ["api/Web/Handlers.cs:3", "App.Web.IndexModel"],
+        ["api/Web/Handlers.cs:4", "App.Web.BearerEvents"],
+        ["api/Web/Handlers.cs:5", "App.Web.RemoteEvents"],
+        ["api/Web/Handlers.cs:6", "App.Web.CookieEvents"],
+        ["api/Web/Handlers.cs:8", "App.Web.ThingApi"],
+        ["api/Web/OrdersLookups.cs:4", "App.Web.OrdersController"],
+        ["api/Web/ReportsController.cs:8", "App.Web.ReportsController.Row.Cell"],
+        // No line names the context but the `var`'s and the use below it.
+        ["api/Web/StatusEndpoints.cs:6", "App.Web.StatusEndpoints"],
+        ["api/Web/StatusEndpoints.cs:7", "App.Web.StatusEndpoints"],
+    ].map(([at, from]) => `${at}\t${from} must not use App.Data.AppDbContext, a DbContext`), findings.join("\n"));
+});
+
+// A context from a project outside the scanned root, under a name no framework prefix matches, is still a DbContext.
+test("MER-BE-030 follows a context declared outside the scanned root to DbContext", () => {
+    const { "MER-BE-030": findings } = scanTransport(["MER-BE-030"], {
+        "api/App.csproj": net10("", '<ItemGroup><ProjectReference Include="../../ctx/Ctx.csproj" /></ItemGroup>'),
+        ...mvcStubs,
+        "api/Web/FormsController.cs": "namespace App.Web;\npublic sealed class FormsController\n{\n    public Acme.Data.AcmeDbContext? Db { get; set; }\n    public Acme.Data.Plain? Plain { get; set; }\n}\n",
+    }, {
+        "ctx/Ctx.csproj": net10(),
+        "ctx/Ctx.cs": "namespace Microsoft.EntityFrameworkCore { public class DbContext { } }\nnamespace Acme.Data\n{\n    public class AcmeDbContext : Microsoft.EntityFrameworkCore.DbContext { }\n    public class Plain { }\n}\n",
+    });
+    assert.deepEqual(findings.map((finding) => unTailed(finding)), [
+        "api/Web/FormsController.cs:4\tApp.Web.FormsController must not use Acme.Data.AcmeDbContext, a DbContext",
+    ], findings.join("\n"));
+});
+
+test("MER-BE-031 reports a controller and an events class that import persistence or use its types", () => {
+    assert.equal(run("MER-BE-031", "good"), "");
+    assertFindings("MER-BE-031", "bad", [
+        ["Auth/FormsCookieEvents.cs:7", `App.Auth.FormsCookieEvents must not use Npgsql.NpgsqlConnection, from the persistence namespace Npgsql${tail}`],
+        ["Modules/Forms/FormsController.cs:2", `using Microsoft.EntityFrameworkCore imports persistence into a file with a transport class${tail}`],
+        ["Modules/Forms/FormsController.cs:8", `App.Modules.Forms.FormsController must not use Microsoft.EntityFrameworkCore.EntityFrameworkQueryableExtensions, from the persistence namespace Microsoft.EntityFrameworkCore${tail}`],
+    ]);
+});
+
+test("MER-BE-031 judges the compiler's namespaces by whole segment: usings, aliases, global usings, and names reached with no using", () => {
+    const { "MER-BE-031": findings } = scanTransport(["MER-BE-031"], {
+        "api/App.csproj": net10("<OutputType>Exe</OutputType>"),
+        ...mvcStubs,
+        ...persistenceStubs,
+        // A global using in a file with no transport class is no transport file's using, and it puts the extension in scope.
+        "api/GlobalUsings.cs": "global using Microsoft.EntityFrameworkCore;\n",
+        // An extension call through that global using, with no using in the file.
+        "api/Web/RowsController.cs": "namespace App.Web;\npublic sealed class RowsController\n{\n    public Task<List<string>> Titles(IQueryable<string> titles, CancellationToken cancellationToken) => titles.ToListAsync(cancellationToken);\n}\n",
+        // A fully qualified name, with no using.
+        "api/Web/QualifiedEndpoints.cs": "namespace App.Web;\npublic static class QualifiedEndpoints\n{\n    public static Npgsql.NpgsqlConnection? Connection { get; set; }\n}\n",
+        // Each using form: a global using, a namespace alias, a type alias, and a type alias whose argument is persistence; and a namesake namespace.
+        "api/Web/UsingsController.cs": [
+            "global using Npgsql;",
+            "using Ef = Microsoft.EntityFrameworkCore;",
+            "using Conn = Npgsql.NpgsqlConnection;",
+            "using Bag = System.Collections.Generic.List<Microsoft.EntityFrameworkCore.DbContext>;",
+            "using Microsoft.EntityFrameworkCoreExtras;",
+            "namespace App.Web;",
+            "public sealed class UsingsController { }",
+            "",
+        ].join("\n"),
+        // A type in a namespace that only begins with a persistence namespace's name is not persistence.
+        "api/Web/ExtrasController.cs": "namespace App.Web;\npublic sealed class ExtrasController\n{\n    public Microsoft.EntityFrameworkCoreExtras.Helper? Helper { get; set; }\n}\n",
+        // The context is MER-BE-030's: the using is still persistence in a transport file, and the use is not reported here.
+        "api/Web/ContextController.cs": "using Microsoft.EntityFrameworkCore;\nnamespace App.Web;\npublic sealed class ContextController\n{\n    public DbContext? Db { get; set; }\n}\n",
+        // Not transport: an adapter, the host, and a test project's controller.
+        "api/Modules/Forms/Infrastructure/FormStore.cs": "using Microsoft.EntityFrameworkCore;\nnamespace App.Modules.Forms.Infrastructure;\npublic sealed class FormStore\n{\n    public Task<List<string>> Titles(IQueryable<string> titles) => titles.ToListAsync();\n}\n",
+        "api/Program.cs": "using Npgsql;\nSystem.Console.WriteLine(new NpgsqlConnection());\n",
+        "tests/Api.Tests/Api.Tests.csproj": testProject('<ProjectReference Include="../../api/App.csproj" />'),
+        // Test code, one class by file name and one by its base: neither is judged.
+        "tests/Api.Tests/Web/FormsController.cs": "using Npgsql;\nnamespace App.Tests;\npublic sealed class FormsController\n{\n    public NpgsqlConnection? Connection { get; set; }\n}\npublic sealed class FakeApi : Microsoft.AspNetCore.Mvc.ControllerBase\n{\n    public NpgsqlConnection? Connection { get; set; }\n}\n",
+    });
+    assert.deepEqual(findings.map((finding) => unTailed(finding)).sort(), [
+        "api/Web/ContextController.cs:1\tusing Microsoft.EntityFrameworkCore imports persistence into a file with a transport class",
+        "api/Web/QualifiedEndpoints.cs:4\tApp.Web.QualifiedEndpoints must not use Npgsql.NpgsqlConnection, from the persistence namespace Npgsql",
+        "api/Web/RowsController.cs:4\tApp.Web.RowsController must not use Microsoft.EntityFrameworkCore.EntityFrameworkQueryableExtensions, from the persistence namespace Microsoft.EntityFrameworkCore",
+        "api/Web/UsingsController.cs:1\tglobal using Npgsql imports persistence into a file with a transport class",
+        "api/Web/UsingsController.cs:2\tusing Microsoft.EntityFrameworkCore imports persistence into a file with a transport class",
+        "api/Web/UsingsController.cs:3\tusing Npgsql.NpgsqlConnection imports persistence into a file with a transport class",
+        "api/Web/UsingsController.cs:4\tusing Microsoft.EntityFrameworkCore.DbContext imports persistence into a file with a transport class",
+    ], findings.join("\n"));
+});
+
+test("MER-BE-067 reports a controller and an events class that use a module's port or Infrastructure adapter", () => {
+    assert.equal(run("MER-BE-067", "good"), "");
+    const use = (from, type, what) => `${from} must not use ${type}, a module's ${what}${tail}`;
+    assertFindings("MER-BE-067", "bad", [
+        ["Auth/FormsCookieEvents.cs:6", use("App.Auth.FormsCookieEvents", "App.Modules.Forms.Infrastructure.FormStore", "Infrastructure adapter")],
+        ["Auth/FormsCookieEvents.cs:8", use("App.Auth.FormsCookieEvents", "App.Modules.Forms.Infrastructure.FormStore", "Infrastructure adapter")],
+        ["Modules/Forms/FormsController.cs:6", use("App.Modules.Forms.FormsController", "App.Modules.Forms.Application.Ports.IFormRepository", "port")],
+        ["Modules/Forms/FormsController.cs:8", use("App.Modules.Forms.FormsController", "App.Modules.Forms.Application.Ports.IFormRepository", "port")],
+    ]);
+});
+
+test("MER-BE-067 flags an interface under Application anywhere and an adapter, and leaves records, enums, structs, delegates, classes, and a type with a part elsewhere", () => {
+    let members = 0;
+    const type = (name) => `public ${name}? Member${++members} { get; set; }`;
+    const { "MER-BE-067": findings } = scanTransport(["MER-BE-067"], {
+        "api/App.csproj": net10("<OutputType>Exe</OutputType>"),
+        ...mvcStubs,
+        "api/Modules/Forms/Application/Ports/IFormRepository.cs": "namespace App.Modules.Forms.Application.Ports;\npublic interface IFormRepository { bool Any(); }\n",
+        // An I...Repository interface beside the use cases, outside Ports/.
+        "api/Modules/Forms/Application/IOrderRepository.cs": "namespace App.Modules.Forms.Application;\npublic interface IOrderRepository { bool Any(); }\n",
+        // An interface the module's own Application implements is a query behind an interface, not a port, wherever it
+        // is filed. One only another module's Application implements is still a port of this module.
+        "api/Modules/Forms/Application/Ports/IFormQuery.cs": "namespace App.Modules.Forms.Application.Ports;\npublic interface IFormQuery { bool Any(); }\n",
+        "api/Modules/Forms/Application/FormQuery.cs": "namespace App.Modules.Forms.Application;\npublic sealed class FormQuery : App.Modules.Forms.Application.Ports.IFormQuery { public bool Any() => true; }\n",
+        "api/Modules/Forms/Application/Ports/IFormLookup.cs": "namespace App.Modules.Forms.Application.Ports;\npublic interface IFormLookup { bool Any(); }\n",
+        "api/Modules/Orders/Application/OrderForms.cs": "namespace App.Modules.Orders.Application;\npublic sealed class OrderForms : App.Modules.Forms.Application.Ports.IFormLookup { public bool Any() => true; }\n",
+        // A use case's inputs, outputs, and helpers: a record and an enum in Ports/, a struct, a delegate, and a class.
+        "api/Modules/Forms/Application/Ports/FormFilter.cs": "namespace App.Modules.Forms.Application.Ports;\npublic sealed record FormFilter(string Title);\npublic enum FormOrder { Title }\n",
+        "api/Modules/Forms/Application/Shapes.cs": "namespace App.Modules.Forms.Application;\npublic readonly struct FormKey { }\npublic delegate void FormChanged();\npublic sealed class FormHelper { }\n",
+        "api/Modules/Forms/Infrastructure/FormStore.cs": "namespace App.Modules.Forms.Infrastructure;\npublic sealed class FormStore : App.Modules.Forms.Application.Ports.IFormRepository, App.Modules.Forms.Application.IOrderRepository { public bool Any() => true; }\n",
+        "api/Modules/Forms/Infrastructure/Options/StoreOptions.cs": "namespace App.Modules.Forms.Infrastructure.Options;\npublic sealed class StoreOptions { }\n",
+        // A partial type with one part in Infrastructure and one in the host is no adapter.
+        "api/Modules/Forms/Infrastructure/FormCache.cs": "namespace App.Host;\npublic sealed partial class FormCache { }\n",
+        "api/Host/FormCache.cs": "namespace App.Host;\npublic sealed partial class FormCache { }\n",
+        "api/Modules/Forms/FormsController.cs": [
+            "namespace App.Modules.Forms;",
+            "public sealed class FormsController : Microsoft.AspNetCore.Mvc.ControllerBase",
+            "{",
+            `    ${type("App.Modules.Forms.Application.Ports.IFormRepository")}`,
+            `    ${type("App.Modules.Forms.Application.IOrderRepository")}`,
+            `    ${type("App.Modules.Forms.Infrastructure.FormStore")}`,
+            `    ${type("App.Modules.Forms.Infrastructure.Options.StoreOptions")}`,
+            `    ${type("App.Modules.Forms.Application.Ports.FormFilter")}`,
+            "    public App.Modules.Forms.Application.Ports.FormOrder Order { get; set; }",
+            "    public App.Modules.Forms.Application.FormKey Key { get; set; }",
+            `    ${type("App.Modules.Forms.Application.FormChanged")}`,
+            `    ${type("App.Modules.Forms.Application.FormHelper")}`,
+            `    ${type("App.Host.FormCache")}`,
+            `    ${type("App.Modules.Forms.Application.Ports.IFormQuery")}`,
+            `    ${type("App.Modules.Forms.Application.Ports.IFormLookup")}`,
+            "}",
+            "",
+        ].join("\n"),
+        // A static endpoints class, whose lambda parameter has the port's type and no line names it.
+        "api/Web/Registry.cs": "namespace App.Web;\npublic sealed class Registry { public void Add(System.Func<App.Modules.Forms.Application.Ports.IFormRepository, bool> handler) { } }\n",
+        "api/Web/FormsEndpoints.cs": "namespace App.Web;\npublic static class FormsEndpoints\n{\n    public static void Map(Registry registry) => registry.Add(forms => forms.Any());\n}\n",
+        // Not transport: a use case, the adapter itself, the host, and a test project's controller.
+        "api/Modules/Forms/Application/CreateForm/CreateFormUseCase.cs": "namespace App.Modules.Forms.Application.CreateForm;\npublic sealed class CreateFormUseCase(App.Modules.Forms.Application.Ports.IFormRepository forms) { public bool Execute() => forms.Any(); }\n",
+        "api/Program.cs": "System.Console.WriteLine(new App.Modules.Forms.Infrastructure.FormStore());\n",
+        "tests/Api.Tests/Api.Tests.csproj": testProject('<ProjectReference Include="../../api/App.csproj" />'),
+        // Test code, one class by file name and one by its base: neither is judged.
+        "tests/Api.Tests/Web/FormsController.cs": "namespace App.Tests;\npublic sealed class FormsController { public App.Modules.Forms.Application.Ports.IFormRepository? Repository { get; set; } }\npublic sealed class FakeApi : Microsoft.AspNetCore.Mvc.ControllerBase { public App.Modules.Forms.Application.Ports.IFormRepository? Repository { get; set; } }\n",
+    });
+    const from = "App.Modules.Forms.FormsController";
+    assert.deepEqual(findings.map((finding) => unTailed(finding)).sort(), [
+        `api/Modules/Forms/FormsController.cs:15\t${from} must not use App.Modules.Forms.Application.Ports.IFormLookup, a module's port`,
+        `api/Modules/Forms/FormsController.cs:4\t${from} must not use App.Modules.Forms.Application.Ports.IFormRepository, a module's port`,
+        `api/Modules/Forms/FormsController.cs:5\t${from} must not use App.Modules.Forms.Application.IOrderRepository, a module's port`,
+        `api/Modules/Forms/FormsController.cs:6\t${from} must not use App.Modules.Forms.Infrastructure.FormStore, a module's Infrastructure adapter`,
+        `api/Modules/Forms/FormsController.cs:7\t${from} must not use App.Modules.Forms.Infrastructure.Options.StoreOptions, a module's Infrastructure adapter`,
+        "api/Web/FormsEndpoints.cs:4\tApp.Web.FormsEndpoints must not use App.Modules.Forms.Application.Ports.IFormRepository, a module's port",
+    ], findings.join("\n"));
+});
+
+test("a DbContext reached by a transport class is MER-BE-030's alone: not a port or an adapter for MER-BE-067, and not persistence for MER-BE-031", () => {
+    const found = scanTransport(["MER-BE-030", "MER-BE-031", "MER-BE-067"], {
+        "api/App.csproj": net10(),
+        ...mvcStubs,
+        ...persistenceStubs,
+        "api/Modules/Forms/Infrastructure/FormsContext.cs": "namespace App.Modules.Forms.Infrastructure;\npublic sealed class FormsContext : Microsoft.EntityFrameworkCore.DbContext { }\n",
+        "api/Web/FormsController.cs": `namespace App.Web;\npublic sealed class FormsController\n{\n    ${property("App.Modules.Forms.Infrastructure.FormsContext")}\n}\n`,
+    });
+    assert.deepEqual(found["MER-BE-030"].map((finding) => unTailed(finding)), [
+        "api/Web/FormsController.cs:4\tApp.Web.FormsController must not use App.Modules.Forms.Infrastructure.FormsContext, a DbContext",
+    ]);
+    assert.deepEqual(found["MER-BE-031"], []);
+    assert.deepEqual(found["MER-BE-067"], []);
+});
+
+test("underModuleFolder places a file under a module's layer, or a folder of it, by path segment", () => {
+    assert.equal(underModuleFolder("Modules/Forms/Application/Ports/IFormRepository.cs", "Application", "Ports"), true);
+    assert.equal(underModuleFolder("api/Modules/Forms/Application/Ports/Deep/IFormRepository.cs", "Application", "Ports"), true);
+    assert.equal(underModuleFolder("a/b/Modules/Forms/Application/Ports/IFormRepository.cs", "Application", "Ports"), true);
+    assert.equal(underModuleFolder("Modules/Forms/Application/Ports/IFormRepository.cs", "Application"), true);
+    assert.equal(underModuleFolder("Modules/Forms/Infrastructure/Options/Options.cs", "Infrastructure"), true);
+    // A file directly in the layer folder is under the layer and under none of its folders; a folder is matched whole.
+    assert.equal(underModuleFolder("Modules/Forms/Application/IFormRepository.cs", "Application"), true);
+    assert.equal(underModuleFolder("Modules/Forms/Application/IFormRepository.cs", "Application", "Ports"), false);
+    assert.equal(underModuleFolder("Modules/Forms/Application/PortsOfCall/IFormRepository.cs", "Application", "Ports"), false);
+    assert.equal(underModuleFolder("Modules/Forms/Application/Ports", "Application", "Ports"), false);
+    assert.equal(underModuleFolder("Modules/Forms/Domain/Ports/IFormRepository.cs", "Application", "Ports"), false);
+    assert.equal(underModuleFolder("Modules/Forms/Application/IFormRepository.cs", "Infrastructure"), false);
+    assert.equal(underModuleFolder("Modules/Forms/FormsController.cs", "Application"), false);
+    assert.equal(underModuleFolder("Common/Application/Ports/IClock.cs", "Application", "Ports"), false);
 });
 
 test("MER-RV-027 follows transport namesakes and .Returns<T> payloads, checks PaginatedResponse, and flags defaults, [RivetOptional] and conditional [JsonIgnore]", () => {

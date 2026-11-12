@@ -11,9 +11,11 @@ internal enum TypeOrigin
 }
 
 // Which types a use is recorded for: every type declared in the repo's own documents, and an
-// outside type only when its full name equals an --external prefix or starts with one followed by
-// `.`, or has an --external-segment segment. A declaration in what a build generated isn't the
-// repo's own.
+// outside type only when its full name, or the full name of one of its base classes, equals an
+// --external prefix or starts with one followed by `.`, or when its own name has an
+// --external-segment segment. A context declared in a package under a name no prefix matches is
+// still the framework's when it derives from DbContext. A declaration in what a build generated
+// isn't the repo's own.
 internal sealed class TypeFilter(
     string root,
     IReadOnlyList<string> prefixes,
@@ -41,9 +43,14 @@ internal sealed class TypeFilter(
             }
         }
         var name = Names.WithoutArity(Names.Type(type));
-        foreach (var prefix in prefixes)
+        if (MatchesPrefix(name))
         {
-            if (name == prefix || name.StartsWith(prefix + ".", StringComparison.Ordinal))
+            return TypeOrigin.WantedOutside;
+        }
+        // Base classes only: an interface, or a segment in a base's name, is no claim on the type.
+        for (var current = type.BaseType; current is not null; current = current.BaseType)
+        {
+            if (MatchesPrefix(Names.WithoutArity(Names.Type(current.OriginalDefinition))))
             {
                 return TypeOrigin.WantedOutside;
             }
@@ -59,6 +66,18 @@ internal sealed class TypeFilter(
             }
         }
         return TypeOrigin.Ignored;
+    }
+
+    private bool MatchesPrefix(string name)
+    {
+        foreach (var prefix in prefixes)
+        {
+            if (name == prefix || name.StartsWith(prefix + ".", StringComparison.Ordinal))
+            {
+                return true;
+            }
+        }
+        return false;
     }
 }
 

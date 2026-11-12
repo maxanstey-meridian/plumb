@@ -1066,15 +1066,72 @@ test("MER-BE-018 tells a module file declared in the transport namespace to move
     assertFindings("MER-BE-018", "bad", [
         ["api/Modules/Orders/Application/OrderDtoExtensions.cs:1",
             "module Orders Application declares itself in the transport namespace App.Contracts.Orders — move it to Contracts/<Feature>/ or use the module's namespace"],
+        // The file's own namespace brings OrderDto in: a use with no using.
+        ["api/Modules/Orders/Application/OrderDtoExtensions.cs:5", "module Orders Application uses App.Contracts.Orders.OrderDto, the API's transport contract — map at the edge"],
+        // A using is one finding, and each line that uses a type it brought in is another.
         ["api/Modules/Orders/Application/PlaceOrder/PlaceOrderUseCase.cs:1", "module Orders Application uses App.Contracts.Orders, the API's transport contract — map at the edge"],
+        ["api/Modules/Orders/Application/PlaceOrder/PlaceOrderUseCase.cs:8", "module Orders Application uses App.Contracts.Orders.OrderDto, the API's transport contract — map at the edge"],
+        ["api/Modules/Orders/Application/PlaceOrder/PlaceOrderUseCase.cs:9", "module Orders Application uses App.Contracts.Orders.OrderDto, the API's transport contract — map at the edge"],
+        // A dependency inside a method body, with no using and no transport namespace on the line: the mapper comes
+        // in through the project's global using, the wire type through `var`, and the next line reads its member.
+        ["api/Modules/Orders/Application/DescribeOrder/DescribeOrderUseCase.cs:11", "module Orders Application uses App.Contracts.Orders.OrderTransportMapper, the API's transport contract — map at the edge"],
+        ["api/Modules/Orders/Application/DescribeOrder/DescribeOrderUseCase.cs:11", "module Orders Application uses App.Contracts.Orders.OrderDto, the API's transport contract — map at the edge"],
+        ["api/Modules/Orders/Application/DescribeOrder/DescribeOrderUseCase.cs:12", "module Orders Application uses App.Contracts.Orders.OrderDto, the API's transport contract — map at the edge"],
         ["api/Modules/Orders/Domain/Order.cs:5", "module Orders Domain uses App.Contracts.Orders.OrderDto, the API's transport contract — map at the edge"],
         // Infrastructure returning transport DTOs: no legal caller can use them.
         ["api/Modules/Orders/Infrastructure/OrderReader.cs:1", "module Orders Infrastructure uses App.Contracts.Orders, the API's transport contract — map at the edge"],
+        ["api/Modules/Orders/Infrastructure/OrderReader.cs:9", "module Orders Infrastructure uses App.Contracts.Orders.OrderDto, the API's transport contract — map at the edge"],
+        ["api/Modules/Orders/Infrastructure/OrderReader.cs:10", "module Orders Infrastructure uses App.Contracts.Orders.OrderDto, the API's transport contract — map at the edge"],
         // Global usings (C# and MSBuild) put the transport contract in scope everywhere; System.* and comments are ignored.
         ["api/GlobalUsings.cs:2", "global using App.Contracts.Orders puts the API's transport contract in scope in every file of the project, modules included — remove it and add a file-level using in a controller, endpoint, request validator or transport mapper at the module root or under Contracts/ that needs it"],
         ["api/GlobalUsings.cs:3", "global using Wire = App.Contracts.Orders.OrderDto puts the API's transport contract in scope"],
-        ["api/Api.csproj:5", "<Using Include=\"App.Contracts.Orders\"> puts the API's transport contract in scope"],
+        ["api/Api.csproj:11", "<Using Include=\"App.Contracts.Orders\"> puts the API's transport contract in scope"],
     ]);
+});
+
+test("MER-BE-066 reports each layer of a module that uses a type at the module's own root, by using or by use", () => {
+    assert.equal(run("MER-BE-066", "good"), "");
+    const root = (layer, type) => `module Forms ${layer} must not use App.Modules.Forms.${type}, a type at the module's root — the root calls into the layers; move what ${layer} needs into a layer`;
+    assertFindings("MER-BE-066", "bad", [
+        // A dependency inside a method body, with no using: the root's namespace encloses the layer's.
+        ["Modules/Forms/Application/CreateForm/CreateFormUseCase.cs:8", root("Application", "FormsRequestValidators")],
+        ["Modules/Forms/Contracts/FormList.cs:3", root("Contracts", "FormsPage")],
+        // A using static names the type, and the member it brings in is a use of it.
+        ["Modules/Forms/Domain/Form.cs:1", root("Domain", "FormsRequestValidators")],
+        ["Modules/Forms/Domain/Form.cs:7", root("Domain", "FormsRequestValidators")],
+        ["Modules/Forms/Infrastructure/FormConfiguration.cs:5", root("Infrastructure", "FormsRequestValidators")],
+    ]);
+});
+
+test("MER-BE-066 judges what the compiler binds, and leaves the root, a sibling module, a type with a part in a layer, and test code alone", () => {
+    const findings = scan("MER-BE-066", {
+        "api/Api.csproj": net10(),
+        "api/Modules/Forms/FormsOptions.cs": "namespace App.Modules.Forms;\npublic sealed record FormsOptions(int Limit);\n",
+        // Host code that hands the root type out; it is no module's file.
+        "api/Host/FormsWiring.cs": "namespace App.Host;\npublic static class FormsWiring { public static App.Modules.Forms.FormsOptions Current() => new(1); }\n",
+        // No line here names the root type: it arrives through `var`.
+        "api/Modules/Forms/Application/Inferred.cs": "namespace App.Modules.Forms.Application;\npublic sealed class Inferred\n{\n    public int Limit()\n    {\n        var options = App.Host.FormsWiring.Current();\n        return options.Limit;\n    }\n}\n",
+        // A type inside an alias's type arguments.
+        "api/Modules/Forms/Infrastructure/Aliased.cs": "using Bag = System.Collections.Generic.List<App.Modules.Forms.FormsOptions>;\nnamespace App.Modules.Forms.Infrastructure;\npublic sealed class Aliased { }\n",
+        // A using of the root's namespace brings in nothing the enclosing namespace doesn't.
+        "api/Modules/Forms/Domain/Imports.cs": "using App.Modules.Forms;\nnamespace App.Modules.Forms.Domain;\npublic sealed class Imports { }\n",
+        // The root uses its neighbours and the layers.
+        "api/Modules/Forms/FormsController.cs": "namespace App.Modules.Forms;\npublic sealed class FormsController { public FormsOptions Options() => new(new Application.Inferred().Limit()); }\n",
+        // Another module's root is MER-BE-005's.
+        "api/Modules/Billing/Application/Sibling.cs": "namespace App.Modules.Billing.Application;\npublic sealed class Sibling { public App.Modules.Forms.FormsOptions? Options { get; set; } }\n",
+        // A partial type with a part in a layer is no root type.
+        "api/Modules/Forms/FormsShared.cs": "namespace App.Modules.Forms;\npublic static partial class FormsShared { }\n",
+        "api/Modules/Forms/Domain/FormsShared.cs": "namespace App.Modules.Forms;\npublic static partial class FormsShared { public const int Max = 1; }\n",
+        "api/Modules/Forms/Domain/UsesShared.cs": "namespace App.Modules.Forms.Domain;\npublic sealed class UsesShared { public int Max => FormsShared.Max; }\n",
+        // A test project's files are test code, whatever folders they sit in.
+        "tests/Api.Tests/Api.Tests.csproj": net10("", '<ItemGroup><ProjectReference Include="../../api/Api.csproj" /></ItemGroup>'),
+        "tests/Api.Tests/Modules/Forms/Application/OptionsSpec.cs": "namespace App.Tests;\npublic sealed class OptionsSpec { public App.Modules.Forms.FormsOptions? Options { get; set; } }\n",
+    }, undefined, { restore: true });
+    assert.deepEqual(findings.map((finding) => finding.replace(/, a type at the module's root.*/, "")).sort(), [
+        "api/Modules/Forms/Application/Inferred.cs:6\tmodule Forms Application must not use App.Modules.Forms.FormsOptions",
+        "api/Modules/Forms/Application/Inferred.cs:7\tmodule Forms Application must not use App.Modules.Forms.FormsOptions",
+        "api/Modules/Forms/Infrastructure/Aliased.cs:1\tmodule Forms Infrastructure must not use App.Modules.Forms.FormsOptions",
+    ], findings.join("\n"));
 });
 
 test("MER-RV-027 follows transport namesakes and .Returns<T> payloads, checks PaginatedResponse, and flags defaults, [RivetOptional] and conditional [JsonIgnore]", () => {
@@ -1210,30 +1267,58 @@ test("MER-RV-027 leaves a response contract, a response type and a JSON options 
 
 test("MER-BE-018 says 'declares itself' only for the namespace name, not a using on the same line", () => {
     const findings = scan("MER-BE-018", {
-        "api/Api.csproj": '<Project Sdk="Microsoft.NET.Sdk.Web" />\n',
+        "api/Api.csproj": webProject,
         "api/Contracts/Orders/OrderModels.cs": "namespace App.Contracts.Orders;\npublic sealed record OrderDto(Guid Id);\n",
         "api/Modules/Orders/Application/Uses.cs": "namespace App.Modules.Orders.Application { using App.Contracts.Orders; }\n",
-    });
+    }, undefined, { restore: true });
     assert.equal(findings.length, 1, findings.join("\n"));
     assert.match(findings[0], /Uses\.cs:1\tmodule Orders Application uses App\.Contracts\.Orders, the API's transport contract/);
 });
 
 test("MER-BE-018 reports a global using inside a module file once, as a global using", () => {
     const findings = scan("MER-BE-018", {
-        "api/Api.csproj": '<Project Sdk="Microsoft.NET.Sdk.Web" />\n',
+        "api/Api.csproj": webProject,
         "api/Contracts/Orders/OrderModels.cs": "namespace App.Contracts.Orders;\npublic sealed record OrderDto(Guid Id);\n",
         "api/Modules/Orders/Application/GlobalUsings.cs": "global using global::App.Contracts.Orders;\n",
         // A test project's global usings stay in the test project.
-        "tests/Orders.Tests/Orders.Tests.csproj": '<Project Sdk="Microsoft.NET.Sdk"><ItemGroup><Using Include="App.Contracts.Orders" /></ItemGroup></Project>\n',
+        "tests/Orders.Tests/Orders.Tests.csproj": '<Project Sdk="Microsoft.NET.Sdk"><PropertyGroup><TargetFramework>net10.0</TargetFramework></PropertyGroup><ItemGroup><ProjectReference Include="../../api/Api.csproj" /><Using Include="App.Contracts.Orders" /></ItemGroup></Project>\n',
         "tests/Orders.Tests/Usings.cs": "global using App.Contracts.Orders;\n",
-    });
+    }, undefined, { restore: true });
     assert.equal(findings.length, 1, findings.join("\n"));
     assert.match(findings[0], /^api\/Modules\/Orders\/Application\/GlobalUsings\.cs:1\tglobal using global::App\.Contracts\.Orders puts the API's transport contract in scope/);
 });
 
+// The contract here sits in App.Wire.Orders, so no line a module writes holds a `.Contracts` name: a transport type is one
+// by the folder that declares it, and a use is what the compiler binds.
+test("MER-BE-018 judges what the compiler binds: an inferred type, a name through the enclosing namespace, an alias, and a contract outside a .Contracts namespace", () => {
+    const findings = scan("MER-BE-018", {
+        "api/Api.csproj": webProject,
+        "api/Contracts/Orders/OrderModels.cs": "namespace App.Wire.Orders;\npublic sealed record OrderDto(Guid Id);\n",
+        // Host code that hands the wire type out; it is no module's file.
+        "api/Host/OrderSource.cs": "namespace App.Host;\npublic static class OrderSource { public static App.Wire.Orders.OrderDto Load() => new(Guid.Empty); }\n",
+        "api/GlobalUsings.cs": "global using App.Wire.Orders;\n",
+        "api/Modules/Orders/Application/Inferred.cs": "namespace App.Modules.Orders.Application;\npublic sealed class Inferred\n{\n    public Guid Id()\n    {\n        var order = App.Host.OrderSource.Load();\n        return order.Id;\n    }\n}\n",
+        "api/Modules/Orders/Domain/Enclosed.cs": "namespace App.Modules.Orders.Domain;\npublic sealed class Enclosed { public Wire.Orders.OrderDto? Order { get; set; } }\n",
+        "api/Modules/Orders/Infrastructure/Aliased.cs": "using Sent = System.Collections.Generic.List<App.Wire.Orders.OrderDto>;\nnamespace App.Modules.Orders.Infrastructure;\npublic sealed class Aliased { public Sent Orders { get; } = []; }\n",
+        "api/Modules/Orders/Contracts/Imported.cs": "using App.Wire.Orders;\nnamespace App.Modules.Orders.Contracts;\npublic sealed class Imported { }\n",
+        // The module root is the transport edge, and a module's own types are its own.
+        "api/Modules/Orders/OrdersController.cs": "namespace App.Modules.Orders;\npublic sealed class OrdersController { public App.Wire.Orders.OrderDto Get() => App.Host.OrderSource.Load(); }\n",
+        "api/Modules/Orders/Application/Own.cs": "namespace App.Modules.Orders.Application;\npublic sealed record OrderDto(Guid Id);\npublic sealed class Own { public OrderDto? Order { get; set; } }\n",
+    }, undefined, { restore: true });
+    assert.deepEqual(findings.map((finding) => finding.replace(/, the API's transport contract.*| puts the API's.*/, "")).sort(), [
+        "api/GlobalUsings.cs:1\tglobal using App.Wire.Orders",
+        "api/Modules/Orders/Application/Inferred.cs:6\tmodule Orders Application uses App.Wire.Orders.OrderDto",
+        "api/Modules/Orders/Application/Inferred.cs:7\tmodule Orders Application uses App.Wire.Orders.OrderDto",
+        "api/Modules/Orders/Contracts/Imported.cs:1\tmodule Orders Contracts uses App.Wire.Orders",
+        "api/Modules/Orders/Domain/Enclosed.cs:2\tmodule Orders Domain uses App.Wire.Orders.OrderDto",
+        "api/Modules/Orders/Infrastructure/Aliased.cs:1\tmodule Orders Infrastructure uses System.Collections.Generic.List<App.Wire.Orders.OrderDto>",
+        "api/Modules/Orders/Infrastructure/Aliased.cs:3\tmodule Orders Infrastructure uses App.Wire.Orders.OrderDto",
+    ], findings.join("\n"));
+});
+
 test("MER-BE-018 reads every <Using> form and global using statement, and exempts test projects by metadata, test-only props and build output", () => {
     const findings = scan("MER-BE-018", {
-        "api/Api.csproj": '<Project Sdk="Microsoft.NET.Sdk.Web">\n  <ItemGroup>\n    <Using\n      Include="System.Text.Json;App.Contracts.Orders" />\n  </ItemGroup>\n</Project>\n',
+        "api/Api.csproj": '<Project Sdk="Microsoft.NET.Sdk.Web"><PropertyGroup><TargetFramework>net10.0</TargetFramework><OutputType>Library</OutputType><ImplicitUsings>enable</ImplicitUsings></PropertyGroup>\n  <ItemGroup>\n    <Using\n      Include="System.Text.Json;App.Contracts.Orders" />\n  </ItemGroup>\n</Project>\n',
         "Directory.Build.props": '<Project>\n  <ItemGroup>\n    <Using Include="App.Contracts.Orders" />\n  </ItemGroup>\n' +
             "  <ItemGroup Condition=\"'$(IsTestProject)' == 'true'\">\n    <Using Include=\"App.Contracts.Orders\" />\n  </ItemGroup>\n" +
             // Only production projects take these.
@@ -1248,13 +1333,13 @@ test("MER-BE-018 reads every <Using> form and global using statement, and exempt
         // SDK-generated build output repeats the project's usings.
         "api/obj/Debug/net10.0/Api.GlobalUsings.g.cs": "global using global::App.Contracts.Orders;\n",
         // A test project known only by its test SDK, not by its folder or file names.
-        "src/Api.Specs/Api.Specs.csproj": '<Project Sdk="Microsoft.NET.Sdk"><ItemGroup><PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.0.0" /></ItemGroup></Project>\n',
+        "src/Api.Specs/Api.Specs.csproj": '<Project Sdk="Microsoft.NET.Sdk"><PropertyGroup><TargetFramework>net10.0</TargetFramework></PropertyGroup><ItemGroup><ProjectReference Include="../../api/Api.csproj" /><PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.0.0" /></ItemGroup></Project>\n',
         "src/Api.Specs/Modules/Orders/Application/PlaceOrderSpec.cs": "global using App.Contracts.Orders;\n",
         // A production *Test.cs file inside a module is production code.
         "api/Modules/Payments/Infrastructure/GovUkPayConnectionTest.cs": "using App.Contracts.Orders;\n",
         // A global using split over lines is reported once, as a global using.
-        "api/Modules/Orders/Application/Usings.cs": "global using Wire =\n    App.Contracts.Orders.OrderDto;\n",
-    }, undefined, { git: true });
+        "api/Modules/Orders/Application/Usings.cs": "global using Split =\n    App.Contracts.Orders.OrderDto;\n",
+    }, undefined, { git: true, restore: true });
     assert.deepEqual(findings.map((finding) => finding.replace(/ puts the API's.*/, "")).sort(), [
         "Directory.Build.props:12\t<Using Include=\"App.Contracts.Orders\">",
         "Directory.Build.props:3\t<Using Include=\"App.Contracts.Orders\">",
@@ -1263,7 +1348,7 @@ test("MER-BE-018 reads every <Using> form and global using statement, and exempt
         "api/GlobalUsings.cs:1\tglobal using static App.Contracts.Orders.OrderDto",
         "api/GlobalUsings.cs:2\tglobal using Wire = App.Contracts.Orders.Page<App.Contracts.Orders.OrderDto>",
         "api/GlobalUsings.cs:3\tglobal using Dtos = App.Contracts.Orders.OrderDto[]",
-        "api/Modules/Orders/Application/Usings.cs:1\tglobal using Wire = App.Contracts.Orders.OrderDto",
+        "api/Modules/Orders/Application/Usings.cs:1\tglobal using Split = App.Contracts.Orders.OrderDto",
         "api/Modules/Payments/Infrastructure/GovUkPayConnectionTest.cs:1\tmodule Payments Infrastructure uses App.Contracts.Orders, the API's transport contract — map at the edge (a controller, endpoint, request validator or transport mapper at the module root or under Contracts/) and keep the module on its own types",
     ]);
 });

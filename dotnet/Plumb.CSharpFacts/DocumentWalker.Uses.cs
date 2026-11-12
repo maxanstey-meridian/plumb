@@ -296,13 +296,7 @@ internal sealed partial class DocumentWalker
         var name = Names.Type(type);
         if (_outside.Add(name))
         {
-            _facts.OutsideTypes.Add(
-                new OutsideTypeFact(
-                    name,
-                    Names.Assembly(type.ContainingAssembly, _solution, _root),
-                    Names.BaseTypes(type)
-                )
-            );
+            _facts.OutsideTypes.Add(new OutsideTypeFact(name, Names.BaseTypes(type)));
         }
     }
 

@@ -60,22 +60,16 @@ internal readonly record struct ReferenceFact(
 
 // An outside type the facts record, with the bases it has (as a source type's baseTypes lists
 // them), so a rule can ask what a type declared in a package derives from.
-internal readonly record struct OutsideTypeFact(
-    string Name,
-    string Assembly,
-    IReadOnlyList<string> BaseTypes
-)
+internal readonly record struct OutsideTypeFact(string Name, IReadOnlyList<string> BaseTypes)
 {
     // One fact per name, with the union of the chains in order of first appearance. A type's
-    // assembly differs by framework (System.Runtime, netstandard) and it's still one type, so the
-    // facts are joined by name, and the ordinally first assembly stands.
+    // chain can differ by framework, and it's still one type, so the facts are joined by name.
     public static List<OutsideTypeFact> Union(IEnumerable<OutsideTypeFact> facts)
     {
         return facts
             .GroupBy(fact => fact.Name, StringComparer.Ordinal)
             .Select(group => new OutsideTypeFact(
                 group.Key,
-                group.Select(fact => fact.Assembly).Min(StringComparer.Ordinal)!,
                 group.SelectMany(fact => fact.BaseTypes).Distinct(StringComparer.Ordinal).ToList()
             ))
             .OrderBy(fact => fact.Name, StringComparer.Ordinal)

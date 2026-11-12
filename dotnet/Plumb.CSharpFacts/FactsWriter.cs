@@ -194,7 +194,6 @@ internal static class FactsWriter
         {
             writer.WriteStartObject();
             writer.WriteNumber("name", strings.Of(outside.Name));
-            writer.WriteNumber("assembly", strings.Of(outside.Assembly));
             writer.WriteStartArray("baseTypes");
             foreach (var baseType in outside.BaseTypes)
             {

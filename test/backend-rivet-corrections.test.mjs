@@ -1114,6 +1114,8 @@ test("MER-BE-066 judges what the compiler binds, and leaves the root, a sibling 
         "api/Modules/Forms/Application/Inferred.cs": "namespace App.Modules.Forms.Application;\npublic sealed class Inferred\n{\n    public int Limit()\n    {\n        var options = App.Host.FormsWiring.Current();\n        return options.Limit;\n    }\n}\n",
         // A type inside an alias's type arguments.
         "api/Modules/Forms/Infrastructure/Aliased.cs": "using Bag = System.Collections.Generic.List<App.Modules.Forms.FormsOptions>;\nnamespace App.Modules.Forms.Infrastructure;\npublic sealed class Aliased { }\n",
+        // An alias of an array: the tool names no type for it, so only the element type is judged.
+        "api/Modules/Forms/Infrastructure/Arrayed.cs": "using Ids = System.Guid[];\nusing Roots = App.Modules.Forms.FormsOptions[];\nnamespace App.Modules.Forms.Infrastructure;\npublic sealed class Arrayed { }\n",
         // A using of the root's namespace brings in nothing the enclosing namespace doesn't.
         "api/Modules/Forms/Domain/Imports.cs": "using App.Modules.Forms;\nnamespace App.Modules.Forms.Domain;\npublic sealed class Imports { }\n",
         // The root uses its neighbours and the layers.
@@ -1132,6 +1134,7 @@ test("MER-BE-066 judges what the compiler binds, and leaves the root, a sibling 
         "api/Modules/Forms/Application/Inferred.cs:6\tmodule Forms Application must not use App.Modules.Forms.FormsOptions",
         "api/Modules/Forms/Application/Inferred.cs:7\tmodule Forms Application must not use App.Modules.Forms.FormsOptions",
         "api/Modules/Forms/Infrastructure/Aliased.cs:1\tmodule Forms Infrastructure must not use App.Modules.Forms.FormsOptions",
+        "api/Modules/Forms/Infrastructure/Arrayed.cs:2\tmodule Forms Infrastructure must not use App.Modules.Forms.FormsOptions",
     ], findings.join("\n"));
 });
 
@@ -1298,6 +1301,8 @@ test("MER-BE-031 judges the compiler's namespaces by whole segment: usings, alia
             "using Conn = Npgsql.NpgsqlConnection;",
             "using Bag = System.Collections.Generic.List<Microsoft.EntityFrameworkCore.DbContext>;",
             "using Microsoft.EntityFrameworkCoreExtras;",
+            "using Rows = Npgsql.NpgsqlConnection[];",
+            "using Ids = System.Guid[];",
             "namespace App.Web;",
             "public sealed class UsingsController { }",
             "",
@@ -1321,6 +1326,7 @@ test("MER-BE-031 judges the compiler's namespaces by whole segment: usings, alia
         "api/Web/UsingsController.cs:2\tusing Microsoft.EntityFrameworkCore imports persistence into a file with a transport class",
         "api/Web/UsingsController.cs:3\tusing Npgsql.NpgsqlConnection imports persistence into a file with a transport class",
         "api/Web/UsingsController.cs:4\tusing Microsoft.EntityFrameworkCore.DbContext imports persistence into a file with a transport class",
+        "api/Web/UsingsController.cs:6\tusing Npgsql.NpgsqlConnection imports persistence into a file with a transport class",
     ], findings.join("\n"));
 });
 

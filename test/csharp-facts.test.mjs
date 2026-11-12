@@ -992,7 +992,7 @@ test("an external segment alone records an outside type with that segment in its
 // A package-like project outside the scanned root holds a context under a name no prefix matches, and the app references it.
 const derivesFiles = {
   "../derives-outside/Data/Data.csproj": project(),
-  "../derives-outside/Data/Data.cs": `namespace Microsoft.EntityFrameworkCore { public class DbContext { } }
+  "../derives-outside/Data/Data.cs": `namespace Microsoft.EntityFrameworkCore { public class DbContext { } public interface IMarker { } }
 namespace Microsoft.AspNetCore.Mvc
 {
     public class ControllerBase { }
@@ -1002,10 +1002,20 @@ namespace Acme.Data
 {
     public class AcmeDbContext : Microsoft.EntityFrameworkCore.DbContext { }
     public class Plain { }
+    // Two bases up the chain from the context, and an interface under a prefix beside a base class under none.
+    public class Deep : AcmeDbContext { }
+    public class Marked : Plain, Microsoft.EntityFrameworkCore.IMarker { }
+    // Named only by a using, never written in a type.
+    public class Other : Microsoft.EntityFrameworkCore.DbContext { }
+    public class Third : Microsoft.EntityFrameworkCore.DbContext { }
 }
+// An external segment in a base class's name is no claim on the type that derives from it.
+namespace Vendor.Infrastructure { public class Base { } }
+namespace Vendor.Core { public class Child : Vendor.Infrastructure.Base { } }
 `,
   "app/App.csproj": project('\n  <ItemGroup><ProjectReference Include="../../derives-outside/Data/Data.csproj" /></ItemGroup>'),
-  "app/Use.cs": "namespace App;\npublic sealed class Use { Acme.Data.AcmeDbContext? ctx; Acme.Data.Plain? plain; System.Collections.Generic.List<int>? list; Microsoft.AspNetCore.Mvc.Controller? controller; }\n",
+  "app/Use.cs": "namespace App;\npublic sealed class Use { Acme.Data.AcmeDbContext? ctx; Acme.Data.Plain? plain; System.Collections.Generic.List<int>? list; Microsoft.AspNetCore.Mvc.Controller? controller; Acme.Data.Deep? deep; Acme.Data.Marked? marked; Vendor.Core.Child? child; }\n",
+  "app/Aliases.cs": "using Ctx = Acme.Data.Other;\nusing Many = System.Collections.Generic.List<Acme.Data.Third>;\nnamespace App;\npublic sealed class Aliases { }\n",
   "app/RepoContext.cs": "namespace App;\npublic sealed class RepoContext : Microsoft.EntityFrameworkCore.DbContext { }\n",
 };
 let derivesRaw;
@@ -1029,9 +1039,12 @@ test("a type declared outside the root is recorded when a base class matches a p
     // `Acme.Data.AcmeDbContext` matches no prefix; its base class `DbContext` does.
     ["app/Use.cs", "AcmeDbContext", "Acme.Data", "qualified"],
     ["app/Use.cs", "Controller", "Microsoft.AspNetCore.Mvc", "qualified"],
+    // A base class further up the chain counts: `Deep` derives from `AcmeDbContext`, which derives from `DbContext`.
+    ["app/Use.cs", "Deep", "Acme.Data", "qualified"],
   ]);
   assert.equal(repo.facts.derivesFrom("Acme.Data.AcmeDbContext", "Microsoft.EntityFrameworkCore.DbContext"), true);
   assert.equal(repo.facts.derivesFrom("Acme.Data.AcmeDbContext", "Acme.Data.AcmeDbContext"), true);
+  assert.equal(repo.facts.derivesFrom("Acme.Data.Deep", "Microsoft.EntityFrameworkCore.DbContext"), true);
   // The outside type is no repository type.
   assert.equal(repo.facts.types.has("Acme.Data.AcmeDbContext"), false);
 });
@@ -1046,6 +1059,11 @@ test("a repository type deriving from DbContext derives from it through types", 
 test("an outside type with no wanted base is not recorded, and derivesFrom is false for it and for a name nobody recorded", () => {
   const repo = derives();
   assert.ok(!outside(repo).some(([, name]) => name === "Plain" || name === "List"));
+  // An interface under a prefix is no claim on a type whose base class matches none, and neither is an external
+  // segment in a base class's name.
+  assert.ok(!outside(repo).some(([, name]) => name === "Marked" || name === "Child"));
+  assert.equal(repo.facts.derivesFrom("Acme.Data.Marked", "Microsoft.EntityFrameworkCore.IMarker"), false);
+  assert.equal(repo.facts.derivesFrom("Vendor.Core.Child", "Vendor.Infrastructure.Base"), false);
   assert.equal(repo.facts.derivesFrom("Acme.Data.Plain", "Microsoft.EntityFrameworkCore.DbContext"), false);
   assert.equal(repo.facts.derivesFrom("System.Collections.Generic.List`1", "Microsoft.EntityFrameworkCore.DbContext"), false);
   assert.equal(repo.facts.derivesFrom("Acme.Data.AcmeDbContext", "Microsoft.AspNetCore.Mvc.ControllerBase"), false);
@@ -1056,18 +1074,33 @@ test("an outside type with no wanted base is not recorded, and derivesFrom is fa
 test("outsideTypes holds each outside type recorded by prefix once, with base classes first and then interfaces, and no repository type", () => {
   const repo = derives();
   const strings = derivesRaw.strings;
-  const shape = derivesRaw.outsideTypes.map((entry) => ({ name: strings[entry.name], assembly: strings[entry.assembly], baseTypes: entry.baseTypes.map((index) => strings[index]) }));
-  // A project outside the root is keyed by its project file, relative to the root.
-  const assembly = "../derives-outside/Data/Data.csproj";
+  const shape = derivesRaw.outsideTypes.map((entry) => ({ name: strings[entry.name], baseTypes: entry.baseTypes.map((index) => strings[index]) }));
+  // `Marked` (an interface under a prefix) and `Child` (a segment in its base's name) are written in `Use` and recorded
+  // for neither; `Other` and `Third` are named only by a using in `Aliases`.
   assert.deepEqual(shape, [
-    { name: "Acme.Data.AcmeDbContext", assembly, baseTypes: ["Microsoft.EntityFrameworkCore.DbContext", "System.Object"] },
-    { name: "Microsoft.AspNetCore.Mvc.Controller", assembly, baseTypes: ["Microsoft.AspNetCore.Mvc.ControllerBase", "System.Object", "System.IDisposable"] },
-    { name: "Microsoft.EntityFrameworkCore.DbContext", assembly, baseTypes: ["System.Object"] },
+    { name: "Acme.Data.AcmeDbContext", baseTypes: ["Microsoft.EntityFrameworkCore.DbContext", "System.Object"] },
+    { name: "Acme.Data.Deep", baseTypes: ["Acme.Data.AcmeDbContext", "Microsoft.EntityFrameworkCore.DbContext", "System.Object"] },
+    { name: "Acme.Data.Other", baseTypes: ["Microsoft.EntityFrameworkCore.DbContext", "System.Object"] },
+    { name: "Acme.Data.Third", baseTypes: ["Microsoft.EntityFrameworkCore.DbContext", "System.Object"] },
+    { name: "Microsoft.AspNetCore.Mvc.Controller", baseTypes: ["Microsoft.AspNetCore.Mvc.ControllerBase", "System.Object", "System.IDisposable"] },
+    { name: "Microsoft.EntityFrameworkCore.DbContext", baseTypes: ["System.Object"] },
   ]);
   // The repository's own types stay in `types` alone.
   assert.ok(!derivesRaw.types.some((entry) => strings[entry.name].startsWith("Acme.") || strings[entry.name].startsWith("Microsoft.")));
   assert.equal(repo.facts.derivesFrom("Microsoft.AspNetCore.Mvc.Controller", "Microsoft.AspNetCore.Mvc.ControllerBase"), true);
   assert.equal(repo.facts.derivesFrom("Microsoft.AspNetCore.Mvc.Controller", "System.IDisposable"), true);
+});
+
+test("an outside type only a using names is recorded, for an alias's target and for a type argument inside it", () => {
+  const repo = derives();
+  // Neither is written in a type, so neither is a use.
+  assert.ok(!outside(repo).some(([file]) => file === "app/Aliases.cs"));
+  const [target, argument] = repo.facts.usings(repo.context.file("app/Aliases.cs"));
+  assert.equal(target.type, "Acme.Data.Other");
+  assert.deepEqual(argument.arguments.map((reference) => reference.type), ["Acme.Data.Third"]);
+  for (const name of ["Acme.Data.Other", "Acme.Data.Third"]) {
+    assert.equal(repo.facts.derivesFrom(name, "Microsoft.EntityFrameworkCore.DbContext"), true, name);
+  }
 });
 
 // A multi-target project compiles its file once per framework, and a referenced outside type has a different chain under each.

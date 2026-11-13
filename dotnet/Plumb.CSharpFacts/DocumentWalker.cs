@@ -141,8 +141,11 @@ internal sealed partial class DocumentWalker : CSharpSyntaxWalker
                         or EventFieldDeclarationSyntax:
                 VisitInMember(node, declarator.Identifier.Text);
                 return;
-            case MethodDeclarationSyntax
-            or PropertyDeclarationSyntax
+            case MethodDeclarationSyntax method:
+                RecordHandlerType(method);
+                VisitInMember(node, MemberName(node));
+                return;
+            case PropertyDeclarationSyntax
             or IndexerDeclarationSyntax
             or EventDeclarationSyntax
             or ConstructorDeclarationSyntax
@@ -244,8 +247,8 @@ internal sealed partial class DocumentWalker : CSharpSyntaxWalker
 
     private void Process(SyntaxNode node)
     {
-        // Every fact but a part is recorded from here (a reference, a table, a snapshot table, a
-        // default schema).
+        // Every fact but a part and a handler type is recorded from here (a reference, a table, a
+        // snapshot table, a default schema, a handler).
         if (_declarationsOnly)
         {
             return;
@@ -261,6 +264,11 @@ internal sealed partial class DocumentWalker : CSharpSyntaxWalker
         if (node is InvocationExpressionSyntax invocation)
         {
             RecordInvocation(invocation);
+            RecordEndpointHandlers(invocation);
+        }
+        else if (node is AssignmentExpressionSyntax assignment)
+        {
+            RecordEventsHandler(assignment);
         }
         else if (node is AttributeSyntax attribute)
         {

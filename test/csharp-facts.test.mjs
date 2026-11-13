@@ -2519,7 +2519,7 @@ test("the incomplete-facts diagnostic carries the project's first message on one
     toolFolder: toolFolder("tool-whitespace"),
     run: (command, args) => {
       scratchDir = scratchOf(args);
-      const raw = { strings: [], projects: [{ path: "a/A.csproj", loaded: false, messages }], documents: [], types: [], outsideTypes: [], usings: [], references: [], tables: [], snapshotTables: [], defaultSchemas: [] };
+      const raw = { strings: [], projects: [{ path: "a/A.csproj", loaded: false, messages }], documents: [], types: [], outsideTypes: [], usings: [], references: [], handlers: [], handlerMembers: [], handlerTypes: [], tables: [], snapshotTables: [], defaultSchemas: [] };
       fs.writeFileSync(args[args.indexOf("--out") + 1], JSON.stringify(raw));
       return { status: 0, stderr: "" };
     },

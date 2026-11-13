@@ -1353,6 +1353,8 @@ test("MER-BE-067 reports a controller and an events class that use a module's po
     assertFindings("MER-BE-067", "bad", [
         ["Auth/FormsCookieEvents.cs:6", use("App.Auth.FormsCookieEvents", "App.Modules.Forms.Infrastructure.FormStore", "Infrastructure adapter")],
         ["Auth/FormsCookieEvents.cs:8", use("App.Auth.FormsCookieEvents", "App.Modules.Forms.Infrastructure.FormStore", "Infrastructure adapter")],
+        ["Host/Routes.cs:12", use("an endpoint handler", "App.Modules.Forms.Application.Ports.IFormRepository", "port")],
+        ["Host/Routes.cs:13", use("a sign-in handler", "App.Modules.Forms.Application.Ports.IFormRepository", "port")],
         ["Modules/Forms/FormsController.cs:6", use("App.Modules.Forms.FormsController", "App.Modules.Forms.Application.Ports.IFormRepository", "port")],
         ["Modules/Forms/FormsController.cs:8", use("App.Modules.Forms.FormsController", "App.Modules.Forms.Application.Ports.IFormRepository", "port")],
     ]);
@@ -1446,6 +1448,106 @@ test("MER-BE-067 flags an interface under Application anywhere and an adapter, a
         `api/Modules/Forms/FormsController.cs:7\t${from} must not use App.Modules.Forms.Infrastructure.Options.StoreOptions, a module's Infrastructure adapter`,
         "api/Web/FormsEndpoints.cs:4\tApp.Web.FormsEndpoints must not use App.Modules.Forms.Application.Ports.IFormRepository, a module's port",
     ], findings.join("\n"));
+});
+
+// A handler is transport code with no class of its own: what an endpoint route or an authentication events property is
+// given. The framework types are stand-ins in their real namespaces, with the members the handlers bind to.
+const handlerStubs = {
+    "api/Stubs/Handlers.cs": [
+        "namespace Microsoft.AspNetCore.Routing { public interface IEndpointRouteBuilder { } }",
+        "namespace Microsoft.AspNetCore.Builder",
+        "{",
+        "    public interface IApplicationBuilder { }",
+        "    public sealed class WebApplication : Microsoft.AspNetCore.Routing.IEndpointRouteBuilder, IApplicationBuilder { }",
+        "    public static class EndpointRouteBuilderExtensions { public static void MapGet(this Microsoft.AspNetCore.Routing.IEndpointRouteBuilder endpoints, string pattern, Delegate handler) { } }",
+        "    public static class UseExtensions { public static void Use(this IApplicationBuilder app, Delegate middleware) { } }",
+        "}",
+        "namespace Microsoft.AspNetCore.Authentication",
+        "{",
+        "    public abstract class BaseContext<TOptions> { }",
+        "    public class ValidateContext : BaseContext<object> { }",
+        "    public class RemoteAuthenticationEvents { public Func<ValidateContext, Task> OnRemoteFailure { get; set; } = _ => Task.CompletedTask; }",
+        "    public class OtherEvents { public Func<ValidateContext, Task> OnThing { get; set; } = _ => Task.CompletedTask; }",
+        "}",
+        "namespace Microsoft.AspNetCore.Authentication.Cookies { public class CookieAuthenticationEvents { public Func<ValidateContext, Task> OnValidatePrincipal { get; set; } = _ => Task.CompletedTask; } }",
+        "namespace Microsoft.AspNetCore.Authentication.OpenIdConnect { public class OpenIdConnectEvents : Microsoft.AspNetCore.Authentication.RemoteAuthenticationEvents { public Func<object, Task> OnTokenValidated { get; set; } = _ => Task.CompletedTask; } }",
+    ].join("\n") + "\n",
+};
+
+test("a handler given to an endpoint route or put on an authentication events property is transport code, and the setup around it is not", () => {
+    const found = scanTransport(["MER-BE-030", "MER-BE-031", "MER-BE-067"], {
+        "api/App.csproj": net10("<OutputType>Exe</OutputType>"),
+        ...handlerStubs,
+        ...persistenceStubs,
+        "api/Data/AppDbContext.cs": "namespace App.Data;\npublic sealed class AppDbContext : Microsoft.EntityFrameworkCore.DbContext { public IQueryable<string> Forms => new List<string>().AsQueryable(); }\n",
+        "api/Modules/Forms/Application/Ports/IFormRepository.cs": "namespace App.Modules.Forms.Application.Ports;\npublic interface IFormRepository { bool Any(); }\n",
+        "api/Modules/Forms/Infrastructure/FormStore.cs": "namespace App.Modules.Forms.Infrastructure;\npublic sealed class FormStore : App.Modules.Forms.Application.Ports.IFormRepository { public bool Any() => true; }\n",
+        "api/Program.cs": [
+            "using App.Auth;",
+            "using App.Modules.Forms.Application.Ports;",
+            "using App.Web;",
+            "using Microsoft.AspNetCore.Authentication;",
+            "using Microsoft.AspNetCore.Authentication.Cookies;",
+            "using Microsoft.AspNetCore.Authentication.OpenIdConnect;",
+            "using Microsoft.AspNetCore.Builder;",
+            "using Microsoft.EntityFrameworkCore;",
+            "var app = new WebApplication();",
+            // Line 10, the host's setup: it names the port, the context, and the adapter to register them.
+            "var registered = new List<object> { typeof(IFormRepository), typeof(App.Data.AppDbContext), new App.Modules.Forms.Infrastructure.FormStore() };",
+            // Lines 11 to 14: a lambda, a lambda over the context, a local function, and a method of a type.
+            'app.MapGet("/lambda", (IFormRepository forms) => forms.Any());',
+            'app.MapGet("/context", (App.Data.AppDbContext db) => db.Forms.ToListAsync());',
+            'app.MapGet("/local", Local);',
+            'app.MapGet("/method", Routes.Get);',
+            // Line 15: middleware extends the application builder, not the route builder, and is not judged.
+            "app.Use((IFormRepository forms) => forms.Any());",
+            // Lines 16 to 20: an events initializer, and a handler added with `+=`.
+            "var events = new CookieAuthenticationEvents",
+            "{",
+            "    OnValidatePrincipal = context => Task.FromResult(Resolve<IFormRepository>().Any()),",
+            "};",
+            "events.OnValidatePrincipal += context => Task.FromResult(Resolve<IFormRepository>().Any());",
+            // Lines 21 to 23: a property of a subclass of an events base, a method of a type, and a handler that
+            // forwards to a class.
+            "var oidc = new OpenIdConnectEvents();",
+            "oidc.OnTokenValidated = Hooks.Validated;",
+            "oidc.OnRemoteFailure = context => Resolve<SignInHooks>().Failed(context);",
+            // Line 24: a delegate property of a class that is no events class.
+            "var other = new OtherEvents { OnThing = context => Task.FromResult(Resolve<IFormRepository>().Any()) };",
+            // Lines 25 and 26: a delegate read and put back is no handler written here.
+            "var previous = events.OnValidatePrincipal;",
+            "events.OnValidatePrincipal = previous;",
+            // Lines 27 to 29: the local function that is a handler, one that is not, and a helper.
+            "static bool Local(IFormRepository forms) => forms.Any();",
+            "static bool Unused(IFormRepository forms) => forms.Any();",
+            "static T Resolve<T>() where T : class => null!;",
+            "",
+        ].join("\n"),
+        // A handler by its type and name: the method beside it is not one.
+        "api/Web/Routes.cs": "namespace App.Web;\npublic static class Routes\n{\n    public static bool Get(App.Modules.Forms.Application.Ports.IFormRepository forms) => forms.Any();\n    public static bool Setup(App.Modules.Forms.Application.Ports.IFormRepository forms) => forms.Any();\n}\n",
+        "api/Web/Hooks.cs": "namespace App.Web;\npublic static class Hooks\n{\n    public static Task Validated(object context) => Task.FromResult(new App.Modules.Forms.Infrastructure.FormStore().Any());\n    public static bool Other() => new App.Modules.Forms.Infrastructure.FormStore().Any();\n}\n",
+        // A class with a method that takes an authentication event's context is a transport class, whole; one whose
+        // method takes anything else is not.
+        "api/Auth/SignInHooks.cs": "namespace App.Auth;\npublic sealed class SignInHooks(App.Modules.Forms.Application.Ports.IFormRepository forms)\n{\n    public Task Failed(Microsoft.AspNetCore.Authentication.ValidateContext context) => Task.FromResult(forms.Any());\n}\n",
+        "api/Auth/Plain.cs": "namespace App.Auth;\npublic sealed class Plain(App.Modules.Forms.Application.Ports.IFormRepository forms)\n{\n    public Task Failed(object context) => Task.FromResult(forms.Any());\n}\n",
+    });
+    const port = "App.Modules.Forms.Application.Ports.IFormRepository, a module's port";
+    assert.deepEqual(found["MER-BE-067"].map((finding) => unTailed(finding)).sort(), [
+        `api/Auth/SignInHooks.cs:2\tApp.Auth.SignInHooks must not use ${port}`,
+        `api/Auth/SignInHooks.cs:4\tApp.Auth.SignInHooks must not use ${port}`,
+        `api/Program.cs:11\tan endpoint handler must not use ${port}`,
+        `api/Program.cs:18\ta sign-in handler must not use ${port}`,
+        `api/Program.cs:20\ta sign-in handler must not use ${port}`,
+        `api/Program.cs:27\tan endpoint handler must not use ${port}`,
+        "api/Web/Hooks.cs:4\ta sign-in handler must not use App.Modules.Forms.Infrastructure.FormStore, a module's Infrastructure adapter",
+        `api/Web/Routes.cs:4\tan endpoint handler must not use ${port}`,
+    ], found["MER-BE-067"].join("\n"));
+    assert.deepEqual(found["MER-BE-030"].map((finding) => unTailed(finding)), [
+        "api/Program.cs:12\tan endpoint handler must not use App.Data.AppDbContext, a DbContext",
+    ]);
+    assert.deepEqual(found["MER-BE-031"].map((finding) => unTailed(finding)), [
+        "api/Program.cs:12\tan endpoint handler must not use Microsoft.EntityFrameworkCore.EntityFrameworkQueryableExtensions, from the persistence namespace Microsoft.EntityFrameworkCore",
+    ]);
 });
 
 test("MER-BE-008 reports a Domain interface an Infrastructure adapter implements, whatever its name, and leaves one nothing in Infrastructure implements", () => {

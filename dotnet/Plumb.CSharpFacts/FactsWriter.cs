@@ -55,6 +55,7 @@ internal static class FactsWriter
             WriteOutsideTypes(writer, strings, documents);
             WriteUsings(writer, strings, documents);
             WriteReferences(writer, strings, documents);
+            WriteHandlers(writer, strings, documents);
             WriteTables(writer, strings, documents);
             writer.WriteEndObject();
         }
@@ -287,6 +288,58 @@ internal static class FactsWriter
             }
             writer.WriteEndArray();
             writer.WriteEndArray();
+        }
+        writer.WriteEndArray();
+    }
+
+    // The handlers by span, the handlers that are a type's method (each once), and the types that
+    // take an authentication event's context (each once).
+    private static void WriteHandlers(
+        Utf8JsonWriter writer,
+        Strings strings,
+        List<DocumentFacts> documents
+    )
+    {
+        writer.WriteStartArray("handlers");
+        foreach (var document in documents)
+        {
+            foreach (var handler in document.Handlers.Distinct())
+            {
+                writer.WriteStartObject();
+                writer.WriteNumber("file", strings.Of(document.File));
+                writer.WriteNumber("start", handler.Start);
+                writer.WriteNumber("end", handler.End);
+                writer.WriteString("kind", handler.Kind);
+                writer.WriteEndObject();
+            }
+        }
+        writer.WriteEndArray();
+        writer.WriteStartArray("handlerMembers");
+        foreach (
+            var member in documents
+                .SelectMany(document => document.HandlerMembers)
+                .Distinct()
+                .OrderBy(member => member.Type, StringComparer.Ordinal)
+                .ThenBy(member => member.Member, StringComparer.Ordinal)
+                .ThenBy(member => member.Kind, StringComparer.Ordinal)
+        )
+        {
+            writer.WriteStartObject();
+            writer.WriteNumber("type", strings.Of(member.Type));
+            writer.WriteNumber("member", strings.Of(member.Member));
+            writer.WriteString("kind", member.Kind);
+            writer.WriteEndObject();
+        }
+        writer.WriteEndArray();
+        writer.WriteStartArray("handlerTypes");
+        foreach (
+            var type in documents
+                .SelectMany(document => document.HandlerTypes)
+                .Distinct(StringComparer.Ordinal)
+                .Order(StringComparer.Ordinal)
+        )
+        {
+            writer.WriteNumberValue(strings.Of(type));
         }
         writer.WriteEndArray();
     }

@@ -83,6 +83,14 @@ internal readonly record struct OutsideTypeFact(
     }
 }
 
+// Code the framework calls for a request, in the document that holds it: a lambda, an anonymous
+// method, or a local function given to an endpoint route or put on an authentication events
+// property. Kind says which ("endpoint" or "sign-in").
+internal readonly record struct HandlerFact(int Start, int End, string Kind);
+
+// The same, when the handler is a method of a type: the type's name and the method's.
+internal readonly record struct HandlerMemberFact(string Type, string Member, string Kind);
+
 internal readonly record struct TableFact(int Start, string Method, string? Schema, string Table);
 
 internal readonly record struct SnapshotTableFact(
@@ -106,6 +114,11 @@ internal sealed class DocumentFacts(string file, string assembly)
     public List<UsingFact> Usings { get; } = [];
     public List<ReferenceFact> References { get; } = [];
     public List<OutsideTypeFact> OutsideTypes { get; } = [];
+    public List<HandlerFact> Handlers { get; } = [];
+    public List<HandlerMemberFact> HandlerMembers { get; } = [];
+
+    // The types with a method that takes an authentication event's context.
+    public List<string> HandlerTypes { get; } = [];
     public List<TableFact> Tables { get; } = [];
     public List<SnapshotTableFact> SnapshotTables { get; } = [];
     public List<DefaultSchemaFact> DefaultSchemas { get; } = [];
@@ -271,6 +284,13 @@ internal sealed class DocumentFacts(string file, string assembly)
         );
         merged.OutsideTypes.AddRange(
             OutsideTypeFact.Union(frameworks.SelectMany(framework => framework.OutsideTypes))
+        );
+        merged.Handlers.AddRange(frameworks.SelectMany(framework => framework.Handlers).Distinct());
+        merged.HandlerMembers.AddRange(
+            frameworks.SelectMany(framework => framework.HandlerMembers).Distinct()
+        );
+        merged.HandlerTypes.AddRange(
+            frameworks.SelectMany(framework => framework.HandlerTypes).Distinct()
         );
         merged.Tables.AddRange(frameworks.SelectMany(framework => framework.Tables).Distinct());
         merged.SnapshotTables.AddRange(

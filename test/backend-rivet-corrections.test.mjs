@@ -364,7 +364,7 @@ test("BE's layer, module-shape, style and placement rules exempt a test project'
         "MER-BE-053", "MER-BE-054", "MER-BE-055", "MER-BE-060", "MER-BE-067"];
     // The rules that read C# facts need a real net10.0 project, restored, and one that compiles: the copied files get the
     // project their fixture has (its SDK, implicit usings and nullable setting), as a test project of their own.
-    const onFacts = new Set(["MER-BE-001", "MER-BE-002", "MER-BE-003", "MER-BE-004", "MER-BE-005", "MER-BE-007", "MER-BE-009", "MER-BE-016", "MER-BE-030", "MER-BE-031", "MER-BE-067"]);
+    const onFacts = new Set(["MER-BE-001", "MER-BE-002", "MER-BE-003", "MER-BE-004", "MER-BE-005", "MER-BE-007", "MER-BE-008", "MER-BE-009", "MER-BE-016", "MER-BE-030", "MER-BE-031", "MER-BE-067"]);
     const fixtureProject = (rule) => {
         const file = fs.readdirSync(path.join(FIXTURES, rule, "bad"), { recursive: true }).find((name) => name.endsWith(".csproj") && !/(?:^|\/)(?:obj|bin)\//.test(name));
         return fs.readFileSync(path.join(FIXTURES, rule, "bad", file), "utf8");
@@ -1232,6 +1232,18 @@ test("a transport class is a *Controller.cs or *Endpoints.cs type, a framework t
             "}",
             "",
         ].join("\n"),
+        // A transport class is one wherever it is filed: an auth events class per events base and a hub under a module's
+        // Infrastructure/, and an events class with a part outside it.
+        "api/Modules/Auth/Infrastructure/Integrations.cs": [
+            "namespace App.Modules.Auth.Infrastructure;",
+            `public sealed class SessionEvents : Microsoft.AspNetCore.Authentication.Cookies.CookieAuthenticationEvents { ${property("App.Data.AppDbContext")} }`,
+            `public sealed class TokenEvents : Microsoft.AspNetCore.Authentication.JwtBearer.JwtBearerEvents { ${property("App.Data.AppDbContext")} }`,
+            `public sealed class ProviderEvents : Microsoft.AspNetCore.Authentication.RemoteAuthenticationEvents { ${property("App.Data.AppDbContext")} }`,
+            `public sealed class PresenceHub : Microsoft.AspNetCore.SignalR.Hub { ${property("App.Data.AppDbContext")} }`,
+            `public sealed partial class SplitEvents : Microsoft.AspNetCore.Authentication.Cookies.CookieAuthenticationEvents { ${property("App.Data.AppDbContext")} }`,
+            "",
+        ].join("\n"),
+        "api/Auth/SplitEvents.cs": "namespace App.Modules.Auth.Infrastructure;\npublic sealed partial class SplitEvents { }\n",
         // A static endpoints class, with the context reached only through `var`.
         "api/Web/StatusEndpoints.cs": "namespace App.Web;\npublic static class StatusEndpoints\n{\n    public static bool Ready()\n    {\n        var context = App.Data.Holder.Current();\n        return context is not null;\n    }\n}\n",
         // Not transport: a use case, an adapter, the host's registration, and a test project's controller.
@@ -1243,6 +1255,11 @@ test("a transport class is a *Controller.cs or *Endpoints.cs type, a framework t
         "tests/Api.Tests/Web/FormsController.cs": `namespace App.Tests;\npublic sealed class FormsController { ${property("App.Data.AppDbContext")} }\npublic sealed class FakeApi : Microsoft.AspNetCore.Mvc.ControllerBase { ${property("App.Data.AppDbContext")} }\n`,
     });
     assert.deepEqual(findings.map((finding) => unTailed(finding)), [
+        ["api/Modules/Auth/Infrastructure/Integrations.cs:2", "App.Modules.Auth.Infrastructure.SessionEvents"],
+        ["api/Modules/Auth/Infrastructure/Integrations.cs:3", "App.Modules.Auth.Infrastructure.TokenEvents"],
+        ["api/Modules/Auth/Infrastructure/Integrations.cs:4", "App.Modules.Auth.Infrastructure.ProviderEvents"],
+        ["api/Modules/Auth/Infrastructure/Integrations.cs:5", "App.Modules.Auth.Infrastructure.PresenceHub"],
+        ["api/Modules/Auth/Infrastructure/Integrations.cs:6", "App.Modules.Auth.Infrastructure.SplitEvents"],
         ["api/Web/FormsController.cs:4", "App.Web.FormsController"],
         ["api/Web/Handlers.cs:14", "App.Web.NestedHub.Inner.Deeper"],
         ["api/Web/Handlers.cs:2", "App.Web.ChatHub"],
@@ -1359,7 +1376,22 @@ test("MER-BE-067 flags an interface under Application anywhere and an adapter, a
         // A use case's inputs, outputs, and helpers: a record and an enum in Ports/, a struct, a delegate, and a class.
         "api/Modules/Forms/Application/Ports/FormFilter.cs": "namespace App.Modules.Forms.Application.Ports;\npublic sealed record FormFilter(string Title);\npublic enum FormOrder { Title }\n",
         "api/Modules/Forms/Application/Shapes.cs": "namespace App.Modules.Forms.Application;\npublic readonly struct FormKey { }\npublic delegate void FormChanged();\npublic sealed class FormHelper { }\n",
-        "api/Modules/Forms/Infrastructure/FormStore.cs": "namespace App.Modules.Forms.Infrastructure;\npublic sealed class FormStore : App.Modules.Forms.Application.Ports.IFormRepository, App.Modules.Forms.Application.IOrderRepository { public bool Any() => true; }\n",
+        // A port is the Application's own. An interface declared anywhere else is not one here, whoever implements it:
+        // the request's context in Common/ (who the caller is), and one filed in a module's Domain/, at its root, or in
+        // a host folder, each with an adapter behind it.
+        // A named query is a port a controller may call, by the end of its name. The class in Infrastructure that
+        // implements it is still an adapter, and a port with Query elsewhere in its name is still a port.
+        "api/Modules/Forms/Application/Ports/Queries.cs": "namespace App.Modules.Forms.Application.Ports;\npublic interface IListFormsQuery { bool Any(); }\npublic interface IQueryStore { bool Any(); }\n",
+        "api/Modules/Forms/Infrastructure/ListFormsQuery.cs": "namespace App.Modules.Forms.Infrastructure;\npublic sealed class ListFormsQuery : App.Modules.Forms.Application.Ports.IListFormsQuery, App.Modules.Forms.Application.Ports.IQueryStore { public bool Any() => true; }\n",
+        "api/Common/IUserContext.cs": "namespace App.Common;\npublic interface IUserContext { string UserId { get; } }\n",
+        "api/Modules/Auth/Infrastructure/UserContextProvider.cs": "namespace App.Modules.Auth.Infrastructure;\npublic sealed class UserContextProvider : App.Common.IUserContext { public string UserId => \"\"; }\n",
+        "api/Modules/Forms/Domain/IFormArchive.cs": "namespace App.Modules.Forms.Domain;\npublic interface IFormArchive { bool Any(); }\npublic interface IFormRule { bool Any(); }\n",
+        "api/Modules/Forms/IFormIndex.cs": "namespace App.Modules.Forms;\npublic interface IFormIndex { bool Any(); }\n",
+        "api/Host/IFormFeed.cs": "namespace App.Host;\npublic interface IFormFeed { bool Any(); }\n",
+        // A port an adapter implements stays a port when the module's Application implements it too (a decorator).
+        "api/Modules/Forms/Application/Ports/IFormAudit.cs": "namespace App.Modules.Forms.Application.Ports;\npublic interface IFormAudit { bool Any(); }\n",
+        "api/Modules/Forms/Application/TimedFormAudit.cs": "namespace App.Modules.Forms.Application;\npublic sealed class TimedFormAudit(App.Modules.Forms.Application.Ports.IFormAudit inner) : App.Modules.Forms.Application.Ports.IFormAudit { public bool Any() => inner.Any(); }\n",
+        "api/Modules/Forms/Infrastructure/FormStore.cs": "namespace App.Modules.Forms.Infrastructure;\npublic sealed class FormStore : App.Modules.Forms.Application.Ports.IFormRepository, App.Modules.Forms.Application.IOrderRepository, App.Modules.Forms.Domain.IFormArchive, App.Modules.Forms.IFormIndex, App.Host.IFormFeed, App.Modules.Forms.Application.Ports.IFormAudit { public bool Any() => true; }\n",
         "api/Modules/Forms/Infrastructure/Options/StoreOptions.cs": "namespace App.Modules.Forms.Infrastructure.Options;\npublic sealed class StoreOptions { }\n",
         // A partial type with one part in Infrastructure and one in the host is no adapter.
         "api/Modules/Forms/Infrastructure/FormCache.cs": "namespace App.Host;\npublic sealed partial class FormCache { }\n",
@@ -1380,6 +1412,15 @@ test("MER-BE-067 flags an interface under Application anywhere and an adapter, a
             `    ${type("App.Host.FormCache")}`,
             `    ${type("App.Modules.Forms.Application.Ports.IFormQuery")}`,
             `    ${type("App.Modules.Forms.Application.Ports.IFormLookup")}`,
+            `    ${type("App.Modules.Forms.Domain.IFormArchive")}`,
+            `    ${type("App.Modules.Forms.Domain.IFormRule")}`,
+            `    ${type("App.Modules.Forms.IFormIndex")}`,
+            `    ${type("App.Host.IFormFeed")}`,
+            `    ${type("App.Modules.Forms.Application.Ports.IFormAudit")}`,
+            `    ${type("App.Common.IUserContext")}`,
+            `    ${type("App.Modules.Forms.Application.Ports.IListFormsQuery")}`,
+            `    ${type("App.Modules.Forms.Infrastructure.ListFormsQuery")}`,
+            `    ${type("App.Modules.Forms.Application.Ports.IQueryStore")}`,
             "}",
             "",
         ].join("\n"),
@@ -1396,11 +1437,43 @@ test("MER-BE-067 flags an interface under Application anywhere and an adapter, a
     const from = "App.Modules.Forms.FormsController";
     assert.deepEqual(findings.map((finding) => unTailed(finding)).sort(), [
         `api/Modules/Forms/FormsController.cs:15\t${from} must not use App.Modules.Forms.Application.Ports.IFormLookup, a module's port`,
+        `api/Modules/Forms/FormsController.cs:20\t${from} must not use App.Modules.Forms.Application.Ports.IFormAudit, a module's port`,
+        `api/Modules/Forms/FormsController.cs:23\t${from} must not use App.Modules.Forms.Infrastructure.ListFormsQuery, a module's Infrastructure adapter`,
+        `api/Modules/Forms/FormsController.cs:24\t${from} must not use App.Modules.Forms.Application.Ports.IQueryStore, a module's port`,
         `api/Modules/Forms/FormsController.cs:4\t${from} must not use App.Modules.Forms.Application.Ports.IFormRepository, a module's port`,
         `api/Modules/Forms/FormsController.cs:5\t${from} must not use App.Modules.Forms.Application.IOrderRepository, a module's port`,
         `api/Modules/Forms/FormsController.cs:6\t${from} must not use App.Modules.Forms.Infrastructure.FormStore, a module's Infrastructure adapter`,
         `api/Modules/Forms/FormsController.cs:7\t${from} must not use App.Modules.Forms.Infrastructure.Options.StoreOptions, a module's Infrastructure adapter`,
         "api/Web/FormsEndpoints.cs:4\tApp.Web.FormsEndpoints must not use App.Modules.Forms.Application.Ports.IFormRepository, a module's port",
+    ], findings.join("\n"));
+});
+
+test("MER-BE-008 reports a Domain interface an Infrastructure adapter implements, whatever its name, and leaves one nothing in Infrastructure implements", () => {
+    const { "MER-BE-008": findings } = scanTransport(["MER-BE-008"], {
+        "api/App.csproj": net10("<OutputType>Exe</OutputType>"),
+        // A port by what implements it, a repository by its name (reported once, as a repository), a policy the
+        // Application fills in, and one nothing implements.
+        "api/Modules/Forms/Domain/Ports.cs": [
+            "namespace App.Modules.Forms.Domain;",
+            "public interface IFormArchive { bool Any(); }",
+            "public interface IFormRepository { bool Any(); }",
+            "public interface IFormRule { bool Any(); }",
+            "public interface IFormNaming { bool Any(); }",
+            "",
+        ].join("\n"),
+        "api/Modules/Forms/Infrastructure/FormStore.cs": "namespace App.Modules.Forms.Infrastructure;\npublic sealed class FormStore : App.Modules.Forms.Domain.IFormArchive, App.Modules.Forms.Domain.IFormRepository { public bool Any() => true; }\n",
+        "api/Modules/Forms/Application/DefaultFormRule.cs": "namespace App.Modules.Forms.Application;\npublic sealed class DefaultFormRule : App.Modules.Forms.Domain.IFormRule { public bool Any() => true; }\n",
+        // An interface outside Domain/ with an adapter behind it is not this rule's.
+        "api/Modules/Forms/Application/Ports/IFormIndex.cs": "namespace App.Modules.Forms.Application.Ports;\npublic interface IFormIndex { bool Any(); }\n",
+        "api/Modules/Forms/Infrastructure/FormIndex.cs": "namespace App.Modules.Forms.Infrastructure;\npublic sealed class FormIndex : App.Modules.Forms.Application.Ports.IFormIndex { public bool Any() => true; }\n",
+        "api/Program.cs": "System.Console.WriteLine(new App.Modules.Forms.Infrastructure.FormStore());\n",
+        // A test project's stand-in under an Infrastructure folder is no adapter.
+        "tests/Api.Tests/Api.Tests.csproj": testProject('<ProjectReference Include="../../api/App.csproj" />'),
+        "tests/Api.Tests/Modules/Forms/Infrastructure/FakeNaming.cs": "namespace App.Tests;\npublic sealed class FakeNaming : App.Modules.Forms.Domain.IFormNaming { public bool Any() => true; }\n",
+    });
+    assert.deepEqual(findings, [
+        "api/Modules/Forms/Domain/Ports.cs:2\tApp.Modules.Forms.Domain.IFormArchive is a port, an interface an Infrastructure adapter implements — it belongs in Application/Ports, not Domain",
+        "api/Modules/Forms/Domain/Ports.cs:3\trepository declarations belong in Application/Ports, not Domain",
     ], findings.join("\n"));
 });
 
@@ -1417,6 +1490,50 @@ test("a DbContext reached by a transport class is MER-BE-030's alone: not a port
     ]);
     assert.deepEqual(found["MER-BE-031"], []);
     assert.deepEqual(found["MER-BE-067"], []);
+});
+
+// A package's type under a name no framework prefix matches is still the framework's when a base class of it is: by
+// use, by a using's alias, and through a second outside base. A type that only implements a framework interface, and
+// one with no framework base, are not.
+test("MER-BE-001 and MER-BE-002 judge a type declared outside the repository by its base classes", () => {
+    const uses = (layer) => [
+        "using Ctx = Acme.Data.AcmeDbContext;",
+        `namespace App.Modules.Users.${layer};`,
+        "public sealed class Uses",
+        "{",
+        "    public Acme.Data.Deep? Deep { get; set; }",
+        "    public Acme.Data.Plain? Plain { get; set; }",
+        "    public Acme.Data.Marked? Marked { get; set; }",
+        "}",
+        "",
+    ].join("\n");
+    const found = scanTransport(["MER-BE-001", "MER-BE-002"], {
+        "api/App.csproj": net10("", '<ItemGroup><ProjectReference Include="../../ctx/Ctx.csproj" /></ItemGroup>'),
+        "api/Modules/Users/Domain/Uses.cs": uses("Domain"),
+        "api/Modules/Users/Application/Uses.cs": uses("Application"),
+    }, {
+        "ctx/Ctx.csproj": net10(),
+        "ctx/Ctx.cs": [
+            "namespace Microsoft.EntityFrameworkCore { public class DbContext { } public interface IMarker { } }",
+            "namespace Acme.Data",
+            "{",
+            "    public class AcmeDbContext : Microsoft.EntityFrameworkCore.DbContext { }",
+            "    public class Deep : AcmeDbContext { }",
+            "    public class Plain { }",
+            "    public class Marked : Plain, Microsoft.EntityFrameworkCore.IMarker { }",
+            "}",
+            "",
+        ].join("\n"),
+    });
+    const through = (type) => `(Acme.Data.${type}, a Microsoft.EntityFrameworkCore.DbContext)`;
+    assert.deepEqual(found["MER-BE-001"], [
+        `api/Modules/Users/Domain/Uses.cs:1\tDomain depends on nothing outside itself — remove this reference ${through("AcmeDbContext")}`,
+        `api/Modules/Users/Domain/Uses.cs:5\tDomain depends on nothing outside itself — remove this reference ${through("Deep")}`,
+    ], found["MER-BE-001"].join("\n"));
+    assert.deepEqual(found["MER-BE-002"], [
+        `api/Modules/Users/Application/Uses.cs:1\tApplication must not depend on Infrastructure or transport frameworks — depend on a port instead ${through("AcmeDbContext")}`,
+        `api/Modules/Users/Application/Uses.cs:5\tApplication must not depend on Infrastructure or transport frameworks — depend on a port instead ${through("Deep")}`,
+    ], found["MER-BE-002"].join("\n"));
 });
 
 test("underModuleFolder places a file under a module's layer, or a folder of it, by path segment", () => {

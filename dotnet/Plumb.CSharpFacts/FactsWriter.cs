@@ -200,6 +200,12 @@ internal static class FactsWriter
                 writer.WriteNumberValue(strings.Of(baseType));
             }
             writer.WriteEndArray();
+            writer.WriteStartArray("baseClasses");
+            foreach (var baseClass in outside.BaseClasses)
+            {
+                writer.WriteNumberValue(strings.Of(baseClass));
+            }
+            writer.WriteEndArray();
             writer.WriteEndObject();
         }
         writer.WriteEndArray();

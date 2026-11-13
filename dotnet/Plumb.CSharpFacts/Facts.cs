@@ -59,8 +59,13 @@ internal readonly record struct ReferenceFact(
 );
 
 // An outside type the facts record, with the bases it has (as a source type's baseTypes lists
-// them), so a rule can ask what a type declared in a package derives from.
-internal readonly record struct OutsideTypeFact(string Name, IReadOnlyList<string> BaseTypes)
+// them), so a rule can ask what a type declared in a package derives from, and its base classes
+// apart, so a rule can judge the classes it extends and not the interfaces it implements.
+internal readonly record struct OutsideTypeFact(
+    string Name,
+    IReadOnlyList<string> BaseTypes,
+    IReadOnlyList<string> BaseClasses
+)
 {
     // One fact per name, with the union of the chains in order of first appearance. A type's
     // chain can differ by framework, and it's still one type, so the facts are joined by name.
@@ -70,7 +75,8 @@ internal readonly record struct OutsideTypeFact(string Name, IReadOnlyList<strin
             .GroupBy(fact => fact.Name, StringComparer.Ordinal)
             .Select(group => new OutsideTypeFact(
                 group.Key,
-                group.SelectMany(fact => fact.BaseTypes).Distinct(StringComparer.Ordinal).ToList()
+                group.SelectMany(fact => fact.BaseTypes).Distinct(StringComparer.Ordinal).ToList(),
+                group.SelectMany(fact => fact.BaseClasses).Distinct(StringComparer.Ordinal).ToList()
             ))
             .OrderBy(fact => fact.Name, StringComparer.Ordinal)
             .ToList();

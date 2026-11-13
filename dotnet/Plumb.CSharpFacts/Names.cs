@@ -104,16 +104,23 @@ internal static class Names
     // every interface it implements, each by its original definition.
     public static List<string> BaseTypes(INamedTypeSymbol symbol)
     {
-        var baseTypes = new List<string>();
-        for (var current = symbol.BaseType; current is not null; current = current.BaseType)
-        {
-            baseTypes.Add(Type(current.OriginalDefinition));
-        }
+        var baseTypes = BaseClasses(symbol);
         foreach (var @interface in symbol.AllInterfaces)
         {
             baseTypes.Add(Type(@interface.OriginalDefinition));
         }
         return baseTypes;
+    }
+
+    // A type's base classes up to the top, each by its original definition.
+    public static List<string> BaseClasses(INamedTypeSymbol symbol)
+    {
+        var baseClasses = new List<string>();
+        for (var current = symbol.BaseType; current is not null; current = current.BaseType)
+        {
+            baseClasses.Add(Type(current.OriginalDefinition));
+        }
+        return baseClasses;
     }
 
     // The same name with each arity marker removed, which the external prefixes and segments are

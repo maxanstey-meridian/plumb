@@ -1089,6 +1089,11 @@ test("outsideTypes holds each outside type recorded by prefix once, with base cl
   assert.ok(!derivesRaw.types.some((entry) => strings[entry.name].startsWith("Acme.") || strings[entry.name].startsWith("Microsoft.")));
   assert.equal(repo.facts.derivesFrom("Microsoft.AspNetCore.Mvc.Controller", "Microsoft.AspNetCore.Mvc.ControllerBase"), true);
   assert.equal(repo.facts.derivesFrom("Microsoft.AspNetCore.Mvc.Controller", "System.IDisposable"), true);
+  // The base classes apart, nearest first, with no interface; none for a repository type or an unknown one.
+  assert.deepEqual(repo.facts.outsideBaseClasses("Microsoft.AspNetCore.Mvc.Controller"), ["Microsoft.AspNetCore.Mvc.ControllerBase", "System.Object"]);
+  assert.deepEqual(repo.facts.outsideBaseClasses("Acme.Data.Deep"), ["Acme.Data.AcmeDbContext", "Microsoft.EntityFrameworkCore.DbContext", "System.Object"]);
+  assert.deepEqual(repo.facts.outsideBaseClasses("App.RepoContext"), []);
+  assert.deepEqual(repo.facts.outsideBaseClasses("No.Such.Type"), []);
 });
 
 test("an outside type only a using names is recorded, for an alias's target and for a type argument inside it", () => {

@@ -1837,6 +1837,26 @@ test("MER-BE-018 judges what the compiler binds: an inferred type, a name throug
     ], findings.join("\n"));
 });
 
+test("MER-BE-018 scans a repo whose project compiles a git-ignored file, and a type that file declares is no transport contract", () => {
+    // What Reqnroll does: it writes Orders.feature.cs beside the .feature file, the project compiles it, and the repo
+    // ignores it. The compiler facts hold its types; the scan's files don't hold it.
+    const files = {
+        ".gitignore": "**/*.feature.cs\nbin/\nobj/\n",
+        "api/Api.csproj": webProject,
+        "api/Contracts/Orders/OrderModels.cs": "namespace App.Wire.Orders;\npublic sealed record OrderDto(Guid Id);\n",
+        "api/Contracts/Orders/Orders.feature.cs": "namespace App.Wire.Generated;\npublic sealed record GeneratedDto(Guid Id);\n",
+        "api/Modules/Orders/Domain/Orders.feature.cs": "namespace App.Modules.Orders.Domain;\npublic sealed class GeneratedSteps { }\n",
+        "api/Modules/Orders/Domain/Enclosed.cs": "namespace App.Modules.Orders.Domain;\npublic sealed class Enclosed\n{\n    public App.Wire.Orders.OrderDto? Order { get; set; }\n    public App.Wire.Generated.GeneratedDto? Generated { get; set; }\n    public GeneratedSteps? Steps { get; set; }\n}\n",
+    };
+    const findings = scan("MER-BE-018", files, undefined, { git: true, restore: true });
+    assert.deepEqual(findings.map((finding) => finding.replace(/, the API's transport contract.*/, "")), [
+        "api/Modules/Orders/Domain/Enclosed.cs:4\tmodule Orders Domain uses App.Wire.Orders.OrderDto",
+    ], findings.join("\n"));
+    // Every rule runs over the same repo: `scan` fails when the scan does, and no finding sits in an ignored file.
+    const all = scan(null, files, [], { git: true, restore: true });
+    assert.deepEqual(all.filter((finding) => finding.includes(".feature.cs:")), [], all.join("\n"));
+});
+
 test("MER-BE-018 reads every <Using> form and global using statement, and exempts test projects by metadata, test-only props and build output", () => {
     const findings = scan("MER-BE-018", {
         "api/Api.csproj": '<Project Sdk="Microsoft.NET.Sdk.Web"><PropertyGroup><TargetFramework>net10.0</TargetFramework><OutputType>Library</OutputType><ImplicitUsings>enable</ImplicitUsings></PropertyGroup>\n  <ItemGroup>\n    <Using\n      Include="System.Text.Json;App.Contracts.Orders" />\n  </ItemGroup>\n</Project>\n',

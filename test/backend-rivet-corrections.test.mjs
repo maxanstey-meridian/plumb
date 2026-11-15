@@ -44,6 +44,7 @@ test("MER-BE-001 applies forbidden global usings to a backend containing Domain"
         ["Modules/Users/Domain/FullyQualifiedDependency.cs:4", "remove this reference (Microsoft.EntityFrameworkCore.DbContext)"],
         ["Modules/Users/Domain/FullyQualifiedDependency.cs:5", "remove this reference (Acme.Modules.Users.Application.Ports.IUserRepository)"],
         ["Modules/Users/Domain/GlobalUsingDependency.cs:4", "remove this reference (Microsoft.Extensions.Logging.ILogger)"],
+        ["Modules/Users/Domain/ServiceCollectionDependency.cs:5", "remove this reference (Microsoft.Extensions.DependencyInjection.IServiceCollection)"],
         ["Modules/Users/Domain/User.cs:1", "remove this reference (Microsoft.EntityFrameworkCore)"],
         ["Modules/Users/Domain/User.cs:2", "remove this reference (Acme.Modules.Users.Application.Ports)"],
     ]);

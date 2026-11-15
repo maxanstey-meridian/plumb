@@ -532,6 +532,47 @@ test("MER-TE-001 accepts a Taskfile task whose command is the list item `- cmd: 
   assert.deepEqual(findings, []);
 });
 
+// One Taskfile command line per form: whether MER-TE-001 takes it as a Plumb run.
+const taskfileCommand = (line) => {
+  const r = repo([], {
+    "App.csproj": '<Project Sdk="Microsoft.NET.Sdk" />\n',
+    "Modules/Auth/Login.cs": "namespace App.Modules.Auth; public sealed class Login;\n",
+    "Taskfile.yml": `version: "3"\n\ntasks:\n  check:\n    cmds:\n      ${line}\n`,
+  });
+  return focusedFindings(r, "MER-TE-001").findings.map((finding) => finding.location);
+};
+
+for (const [form, line] of [
+  ["double-quoted", '- "plumb" . --ci'],
+  ["single-quoted", "- 'plumb' . --ci"],
+  ["quoted path", '- "$HOME/Sites/plumb/plumb" . --ci'],
+  ["shell-quoted inside a YAML-quoted line", `- '"plumb" "{{.ROOT_DIR}}" --ci'`],
+  ["YAML-quoted line", "- 'plumb {{.ROOT_DIR}} --ci'"],
+  ["${VAR:-default} override", "- ${PLUMB:-$HOME/Sites/plumb/plumb} {{.ROOT_DIR}} --ci"],
+  ["${VAR:-default} override of the bare name", "- ${PLUMB:-plumb} ."],
+  ["double-quoted override", '- "${PLUMB:-$HOME/Sites/plumb/plumb}" . --ci'],
+  ["quoted override inside a YAML-quoted line", `- '"\${PLUMB:-$HOME/Sites/plumb/plumb}" "{{.ROOT_DIR}}" --json --fail-on info --ci'`],
+  ["quoted override under cmd:", `- cmd: '"\${PLUMB:-$HOME/Sites/plumb/plumb}" "{{.ROOT_DIR}}"'`],
+  ["quoted command with no arguments", `- '"\${PLUMB:-plumb}"'`],
+]) {
+  test(`MER-TE-001 accepts a Taskfile command that runs plumb: ${form}`, () => {
+    assert.deepEqual(taskfileCommand(line), []);
+  });
+}
+
+for (const [form, line] of [
+  ["a comment", `# - '"\${PLUMB:-$HOME/Sites/plumb/plumb}" "{{.ROOT_DIR}}"'`],
+  ["an echoed mention", `- echo "run plumb before you push"`],
+  ["a quoted mention after another command", `- 'echo "\${PLUMB:-plumb}" .'`],
+  ["another tool's path", `- '"\${PLUMBER:-$HOME/bin/plumber}" .'`],
+  ["a path through a plumb folder", '- "$HOME/Sites/plumb/build.sh" .'],
+  ["a task reference", "- task: plumb"],
+]) {
+  test(`MER-TE-001 doesn't take ${form} as a plumb command`, () => {
+    assert.deepEqual(taskfileCommand(line), ["App.csproj:1"]);
+  });
+}
+
 test("MER-TE-007 independently rejects EF InMemory in test source", () => {
   const r = repo([], {
     "Tests/App.Tests.csproj": '<Project Sdk="Microsoft.NET.Sdk" />\n',

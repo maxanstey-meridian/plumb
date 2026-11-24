@@ -275,6 +275,14 @@ internal sealed partial class DocumentWalker : CSharpSyntaxWalker
         {
             RecordRoleGuardReturn(returnStatement);
         }
+        else if (node is ArrowExpressionClauseSyntax arrow)
+        {
+            RecordRoleGuardExpression(arrow.Expression, arrow.SpanStart, arrow);
+        }
+        else if (node is LambdaExpressionSyntax { ExpressionBody: { } body })
+        {
+            RecordRoleGuardExpression(body, body.SpanStart, body);
+        }
         else if (node is AssignmentExpressionSyntax assignment)
         {
             RecordEventsHandler(assignment);

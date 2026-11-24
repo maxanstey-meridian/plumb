@@ -2568,7 +2568,7 @@ namespace App.Auth
     public interface IUserContext { UserRole Role { get; } }
     public interface IAudienceAccess { bool AllowsAny(UserRole role, IReadOnlyList<UserRole> allowed); }
     public interface IPermissionService { Task<bool> CanEditAsync(UserRole role); }
-    public sealed class LoadedUser { public UserRole Role { get; init; } }
+    public sealed class LoadedUser { public UserRole Role { get; init; } public Guid OwnerId { get; init; } public bool IsRestricted { get; init; } }
     public sealed record PolicyDto(bool CanEdit);
     public abstract record Outcome
     {
@@ -2584,6 +2584,7 @@ namespace App.Auth
     {
         public static readonly UserRole[] Readers = [UserRole.Member, UserRole.Admin];
         public static bool Allows(UserRole role) => role >= UserRole.Admin;
+        public static bool IsStrictMode() => true;
     }
     public sealed class NonEndpointBuilder
     {
@@ -2683,6 +2684,25 @@ public sealed class RenameAreaUseCase(IUserContext userContext, IAudienceAccess 
         return new Outcome.Ok();
     }
 
+    public Outcome CompoundWithNonRoleHelper()
+    {
+        if (userContext.Role != UserRole.Admin && AreaAccess.IsStrictMode())
+        {
+            return new Outcome.Forbidden();
+        }
+        return new Outcome.Ok();
+    }
+
+    public Outcome ExpressionBodiedTernaryGuard() =>
+        AreaAccess.Allows(userContext.Role) ? new Outcome.Ok() : new Outcome.Forbidden();
+
+    public Outcome ExpressionBodiedSwitchGuard() =>
+        userContext.Role switch
+        {
+            UserRole.Admin => new Outcome.Ok(),
+            _ => new Outcome.Forbidden(),
+        };
+
     private static Outcome Forbid() => new Outcome.Forbidden();
     private static Outcome StatusCode(int statusCode) => new Outcome.Forbidden();
 
@@ -2701,6 +2721,55 @@ public sealed class RenameAreaUseCase(IUserContext userContext, IAudienceAccess 
         if (actorId != targetId && (actorRole == UserRole.Owner || actorRole.Outranks(targetRole)))
         {
             return new Outcome.Forbidden();
+        }
+        return new Outcome.Ok();
+    }
+
+    public Outcome SwitchWithResourceWhenArm(LoadedUser target, Guid userId)
+    {
+        return userContext.Role switch
+        {
+            UserRole.Owner => new Outcome.Ok(),
+            UserRole.Admin when target.OwnerId == userId => new Outcome.Ok(),
+            _ => new Outcome.Forbidden(),
+        };
+    }
+
+    public Outcome ElseIfResourceGatedGuard(LoadedUser record, Guid userId)
+    {
+        if (record.OwnerId == userId)
+        {
+            return new Outcome.Ok();
+        }
+        else if (userContext.Role != UserRole.Admin)
+        {
+            return new Outcome.Forbidden();
+        }
+        return new Outcome.Ok();
+    }
+
+    public Outcome NestedIfResourceGatedGuard(LoadedUser record)
+    {
+        if (record.IsRestricted)
+        {
+            if (userContext.Role != UserRole.Admin)
+            {
+                return new Outcome.Forbidden();
+            }
+        }
+        return new Outcome.Ok();
+    }
+
+    public Outcome SwitchStatementResourceGatedGuard(LoadedUser record)
+    {
+        switch (record.IsRestricted)
+        {
+            case true:
+                if (userContext.Role != UserRole.Admin)
+                {
+                    return new Outcome.Forbidden();
+                }
+                break;
         }
         return new Outcome.Ok();
     }
@@ -2785,6 +2854,10 @@ public static class Routes
         {
             other.RequireAuthorization("NotAnEndpoint");
         }
+
+        group.MapGet("/inline-ternary", Outcome (IUserContext userContext) =>
+            AreaAccess.Allows(userContext.Role) ? new Outcome.Ok() : new Outcome.Forbidden()
+        );
     }
 }
 `,
@@ -2804,6 +2877,7 @@ test("roleGuards extracts static caller-role refusal guards with exact lines, ro
     guard.callee,
   ]);
   assert.deepEqual(guards, [
+    ["api/Host/Routes.cs", 43, "App.Host.Routes", "Map", "IUserContext.Role", "AreaAccess.Allows"],
     ["api/Modules/Areas/Application/Guards.cs", 10, "App.Modules.Areas.Application.RenameAreaUseCase", "DirectPredicate", "IUserContext.Role", "AreaAccess.Allows"],
     ["api/Modules/Areas/Application/Guards.cs", 19, "App.Modules.Areas.Application.RenameAreaUseCase", "InjectedAudience", "IUserContext.Role", "IAudienceAccess.AllowsAny"],
     ["api/Modules/Areas/Application/Guards.cs", 28, "App.Modules.Areas.Application.RenameAreaUseCase", "DirectComparison", "IUserContext.Role", null],
@@ -2814,6 +2888,9 @@ test("roleGuards extracts static caller-role refusal guards with exact lines, ro
     ["api/Modules/Areas/Application/Guards.cs", 70, "App.Modules.Areas.Application.RenameAreaUseCase", "ElseBranchGuard", "IUserContext.Role", "AreaAccess.Allows"],
     ["api/Modules/Areas/Application/Guards.cs", 82, "App.Modules.Areas.Application.RenameAreaUseCase", "PrincipalGuards", "ClaimsPrincipal.IsInRole", "ClaimsPrincipal.IsInRole"],
     ["api/Modules/Areas/Application/Guards.cs", 86, "App.Modules.Areas.Application.RenameAreaUseCase", "PrincipalGuards", "ClaimTypes.Role", null],
+    ["api/Modules/Areas/Application/Guards.cs", 95, "App.Modules.Areas.Application.RenameAreaUseCase", "CompoundWithNonRoleHelper", "IUserContext.Role", null],
+    ["api/Modules/Areas/Application/Guards.cs", 102, "App.Modules.Areas.Application.RenameAreaUseCase", "ExpressionBodiedTernaryGuard", "IUserContext.Role", "AreaAccess.Allows"],
+    ["api/Modules/Areas/Application/Guards.cs", 105, "App.Modules.Areas.Application.RenameAreaUseCase", "ExpressionBodiedSwitchGuard", "IUserContext.Role", null],
   ]);
 });
 

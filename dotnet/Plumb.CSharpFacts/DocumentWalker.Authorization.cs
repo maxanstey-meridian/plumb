@@ -152,8 +152,73 @@ internal sealed partial class DocumentWalker
         return false;
     }
 
+    private bool HasDisqualifiedEnclosingBranch(SyntaxNode node)
+    {
+        var previous = node;
+        for (
+            var current = node.Parent;
+            current is not null;
+            previous = current, current = current.Parent
+        )
+        {
+            switch (current)
+            {
+                case IfStatementSyntax ifStatement when previous != ifStatement.Condition:
+                    if (
+                        !AnalyzeCondition(
+                            _model.GetOperation(ifStatement.Condition),
+                            new HashSet<ILocalSymbol>(SymbolEqualityComparer.Default)
+                        ).Allowed
+                    )
+                    {
+                        return true;
+                    }
+                    break;
+                case SwitchStatementSyntax switchStatement
+                    when previous != switchStatement.Expression:
+                    if (
+                        !AnalyzeCondition(
+                            _model.GetOperation(switchStatement.Expression),
+                            new HashSet<ILocalSymbol>(SymbolEqualityComparer.Default)
+                        ).Allowed
+                    )
+                    {
+                        return true;
+                    }
+                    break;
+                case SwitchSectionSyntax switchSection:
+                    foreach (var label in switchSection.Labels)
+                    {
+                        if (
+                            label is CasePatternSwitchLabelSyntax { WhenClause: { } whenClause }
+                            && !AnalyzeCondition(
+                                _model.GetOperation(whenClause.Condition),
+                                new HashSet<ILocalSymbol>(SymbolEqualityComparer.Default)
+                            ).Allowed
+                        )
+                        {
+                            return true;
+                        }
+                    }
+                    break;
+                case BaseMethodDeclarationSyntax
+                or AccessorDeclarationSyntax
+                or LocalFunctionStatementSyntax
+                or AnonymousFunctionExpressionSyntax
+                or BaseTypeDeclarationSyntax
+                or CompilationUnitSyntax:
+                    return false;
+            }
+        }
+        return false;
+    }
+
     private void RecordRoleGuard(IfStatementSyntax ifStatement)
     {
+        if (HasDisqualifiedEnclosingBranch(ifStatement))
+        {
+            return;
+        }
         var thenRefuses = BranchExitsWithRefusal(ifStatement.Statement);
         var elseRefuses =
             !thenRefuses
@@ -183,7 +248,24 @@ internal sealed partial class DocumentWalker
 
     private void RecordRoleGuardReturn(ReturnStatementSyntax returnStatement)
     {
-        var expression = UnwrapParens(returnStatement.Expression);
+        RecordRoleGuardExpression(
+            returnStatement.Expression,
+            returnStatement.SpanStart,
+            returnStatement
+        );
+    }
+
+    private void RecordRoleGuardExpression(
+        ExpressionSyntax? rawExpression,
+        int start,
+        SyntaxNode origin
+    )
+    {
+        if (HasDisqualifiedEnclosingBranch(origin))
+        {
+            return;
+        }
+        var expression = UnwrapParens(rawExpression);
         if (expression is ConditionalExpressionSyntax ternary)
         {
             if (
@@ -201,7 +283,7 @@ internal sealed partial class DocumentWalker
             {
                 _facts.RoleGuards.Add(
                     new RoleGuardFact(
-                        Offset(returnStatement.SpanStart),
+                        Offset(start),
                         Current?.Name,
                         _member,
                         roleSource,
@@ -224,10 +306,6 @@ internal sealed partial class DocumentWalker
             var hasRefusalArm = false;
             foreach (var arm in switchExpression.Arms)
             {
-                if (!IsRefusalReturnExpression(arm.Expression))
-                {
-                    continue;
-                }
                 if (arm.WhenClause is { } whenClause)
                 {
                     var whenResult = AnalyzeCondition(
@@ -236,17 +314,20 @@ internal sealed partial class DocumentWalker
                     );
                     if (!whenResult.Allowed)
                     {
-                        continue;
+                        break;
                     }
                 }
-                hasRefusalArm = true;
-                break;
+                if (IsRefusalReturnExpression(arm.Expression))
+                {
+                    hasRefusalArm = true;
+                    break;
+                }
             }
             if (hasRefusalArm)
             {
                 _facts.RoleGuards.Add(
                     new RoleGuardFact(
-                        Offset(returnStatement.SpanStart),
+                        Offset(start),
                         Current?.Name,
                         _member,
                         roleSource,
@@ -608,7 +689,10 @@ internal sealed partial class DocumentWalker
                 return _disqualified;
             }
             var combined = Combine(receiver, argsResult);
-            if (innerCall.TargetMethod.ReturnType.SpecialType == SpecialType.System_Boolean)
+            if (
+                combined.RoleSource is not null
+                && innerCall.TargetMethod.ReturnType.SpecialType == SpecialType.System_Boolean
+            )
             {
                 return combined with { Callee = FormatCallee(innerCall.TargetMethod) };
             }
@@ -819,7 +903,10 @@ internal sealed partial class DocumentWalker
         }
 
         var combined = Combine(receiverResult, argumentsResult);
-        if (method.ReturnType.SpecialType == SpecialType.System_Boolean)
+        if (
+            combined.RoleSource is not null
+            && method.ReturnType.SpecialType == SpecialType.System_Boolean
+        )
         {
             return combined with { Callee = FormatCallee(method) };
         }

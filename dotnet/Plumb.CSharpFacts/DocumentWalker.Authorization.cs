@@ -265,7 +265,7 @@ internal sealed partial class DocumentWalker
         {
             return;
         }
-        var expression = UnwrapParens(rawExpression);
+        var expression = UnwrapTaskFromResult(UnwrapParens(rawExpression));
         if (expression is ConditionalExpressionSyntax ternary)
         {
             if (
@@ -343,6 +343,20 @@ internal sealed partial class DocumentWalker
         while (expression is ParenthesizedExpressionSyntax parenthesized)
         {
             expression = parenthesized.Expression;
+        }
+        return expression;
+    }
+
+    private ExpressionSyntax? UnwrapTaskFromResult(ExpressionSyntax? expression)
+    {
+        if (
+            expression is InvocationExpressionSyntax { ArgumentList.Arguments.Count: 1 } invocation
+            && _model.GetOperation(invocation) is IInvocationOperation call
+            && call.TargetMethod.Name == "FromResult"
+            && call.TargetMethod.ContainingType?.Name is "Task" or "ValueTask"
+        )
+        {
+            return UnwrapParens(invocation.ArgumentList.Arguments[0].Expression);
         }
         return expression;
     }
@@ -437,6 +451,13 @@ internal sealed partial class DocumentWalker
                             StringComparison.OrdinalIgnoreCase
                         ) && HasStatusCode403(creation.Arguments)
                     )
+                    {
+                        return true;
+                    }
+                }
+                foreach (var argument in creation.Arguments)
+                {
+                    if (IsRefusalOperation(argument.Value))
                     {
                         return true;
                     }

@@ -1984,7 +1984,8 @@ test("MER-BE-068 flags static caller-role refusal guards in Application and leav
         "Modules/Areas/Application/EdgeCasesUseCase.cs":
             "using App.Stubs;\n" +
             "namespace App.Modules.Areas.Application;\n" +
-            "public abstract record EdgeOutcome { public sealed record Ok : EdgeOutcome; public sealed record Forbidden : EdgeOutcome; }\n" +
+            "public abstract record EdgeRefusal { public sealed record NotAllowed : EdgeRefusal; public sealed record Closed : EdgeRefusal; }\n" +
+            "public abstract record EdgeOutcome { public sealed record Ok : EdgeOutcome; public sealed record Empty : EdgeOutcome; public sealed record Forbidden : EdgeOutcome; public sealed record Refused(EdgeRefusal Reason) : EdgeOutcome; }\n" +
             "public sealed class EdgeCasesUseCase\n" +
             "{\n" +
             "    private readonly IUserContext _userContext;\n" +
@@ -2013,10 +2014,30 @@ test("MER-BE-068 flags static caller-role refusal guards in Application and leav
             "        if (role < UserRole.Admin) return new EdgeOutcome.Forbidden();\n" +
             "        return new EdgeOutcome.Ok();\n" +
             "    }\n" +
+            "    public EdgeOutcome WrappedRefusal()\n" +
+            "    {\n" +
+            "        if (_userContext.Role < UserRole.Admin) return new EdgeOutcome.Refused(new EdgeRefusal.NotAllowed());\n" +
+            "        return new EdgeOutcome.Ok();\n" +
+            "    }\n" +
+            "    public EdgeOutcome WrappedNonRefusal()\n" +
+            "    {\n" +
+            "        if (_userContext.Role < UserRole.Admin) return new EdgeOutcome.Refused(new EdgeRefusal.Closed());\n" +
+            "        return new EdgeOutcome.Ok();\n" +
+            "    }\n" +
+            "    public Task<EdgeOutcome> TaskFromResultTernary()\n" +
+            "    {\n" +
+            "        return Task.FromResult<EdgeOutcome>(_userContext.Role >= UserRole.Admin ? new EdgeOutcome.Ok() : new EdgeOutcome.Forbidden());\n" +
+            "    }\n" +
+            "    public Task<EdgeOutcome> TaskFromResultNonRefusal()\n" +
+            "    {\n" +
+            "        return Task.FromResult<EdgeOutcome>(_userContext.Role >= UserRole.Admin ? new EdgeOutcome.Ok() : new EdgeOutcome.Empty());\n" +
+            "    }\n" +
             "}\n",
     });
     assert.deepEqual(findings, [
-        "Modules/Areas/Application/EdgeCasesUseCase.cs:29\tStatic caller-role refusal guard (IUserContext.Role) belongs in an endpoint authorization policy ([Authorize(Policy = ...)] or .RequireAuthorization(...)), not in Application",
+        "Modules/Areas/Application/EdgeCasesUseCase.cs:30\tStatic caller-role refusal guard (IUserContext.Role) belongs in an endpoint authorization policy ([Authorize(Policy = ...)] or .RequireAuthorization(...)), not in Application",
+        "Modules/Areas/Application/EdgeCasesUseCase.cs:35\tStatic caller-role refusal guard (IUserContext.Role) belongs in an endpoint authorization policy ([Authorize(Policy = ...)] or .RequireAuthorization(...)), not in Application",
+        "Modules/Areas/Application/EdgeCasesUseCase.cs:45\tStatic caller-role refusal guard (IUserContext.Role) belongs in an endpoint authorization policy ([Authorize(Policy = ...)] or .RequireAuthorization(...)), not in Application",
     ]);
 });
 

@@ -1817,49 +1817,47 @@ test("MER-CP-001 names a const by the type that holds it when an #if pair of hea
   assert.deepEqual(findings.map((finding) => finding.message.match(/is the server's (\S+);/)?.[1]), ["Outer.XId"]);
 });
 
-test("MER-CP-002 reads a rule from any level-2 heading that starts with its ID, and reports each missing field or title, unknown or repeated rule ID, rule headed at another level, ID without three digits, file with no rule, and cited name that isn't in the code", () => {
+test("MER-CP-002 validates strict invariants.yaml schema, cross-module related IDs, inline rule references, symbol/path resolution, and rejects legacy INVARIANTS.md", () => {
   const findings = JSON.parse(plumb(path.join(FIX, "MER-CP-002", "bad"), "--rule", "MER-CP-002", "--json").stdout);
-  const cited = (finding) => finding.message.match(/cites `([^`]+)`(?:, which matches \d+ files)?/)?.[0] ??
-    finding.message.match(/^\S+ has no \w+|rule [A-Z-]+\d+|already defined|^\S+ is headed at level \d|^\S+ isn't a rule ID|^defines no rule/)?.[0];
-  assert.deepEqual(findings.map((finding) => [finding.location, cited(finding)]), [
-    // The `### Notes` subheading and the fenced `# a shell comment` above them leave BILL-001's names checked.
-    ["api/Modules/Billing/INVARIANTS.md:16", "cites `InvoiceDecider.Removed`"], // the type exists, and only a comment names its member
-    ["api/Modules/Billing/INVARIANTS.md:16", "cites `GoneService`"],
-    ["api/Modules/Billing/INVARIANTS.md:16", "cites `Modules/Gone/`"],
-    ["api/Modules/Billing/INVARIANTS.md:16", "cites `Gone.Method`"],
-    ["api/Modules/Billing/INVARIANTS.md:16", "cites `gone.bicep`"],
-    ["api/Modules/Billing/INVARIANTS.md:16", "cites `refuse_deleted_change`"], // an Owner's lower-case name is code, so it is checked
-    ["api/Modules/Billing/INVARIANTS.md:18", "cites `GoneTests`"],
-    ["api/Modules/Billing/INVARIANTS.md:18", "cites `InvoiceDeciderTests.A_deleted_test`"],
-    ["api/Modules/Billing/INVARIANTS.md:18", "cites `Gone.feature`"],
-    ["api/Modules/Billing/INVARIANTS.md:18", "cites `gone.spec.ts`"],
-    ["api/Modules/Billing/INVARIANTS.md:19", "cites `A_deleted_test_method`"],
-    ["api/Modules/Billing/INVARIANTS.md:19", "cites `invoice.spec.ts`, which matches 2 files"],
-    ["api/Modules/Billing/INVARIANTS.md:19", "cites `gone.bicep`"], // a Proof's lower-case name with a file's ending is checked as a file
-    ["api/Modules/Billing/INVARIANTS.md:19", "cites `invoiceGoneTests`"], // a Proof's lower-case `…Tests` name is a test class, so it is checked
-    ["api/Modules/Billing/INVARIANTS.md:21", "BILL-002 has no Proof"],
-    ["api/Modules/Billing/INVARIANTS.md:27", "BILL-003 has no Owner"],
-    ["api/Modules/Billing/INVARIANTS.md:27", "rule BILL-077"],
-    ["api/Modules/Billing/INVARIANTS.md:33", "BILL-004 has no Proof"], // headed `## BILL-004 — …`, so it is still a rule
-    ["api/Modules/Billing/INVARIANTS.md:43", "cites `SpacedGone`"], // headed `## BILL-005 A …`, so its names are checked
-    ["api/Modules/Billing/INVARIANTS.md:47", "BILL-006 has no title"], // headed bare `## BILL-006`, a rule with no title
-    ["api/Modules/Billing/INVARIANTS.md:5", "rule BILL-009"],
-    ["api/Modules/Billing/INVARIANTS.md:51", "cites `BareGone`"], // ...whose names are still checked
-    ["api/Modules/Billing/INVARIANTS.md:55", "BILL-008 has no title"], // `## BILL-008:`, a colon and nothing after it
-    // `# BILL-007: …` and `## BILL-01: …` are reported, and the names under them aren't checked; `## SHA-1 Notes` is prose.
-    ["api/Modules/Billing/INVARIANTS.md:63", "BILL-007 is headed at level 1"],
-    ["api/Modules/Billing/INVARIANTS.md:69", "BILL-01 isn't a rule ID"],
-    // Headed `## FORM-D-001 A …`: a heading's ID is prose only by its first word, so a listed D inside it is still a rule.
-    ["api/Modules/Forms/INVARIANTS.md:15", "cites `FormDGone`"],
-    // Headed `## FORM-001 — …`, so its names are checked; each is cited twice on its line and reported once.
-    ["api/Modules/Forms/INVARIANTS.md:5", "rule FORM-009"],
-    ["api/Modules/Forms/INVARIANTS.md:7", "cites `FormSubmitter`"],
-    ["api/Modules/Payments/INVARIANTS.md:15", "cites `CurrencyGone`"], // `## ISO-001: …` is a rule though ISO-639 is prose
-    ["api/Modules/Payments/INVARIANTS.md:3", "already defined"],
-    ["api/Modules/Payments/INVARIANTS.md:5", "rule GONE-001"], // no defined rule starts GONE, and it is still a reference
-    // Its only entry is headed `### REFUND-001: …`, so the file defines no rule and the heading is reported.
-    ["api/Modules/Refunds/INVARIANTS.md:1", "defines no rule"],
-    ["api/Modules/Refunds/INVARIANTS.md:3", "REFUND-001 is headed at level 3"],
+  const summary = (finding) => (finding.message.startsWith("invalid YAML:") ? "invalid YAML" : finding.message);
+  assert.deepEqual(findings.map((finding) => [finding.location, summary(finding)]), [
+    ["api/Modules/Billing/invariants.yaml:10", "owner cites `gone.bicep`, which isn't in the code"],
+    ["api/Modules/Billing/invariants.yaml:11", "owner cites `refuse_deleted_change`, which isn't in the code"],
+    ["api/Modules/Billing/invariants.yaml:13", "proof cites `GoneTests`, which isn't in the code"],
+    ["api/Modules/Billing/invariants.yaml:14", "proof cites `InvoiceDeciderTests.A_deleted_test`, which isn't in the code"],
+    ["api/Modules/Billing/invariants.yaml:15", "proof cites `Gone.feature`, which isn't in the repository"],
+    ["api/Modules/Billing/invariants.yaml:16", "proof cites `gone.spec.ts`, which isn't in the repository"],
+    ["api/Modules/Billing/invariants.yaml:17", "proof cites `invoice.spec.ts`, which matches 2 files — cite more of its path"],
+    ["api/Modules/Billing/invariants.yaml:18", "proof cites `missing_lower_case_proof`, which isn't in the code"],
+    ["api/Modules/Billing/invariants.yaml:24", "unknown key `status` — allowed keys are id, title, rule, why, owner, proof, accepts, related"],
+    ["api/Modules/Billing/invariants.yaml:25", "BILL-002 `owner` must be a non-empty list of bare symbol or path strings"],
+    ["api/Modules/Billing/invariants.yaml:26", "BILL-002 `proof` must be a non-empty list of bare symbol or path strings"],
+    ["api/Modules/Billing/invariants.yaml:33", "owner entry `InvoiceDecider checks paid invoices` must be a bare symbol or path without whitespace, call parentheses, or generic brackets"],
+    ["api/Modules/Billing/invariants.yaml:34", "owner entry `InvoiceDecider.Refusal()` must be a bare symbol or path without whitespace, call parentheses, or generic brackets"],
+    ["api/Modules/Billing/invariants.yaml:35", "owner entry `Repo<T>` must be a bare symbol or path without whitespace, call parentheses, or generic brackets"],
+    ["api/Modules/Billing/invariants.yaml:37", "proof entry `InvoiceDeciderTests checks refusal` must be a bare symbol or path without whitespace, call parentheses, or generic brackets"],
+    ["api/Modules/Billing/invariants.yaml:38", "proof entry `InvoiceDeciderTests.A_paid_invoice_cannot_change()` must be a bare symbol or path without whitespace, call parentheses, or generic brackets"],
+    ["api/Modules/Billing/invariants.yaml:39", "proof entry `Fixture<Invoice>` must be a bare symbol or path without whitespace, call parentheses, or generic brackets"],
+    ["api/Modules/Billing/invariants.yaml:41", "`BILL-01` isn't a valid rule ID — expected `[A-Z]+(?:-[A-Z]+)*-\\d{3}`"],
+    ["api/Modules/Billing/invariants.yaml:50", "BILL-004 is missing required `title`"],
+    ["api/Modules/Billing/invariants.yaml:50", "BILL-004 is missing required `rule`"],
+    ["api/Modules/Billing/invariants.yaml:50", "BILL-004 is missing required `why`"],
+    ["api/Modules/Billing/invariants.yaml:50", "BILL-004 is missing required `owner` — list the enforcing boundary symbols or paths"],
+    ["api/Modules/Billing/invariants.yaml:50", "BILL-004 is missing required `proof` — list the tests or checks that fail if it breaks"],
+    ["api/Modules/Billing/invariants.yaml:7", "owner cites `InvoiceDecider.Removed`, which isn't in the code"],
+    ["api/Modules/Billing/invariants.yaml:8", "owner cites `GoneService`, which isn't in the code"],
+    ["api/Modules/Billing/invariants.yaml:9", "owner cites `Modules/Gone/`, which isn't in the repository"],
+    ["api/Modules/Forms/invariants.yaml:1", "unknown top-level key `intro` — only `invariants` is allowed"],
+    ["api/Modules/Forms/invariants.yaml:2", "`invariants` must not be empty — define at least one invariant"],
+    ["api/Modules/Legacy/INVARIANTS.md:1", "legacy INVARIANTS.md is no longer supported — migrate to invariants.yaml"],
+    ["api/Modules/Payments/invariants.yaml:12", "`related` refers to rule GONE-001, which no invariants.yaml defines"],
+    ["api/Modules/Payments/invariants.yaml:2", "BILL-001 is already defined in api/Modules/Billing/invariants.yaml:2 — a rule ID is unique across the repository"],
+    ["api/Modules/Payments/invariants.yaml:23", "`related` cites PAY-001, which is this entry's own ID — `related` is for cross-module rule IDs"],
+    ["api/Modules/Payments/invariants.yaml:24", "`related` cites PAY-002, which is defined in the same file — `related` is for cross-module rule IDs"],
+    ["api/Modules/Payments/invariants.yaml:4", "refers to rule GONE-002, which no invariants.yaml defines"],
+    ["api/Modules/Payments/invariants.yaml:5", "refers to rule GONE-003, which no invariants.yaml defines"],
+    ["api/Modules/Payments/invariants.yaml:6", "refers to rule GONE-004, which no invariants.yaml defines"],
+    ["api/Modules/Refunds/invariants.yaml:4", "invalid YAML"],
   ]);
 });
 
@@ -1869,4 +1867,98 @@ test("MER-CP-002 judges a cited name against the whole repository, so excluding 
   const narrowed = ["ui/", "api.tests/", "api/Migrations/", "api/Modules/Billing/*.cs"];
   assert.deepEqual(run("bad", ...narrowed), run("bad"));
   assert.deepEqual(run("good", ...narrowed), []);
+});
+
+test("MER-CP-002 rejects invalid root shapes, non-mapping entries, missing ids, and invalid field values", () => {
+  const r = repo([], {
+    "api/Modules/EntryChecks/Guard.cs": "public sealed class Guard {}\n",
+    "api.tests/GuardTests.cs": "public sealed class GuardTests {}\n",
+    "api/Modules/NonMapRoot/invariants.yaml": "- BILL-001\n",
+    "api/Modules/MissingKey/invariants.yaml": "{}\n",
+    "api/Modules/NonSeqRoot/invariants.yaml": "invariants:\n  id: BILL-001\n",
+    "api/Modules/NonMapEntry/invariants.yaml": "invariants:\n  - not-a-mapping\n",
+    "api/Modules/EntryChecks/invariants.yaml": [
+      "invariants:",
+      "  - title: Missing id",
+      "    rule: Guard enforces the rule.",
+      "    why: Missing ids cannot be referenced.",
+      "    owner:",
+      "      - Guard",
+      "    proof:",
+      "      - GuardTests",
+      "  - id: CHK-001",
+      "    title: \"   \"",
+      "    rule: 42",
+      "    why: \"\"",
+      "    accepts: \"   \"",
+      "    owner:",
+      "      - Guard",
+      "    proof:",
+      "      - GuardTests",
+      "  - id: CHK-002",
+      "    title: Invalid accepts and empty related",
+      "    rule: Guard enforces the rule.",
+      "    why: Accepts must be a non-empty string and related must be non-empty.",
+      "    accepts: 123",
+      "    owner:",
+      "      - Guard",
+      "    proof:",
+      "      - GuardTests",
+      "    related: []",
+      "  - id: CHK-003",
+      "    title: Non-sequence related",
+      "    rule: Guard enforces the rule.",
+      "    why: Related must be a sequence.",
+      "    owner:",
+      "      - Guard",
+      "    proof:",
+      "      - GuardTests",
+      "    related: CHK-001",
+      "  - id: CHK-004",
+      "    title: Malformed and non-string related items",
+      "    rule: Guard enforces the rule.",
+      "    why: Related items must be valid rule IDs.",
+      "    owner:",
+      "      - Guard",
+      "    proof:",
+      "      - GuardTests",
+      "    related:",
+      "      - BAD-1",
+      "      - 123",
+      "      - null",
+      "  - id: CHK-005",
+      "    title: Empty and non-string owner and proof items",
+      "    rule: Guard enforces the rule.",
+      "    why: Owner and proof items must be non-empty strings.",
+      "    owner:",
+      "      - \"\"",
+      "      - 123",
+      "    proof:",
+      "      - \"   \"",
+      "      - true",
+      "",
+    ].join("\n"),
+  });
+  const { findings } = focusedFindings(r, "MER-CP-002");
+  assert.deepEqual(findings.map((finding) => [finding.location, finding.message]), [
+    ["api/Modules/EntryChecks/invariants.yaml:10", "CHK-001 `title` must be a non-empty string"],
+    ["api/Modules/EntryChecks/invariants.yaml:11", "CHK-001 `rule` must be a non-empty string"],
+    ["api/Modules/EntryChecks/invariants.yaml:12", "CHK-001 `why` must be a non-empty string"],
+    ["api/Modules/EntryChecks/invariants.yaml:13", "CHK-001 `accepts` must be a non-empty string"],
+    ["api/Modules/EntryChecks/invariants.yaml:2", "invariant entry is missing required `id`"],
+    ["api/Modules/EntryChecks/invariants.yaml:22", "CHK-002 `accepts` must be a non-empty string"],
+    ["api/Modules/EntryChecks/invariants.yaml:27", "CHK-002 `related` must be a non-empty list of cross-module rule IDs"],
+    ["api/Modules/EntryChecks/invariants.yaml:36", "CHK-003 `related` must be a non-empty list of cross-module rule IDs"],
+    ["api/Modules/EntryChecks/invariants.yaml:46", "CHK-004 `related` entry `BAD-1` isn't a valid rule ID — expected `[A-Z]+(?:-[A-Z]+)*-\\d{3}`"],
+    ["api/Modules/EntryChecks/invariants.yaml:47", "CHK-004 `related` entry `123` isn't a valid rule ID — expected `[A-Z]+(?:-[A-Z]+)*-\\d{3}`"],
+    ["api/Modules/EntryChecks/invariants.yaml:48", "CHK-004 `related` entry isn't a valid rule ID — expected `[A-Z]+(?:-[A-Z]+)*-\\d{3}`"],
+    ["api/Modules/EntryChecks/invariants.yaml:54", "CHK-005 `owner` entry must be a non-empty string"],
+    ["api/Modules/EntryChecks/invariants.yaml:55", "CHK-005 `owner` entry must be a non-empty string"],
+    ["api/Modules/EntryChecks/invariants.yaml:57", "CHK-005 `proof` entry must be a non-empty string"],
+    ["api/Modules/EntryChecks/invariants.yaml:58", "CHK-005 `proof` entry must be a non-empty string"],
+    ["api/Modules/MissingKey/invariants.yaml:1", "missing top-level `invariants` list"],
+    ["api/Modules/NonMapEntry/invariants.yaml:2", "each entry in `invariants` must be a mapping"],
+    ["api/Modules/NonMapRoot/invariants.yaml:1", "invariants.yaml must be a YAML mapping with a top-level `invariants` list"],
+    ["api/Modules/NonSeqRoot/invariants.yaml:1", "`invariants` must be a non-empty list of invariant entries"],
+  ]);
 });

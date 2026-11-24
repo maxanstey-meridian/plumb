@@ -1,0 +1,33 @@
+invariants:
+  - id: BILL-001
+    title: A second rule with the same ID
+    rule: IDs are unique across the repository and must not cite GONE-002.
+    why: Duplicate IDs break cross-module references such as GONE-003.
+    accepts: Leaving GONE-004 unresolved is not allowed.
+    owner:
+      - InvoiceDecider
+    proof:
+      - InvoiceDeciderTests
+    related:
+      - GONE-001
+
+  - id: PAY-001
+    title: A payment settles one invoice
+    rule: A payment settles a single invoice.
+    why: Splitting a payment complicates refunds.
+    owner:
+      - InvoiceDecider
+    proof:
+      - InvoiceDeciderTests
+    related:
+      - PAY-001
+      - PAY-002
+
+  - id: PAY-002
+    title: A payment is recorded once
+    rule: Duplicate payment records are rejected.
+    why: Double recording skews ledger totals.
+    owner:
+      - InvoiceDecider
+    proof:
+      - InvoiceDeciderTests

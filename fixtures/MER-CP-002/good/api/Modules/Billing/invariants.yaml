@@ -1,0 +1,27 @@
+invariants:
+  - id: BILL-001
+    title: A paid invoice never changes
+    rule: >-
+      Once an invoice is paid, nothing about it changes. Its PDF is checked against its SHA-256 hash,
+      encrypted with AES-256, signed with HMAC-SHA-256, carries RFC-822 dates and an ISO-639 language code,
+      and MER-BE-005 keeps other modules out of Billing's internals.
+    why: >-
+      A paid invoice is what the customer was charged; changing it rewrites history. D-012 and ADR-001
+      record why stale writes are refused with HTTP-409, and PAY-001 settles each invoice once.
+    accepts: Corrections are issued as a separate credit note referencing BILL-001 rather than editing the paid invoice.
+    owner:
+      - InvoiceDecider
+      - InvoiceDecider.Refusal
+      - invoices_immutable
+      - refuse_paid_change
+      - Migrations/
+      - BannedSymbols.txt
+      - app.bicep
+      - System.Net.Http
+    proof:
+      - InvoiceDeciderTests.A_paid_invoice_cannot_change
+      - InvoiceDeciderTests
+      - Invoicing.feature
+      - invoice.spec.ts
+    related:
+      - PAY-001

@@ -51,7 +51,7 @@ Rules come in packs, one per area. Plumb detects which packs a repository needs 
 | `RV` | Rivet contracts and generated output |
 | `TE` | Testing architecture |
 | `TO` | Repository tooling |
-| `CP` | Rules that cross packs, such as each module's `INVARIANTS.md` |
+| `CP` | Rules that cross packs, such as each module's `invariants.yaml` |
 
 Most rules run in process. ast-grep runs the declarative syntax rules in `rules/`, and two checks in `checks/` run as their own processes.
 

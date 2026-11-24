@@ -1,0 +1,20 @@
+invariants:
+  - id: PAY-001
+    title: A payment settles exactly one invoice
+    rule: A payment settles one invoice, which then never changes (BILL-001), in its own currency (ISO-001).
+    why: A payment split across invoices cannot be refunded cleanly.
+    owner:
+      - InvoiceDecider
+    proof:
+      - InvoiceDeciderTests
+    related:
+      - BILL-001
+
+  - id: ISO-001
+    title: A payment currency is a three-letter code
+    rule: Payments validate ISO-001 currency codes while ISO-639 stays prose.
+    why: Mixing currency standards causes settlement mismatches.
+    owner:
+      - InvoiceDecider
+    proof:
+      - InvoiceDeciderTests

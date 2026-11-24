@@ -1,0 +1,50 @@
+invariants:
+  - id: BILL-001
+    title: A paid invoice never changes
+    rule: Once an invoice is paid, nothing about it changes.
+    why: A paid invoice is what the customer was charged; changing it rewrites history.
+    owner:
+      - InvoiceDecider.Removed
+      - GoneService
+      - Modules/Gone/
+      - gone.bicep
+      - refuse_deleted_change
+    proof:
+      - GoneTests
+      - InvoiceDeciderTests.A_deleted_test
+      - Gone.feature
+      - gone.spec.ts
+      - invoice.spec.ts
+      - missing_lower_case_proof
+
+  - id: BILL-002
+    title: Empty symbol lists and unknown key
+    rule: Every invariant has a real owner and proof.
+    why: Unproved rules rot silently.
+    status: active
+    owner: []
+    proof: []
+
+  - id: BILL-003
+    title: Non-bare symbols in owner and proof
+    rule: Owner and proof entries must be bare symbols or paths.
+    why: Prose and call syntax break lexical verification.
+    owner:
+      - InvoiceDecider checks paid invoices
+      - InvoiceDecider.Refusal()
+      - Repo<T>
+    proof:
+      - InvoiceDeciderTests checks refusal
+      - InvoiceDeciderTests.A_paid_invoice_cannot_change()
+      - Fixture<Invoice>
+
+  - id: BILL-01
+    title: Malformed rule ID
+    rule: Rule IDs must have three digits.
+    why: Consistent IDs keep references unambiguous.
+    owner:
+      - InvoiceDecider
+    proof:
+      - InvoiceDeciderTests
+
+  - id: BILL-004

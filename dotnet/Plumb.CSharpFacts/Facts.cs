@@ -103,6 +103,21 @@ internal readonly record struct SnapshotTableFact(
 
 internal readonly record struct DefaultSchemaFact(int Start, string Schema);
 
+internal readonly record struct RoleGuardFact(
+    int Start,
+    string? From,
+    string? FromMember,
+    string RoleSource,
+    string? Callee
+);
+
+internal readonly record struct ConditionalAuthFact(
+    int Start,
+    string? From,
+    string? FromMember,
+    string Method
+);
+
 // What one document yields. Each walk owns one, so documents are walked in parallel; a file that
 // several target frameworks compile yields one per framework, and they are merged into one before
 // the files are put in path order.
@@ -122,6 +137,8 @@ internal sealed class DocumentFacts(string file, string assembly)
     public List<TableFact> Tables { get; } = [];
     public List<SnapshotTableFact> SnapshotTables { get; } = [];
     public List<DefaultSchemaFact> DefaultSchemas { get; } = [];
+    public List<RoleGuardFact> RoleGuards { get; } = [];
+    public List<ConditionalAuthFact> ConditionalAuths { get; } = [];
 
     private static readonly string[] _widestFirst =
     [
@@ -298,6 +315,12 @@ internal sealed class DocumentFacts(string file, string assembly)
         );
         merged.DefaultSchemas.AddRange(
             frameworks.SelectMany(framework => framework.DefaultSchemas).Distinct()
+        );
+        merged.RoleGuards.AddRange(
+            frameworks.SelectMany(framework => framework.RoleGuards).Distinct()
+        );
+        merged.ConditionalAuths.AddRange(
+            frameworks.SelectMany(framework => framework.ConditionalAuths).Distinct()
         );
         return merged;
     }

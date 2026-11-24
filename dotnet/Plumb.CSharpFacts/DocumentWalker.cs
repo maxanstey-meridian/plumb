@@ -265,6 +265,15 @@ internal sealed partial class DocumentWalker : CSharpSyntaxWalker
         {
             RecordInvocation(invocation);
             RecordEndpointHandlers(invocation);
+            RecordConditionalAuth(invocation);
+        }
+        else if (node is IfStatementSyntax ifStatement)
+        {
+            RecordRoleGuard(ifStatement);
+        }
+        else if (node is ReturnStatementSyntax returnStatement)
+        {
+            RecordRoleGuardReturn(returnStatement);
         }
         else if (node is AssignmentExpressionSyntax assignment)
         {

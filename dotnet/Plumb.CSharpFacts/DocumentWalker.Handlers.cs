@@ -14,7 +14,8 @@ internal sealed partial class DocumentWalker
     private const string SignIn = "sign-in";
     private const string EndpointRouteBuilder =
         "Microsoft.AspNetCore.Routing.IEndpointRouteBuilder";
-    private const string AuthenticationContext = "Microsoft.AspNetCore.Authentication.BaseContext`1";
+    private const string AuthenticationContext =
+        "Microsoft.AspNetCore.Authentication.BaseContext`1";
 
     // The events classes whose delegate properties are the handlers of a sign-in. OpenID Connect's
     // and OAuth's derive from the remote one.
@@ -46,7 +47,9 @@ internal sealed partial class DocumentWalker
     private static bool IsDelegate(ITypeSymbol type)
     {
         return type.TypeKind == TypeKind.Delegate
-            || type.SpecialType is SpecialType.System_Delegate or SpecialType.System_MulticastDelegate;
+            || type.SpecialType
+                is SpecialType.System_Delegate
+                    or SpecialType.System_MulticastDelegate;
     }
 
     // `app.MapGet("/x", handler)`: each delegate argument of an extension method on

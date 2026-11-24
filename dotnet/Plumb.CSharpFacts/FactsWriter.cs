@@ -57,6 +57,7 @@ internal static class FactsWriter
             WriteReferences(writer, strings, documents);
             WriteHandlers(writer, strings, documents);
             WriteTables(writer, strings, documents);
+            WriteAuthorization(writer, strings, documents);
             writer.WriteEndObject();
         }
 
@@ -390,6 +391,45 @@ internal static class FactsWriter
                 writer.WriteNumber("file", strings.Of(document.File));
                 writer.WriteNumber("start", schema.Start);
                 writer.WriteNumber("schema", strings.Of(schema.Schema));
+                writer.WriteEndObject();
+            }
+        }
+        writer.WriteEndArray();
+    }
+
+    private static void WriteAuthorization(
+        Utf8JsonWriter writer,
+        Strings strings,
+        List<DocumentFacts> documents
+    )
+    {
+        writer.WriteStartArray("roleGuards");
+        foreach (var document in documents)
+        {
+            foreach (var guard in document.RoleGuards)
+            {
+                writer.WriteStartObject();
+                writer.WriteNumber("file", strings.Of(document.File));
+                writer.WriteNumber("start", guard.Start);
+                writer.WriteNumber("from", strings.Of(guard.From));
+                writer.WriteNumber("fromMember", strings.Of(guard.FromMember));
+                writer.WriteNumber("roleSource", strings.Of(guard.RoleSource));
+                writer.WriteNumber("callee", strings.Of(guard.Callee));
+                writer.WriteEndObject();
+            }
+        }
+        writer.WriteEndArray();
+        writer.WriteStartArray("conditionalAuths");
+        foreach (var document in documents)
+        {
+            foreach (var auth in document.ConditionalAuths)
+            {
+                writer.WriteStartObject();
+                writer.WriteNumber("file", strings.Of(document.File));
+                writer.WriteNumber("start", auth.Start);
+                writer.WriteNumber("from", strings.Of(auth.From));
+                writer.WriteNumber("fromMember", strings.Of(auth.FromMember));
+                writer.WriteNumber("method", strings.Of(auth.Method));
                 writer.WriteEndObject();
             }
         }

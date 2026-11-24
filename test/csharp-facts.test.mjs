@@ -2538,6 +2538,300 @@ test("with no project to pass, the tool isn't run and nothing is reported", () =
   assert.deepEqual(result.diagnostics, []);
   assert.deepEqual(result.calls, []);
   assert.equal(result.facts.available, true);
-  assert.deepEqual([...result.facts.types.keys(), ...result.facts.tables, ...result.facts.snapshotTables, ...result.facts.defaultSchemas], []);
+  assert.deepEqual([...result.facts.types.keys(), ...result.facts.tables, ...result.facts.snapshotTables, ...result.facts.defaultSchemas, ...result.facts.roleGuards, ...result.facts.conditionalAuths], []);
   assert.equal(result.facts.hasFacts("loose/L.cs"), false);
+});
+
+const authFiles = {
+  "api/Api.csproj": project(),
+  "api/Stubs/AuthStubs.cs": `using System.Security.Claims;
+namespace Microsoft.AspNetCore.Builder
+{
+    public interface IEndpointConventionBuilder { }
+    public sealed class RouteGroupBuilder : IEndpointConventionBuilder
+    {
+        public RouteGroupBuilder MapGet(string pattern, Delegate handler) => this;
+    }
+    public static class AuthorizationEndpointConventionBuilderExtensions
+    {
+        public static TBuilder RequireAuthorization<TBuilder>(this TBuilder builder, params string[] policyNames)
+            where TBuilder : IEndpointConventionBuilder => builder;
+    }
+}
+namespace App.Auth
+{
+    public enum UserRole { Guest, Member, Admin, Owner }
+    public static class UserRoleExtensions
+    {
+        public static bool Outranks(this UserRole actor, UserRole target) => actor > target;
+    }
+    public interface IUserContext { UserRole Role { get; } }
+    public interface IAudienceAccess { bool AllowsAny(UserRole role, IReadOnlyList<UserRole> allowed); }
+    public interface IPermissionService { Task<bool> CanEditAsync(UserRole role); }
+    public sealed class LoadedUser { public UserRole Role { get; init; } }
+    public sealed record PolicyDto(bool CanEdit);
+    public abstract record Outcome
+    {
+        public sealed record Ok : Outcome;
+        public sealed record Forbidden : Outcome;
+    }
+    public sealed class Result
+    {
+        public static Result Fail(string reason) => new();
+        public static Result Ok() => new();
+    }
+    public static class AreaAccess
+    {
+        public static readonly UserRole[] Readers = [UserRole.Member, UserRole.Admin];
+        public static bool Allows(UserRole role) => role >= UserRole.Admin;
+    }
+    public sealed class NonEndpointBuilder
+    {
+        public NonEndpointBuilder RequireAuthorization(string policy) => this;
+    }
+}
+`,
+  "api/Modules/Areas/Application/Guards.cs": `using System.Security.Claims;
+using App.Auth;
+namespace App.Modules.Areas.Application;
+public sealed class RenameAreaUseCase(IUserContext userContext, IAudienceAccess audiences, IPermissionService permissions)
+{
+    private readonly IUserContext _userContext = userContext;
+
+    public Outcome DirectPredicate()
+    {
+        if (!AreaAccess.Allows(userContext.Role))
+        {
+            return new Outcome.Forbidden();
+        }
+        return new Outcome.Ok();
+    }
+
+    public Outcome InjectedAudience()
+    {
+        if (!audiences.AllowsAny(userContext.Role, AreaAccess.Readers))
+        {
+            return new Outcome.Forbidden();
+        }
+        return new Outcome.Ok();
+    }
+
+    public Outcome DirectComparison()
+    {
+        if (userContext.Role < UserRole.Admin)
+        {
+            throw new UnauthorizedAccessException();
+        }
+        return new Outcome.Ok();
+    }
+
+    public Result LocalPropagation()
+    {
+        var role = _userContext.Role;
+        if (!AreaAccess.Allows(role))
+        {
+            return Result.Fail("denied");
+        }
+        return Result.Ok();
+    }
+
+    public Outcome RoleParameter(UserRole callerRole)
+    {
+        if (callerRole != UserRole.Admin)
+        {
+            return new Outcome.Forbidden();
+        }
+        return new Outcome.Ok();
+    }
+
+    public Outcome TernaryGuard()
+    {
+        return AreaAccess.Allows(userContext.Role) ? new Outcome.Ok() : new Outcome.Forbidden();
+    }
+
+    public Outcome SwitchGuard()
+    {
+        return userContext.Role switch
+        {
+            UserRole.Admin => new Outcome.Ok(),
+            _ => new Outcome.Forbidden(),
+        };
+    }
+
+    public Outcome ElseBranchGuard()
+    {
+        if (AreaAccess.Allows(userContext.Role))
+        {
+            return new Outcome.Ok();
+        }
+        else
+        {
+            return new Outcome.Forbidden();
+        }
+    }
+
+    public Outcome PrincipalGuards(ClaimsPrincipal user)
+    {
+        if (!user.IsInRole("Admin"))
+        {
+            return Forbid();
+        }
+        if (user.FindFirst(ClaimTypes.Role)?.Value != "Admin")
+        {
+            return StatusCode(403);
+        }
+        return new Outcome.Ok();
+    }
+
+    private static Outcome Forbid() => new Outcome.Forbidden();
+    private static Outcome StatusCode(int statusCode) => new Outcome.Forbidden();
+
+    // Non-guards: none of these should emit RoleGuardFact.
+    public Outcome LoadedEntityCheck(LoadedUser targetUser)
+    {
+        if (targetUser.Role == UserRole.Owner)
+        {
+            return new Outcome.Forbidden();
+        }
+        return new Outcome.Ok();
+    }
+
+    public Outcome ResourceDependentCheck(Guid actorId, Guid targetId, UserRole actorRole, UserRole targetRole)
+    {
+        if (actorId != targetId && (actorRole == UserRole.Owner || actorRole.Outranks(targetRole)))
+        {
+            return new Outcome.Forbidden();
+        }
+        return new Outcome.Ok();
+    }
+
+    public async Task<Outcome> AsyncCheck()
+    {
+        if (!await permissions.CanEditAsync(userContext.Role))
+        {
+            return new Outcome.Forbidden();
+        }
+        return new Outcome.Ok();
+    }
+
+    public IReadOnlyList<string> QueryScopingTernary(IReadOnlyList<string> allPeople, IReadOnlyList<string> visiblePeople)
+    {
+        return userContext.Role == UserRole.Admin ? allPeople : visiblePeople;
+    }
+
+    public PolicyDto CapabilityProjection()
+    {
+        return new PolicyDto(AreaAccess.Allows(userContext.Role));
+    }
+
+    public Outcome ReassignedLocal(LoadedUser targetUser)
+    {
+        var role = _userContext.Role;
+        role = targetUser.Role;
+        if (!AreaAccess.Allows(role))
+        {
+            return new Outcome.Forbidden();
+        }
+        return new Outcome.Ok();
+    }
+
+    public Outcome NonRefusalException()
+    {
+        if (userContext.Role == UserRole.Admin)
+        {
+            throw new InvalidOperationException();
+        }
+        return new Outcome.Ok();
+    }
+}
+`,
+  "api/Host/Routes.cs": `using App.Auth;
+using Microsoft.AspNetCore.Builder;
+namespace App.Host;
+public static class Routes
+{
+    public static void Map(RouteGroupBuilder group, NonEndpointBuilder other, bool authEnabled)
+    {
+        group.RequireAuthorization("Always");
+
+        if (authEnabled)
+        {
+            group.RequireAuthorization("Editors");
+        }
+
+        if (authEnabled)
+        {
+            group
+                .MapGet("/items", () => "ok")
+                .RequireAuthorization("Readers");
+        }
+
+        _ = authEnabled ? group.RequireAuthorization("Ternary") : group;
+
+        switch (authEnabled)
+        {
+            case true:
+                group.RequireAuthorization("SwitchStmt");
+                break;
+        }
+
+        _ = authEnabled switch
+        {
+            true => group.RequireAuthorization("SwitchExpr"),
+            false => group,
+        };
+
+        if (authEnabled)
+        {
+            other.RequireAuthorization("NotAnEndpoint");
+        }
+    }
+}
+`,
+};
+
+const authRepo = lazy(() => repository("authorization", authFiles));
+
+test("roleGuards extracts static caller-role refusal guards with exact lines, roleSource, and callee, and skips non-guards", () => {
+  const repo = authRepo();
+  assert.deepEqual(repo.diagnostics, []);
+  const guards = repo.facts.roleGuards.map((guard) => [
+    guard.file.path,
+    guard.line,
+    guard.from,
+    guard.fromMember,
+    guard.roleSource,
+    guard.callee,
+  ]);
+  assert.deepEqual(guards, [
+    ["api/Modules/Areas/Application/Guards.cs", 10, "App.Modules.Areas.Application.RenameAreaUseCase", "DirectPredicate", "IUserContext.Role", "AreaAccess.Allows"],
+    ["api/Modules/Areas/Application/Guards.cs", 19, "App.Modules.Areas.Application.RenameAreaUseCase", "InjectedAudience", "IUserContext.Role", "IAudienceAccess.AllowsAny"],
+    ["api/Modules/Areas/Application/Guards.cs", 28, "App.Modules.Areas.Application.RenameAreaUseCase", "DirectComparison", "IUserContext.Role", null],
+    ["api/Modules/Areas/Application/Guards.cs", 38, "App.Modules.Areas.Application.RenameAreaUseCase", "LocalPropagation", "IUserContext.Role", "AreaAccess.Allows"],
+    ["api/Modules/Areas/Application/Guards.cs", 47, "App.Modules.Areas.Application.RenameAreaUseCase", "RoleParameter", "callerRole", null],
+    ["api/Modules/Areas/Application/Guards.cs", 56, "App.Modules.Areas.Application.RenameAreaUseCase", "TernaryGuard", "IUserContext.Role", "AreaAccess.Allows"],
+    ["api/Modules/Areas/Application/Guards.cs", 61, "App.Modules.Areas.Application.RenameAreaUseCase", "SwitchGuard", "IUserContext.Role", null],
+    ["api/Modules/Areas/Application/Guards.cs", 70, "App.Modules.Areas.Application.RenameAreaUseCase", "ElseBranchGuard", "IUserContext.Role", "AreaAccess.Allows"],
+    ["api/Modules/Areas/Application/Guards.cs", 82, "App.Modules.Areas.Application.RenameAreaUseCase", "PrincipalGuards", "ClaimsPrincipal.IsInRole", "ClaimsPrincipal.IsInRole"],
+    ["api/Modules/Areas/Application/Guards.cs", 86, "App.Modules.Areas.Application.RenameAreaUseCase", "PrincipalGuards", "ClaimTypes.Role", null],
+  ]);
+});
+
+test("conditionalAuths extracts conditional RequireAuthorization calls anchored at the method name and skips unconditional or non-endpoint calls", () => {
+  const repo = authRepo();
+  assert.deepEqual(repo.diagnostics, []);
+  const auths = repo.facts.conditionalAuths.map((auth) => [
+    auth.file.path,
+    auth.line,
+    auth.from,
+    auth.fromMember,
+    auth.method,
+  ]);
+  assert.deepEqual(auths, [
+    ["api/Host/Routes.cs", 12, "App.Host.Routes", "Map", "RequireAuthorization"],
+    ["api/Host/Routes.cs", 19, "App.Host.Routes", "Map", "RequireAuthorization"],
+    ["api/Host/Routes.cs", 22, "App.Host.Routes", "Map", "RequireAuthorization"],
+    ["api/Host/Routes.cs", 27, "App.Host.Routes", "Map", "RequireAuthorization"],
+    ["api/Host/Routes.cs", 33, "App.Host.Routes", "Map", "RequireAuthorization"],
+  ]);
 });

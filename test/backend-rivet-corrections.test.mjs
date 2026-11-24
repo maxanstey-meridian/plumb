@@ -362,10 +362,10 @@ test("BE's layer, module-shape, style and placement rules exempt a test project'
     const rules = ["MER-BE-001", "MER-BE-002", "MER-BE-003", "MER-BE-004", "MER-BE-005", "MER-BE-007", "MER-BE-008", "MER-BE-009",
         "MER-BE-010", "MER-BE-011", "MER-BE-012", "MER-BE-013", "MER-BE-014", "MER-BE-016", "MER-BE-017", "MER-BE-020", "MER-BE-021",
         "MER-BE-022", "MER-BE-023", "MER-BE-024", "MER-BE-030", "MER-BE-031", "MER-BE-032", "MER-BE-042", "MER-BE-051", "MER-BE-052",
-        "MER-BE-053", "MER-BE-054", "MER-BE-055", "MER-BE-060", "MER-BE-067"];
+        "MER-BE-053", "MER-BE-054", "MER-BE-055", "MER-BE-060", "MER-BE-067", "MER-BE-068", "MER-BE-069"];
     // The rules that read C# facts need a real net10.0 project, restored, and one that compiles: the copied files get the
     // project their fixture has (its SDK, implicit usings and nullable setting), as a test project of their own.
-    const onFacts = new Set(["MER-BE-001", "MER-BE-002", "MER-BE-003", "MER-BE-004", "MER-BE-005", "MER-BE-007", "MER-BE-008", "MER-BE-009", "MER-BE-016", "MER-BE-030", "MER-BE-031", "MER-BE-067"]);
+    const onFacts = new Set(["MER-BE-001", "MER-BE-002", "MER-BE-003", "MER-BE-004", "MER-BE-005", "MER-BE-007", "MER-BE-008", "MER-BE-009", "MER-BE-016", "MER-BE-030", "MER-BE-031", "MER-BE-067", "MER-BE-068", "MER-BE-069"]);
     const fixtureProject = (rule) => {
         const file = fs.readdirSync(path.join(FIXTURES, rule, "bad"), { recursive: true }).find((name) => name.endsWith(".csproj") && !/(?:^|\/)(?:obj|bin)\//.test(name));
         return fs.readFileSync(path.join(FIXTURES, rule, "bad", file), "utf8");
@@ -1961,4 +1961,108 @@ test("MER-TE-008 judges a single-package repo by its root package.json: only the
         "server/tests/fake-mailer.ts": "export class FakeMailer {}\n",
     });
     assert.deepEqual(findings.map((finding) => finding.split("\t")[0]), ["test/fake-clock.ts:1"]);
+});
+
+test("MER-BE-068 flags static caller-role refusal guards in Application and leaves resource, entity, query, and projection checks alone", () => {
+    assert.equal(run("MER-BE-068", "good"), "");
+    assertFindings("MER-BE-068", "bad", [
+        ["Modules/Areas/Application/RecordTransitionOperation.cs:17", "Static caller-role refusal guard (AreaAccess.Allows(IUserContext.Role)) belongs in an endpoint authorization policy ([Authorize(Policy = ...)] or .RequireAuthorization(...)), not in Application"],
+        ["Modules/Areas/Application/RenameAreaUseCase.cs:24", "Static caller-role refusal guard (AreaAccess.Allows(IUserContext.Role)) belongs in an endpoint authorization policy ([Authorize(Policy = ...)] or .RequireAuthorization(...)), not in Application"],
+        ["Modules/Areas/Application/RenameAreaUseCase.cs:34", "Static caller-role refusal guard (IAudiencePolicy.AllowsAny(IUserContext.Role)) belongs in an endpoint authorization policy ([Authorize(Policy = ...)] or .RequireAuthorization(...)), not in Application"],
+        ["Modules/Areas/Application/RenameAreaUseCase.cs:44", "Static caller-role refusal guard (IUserContext.Role) belongs in an endpoint authorization policy ([Authorize(Policy = ...)] or .RequireAuthorization(...)), not in Application"],
+        ["Modules/Areas/Application/RenameAreaUseCase.cs:52", "Static caller-role refusal guard (ClaimsPrincipal.IsInRole) belongs in an endpoint authorization policy ([Authorize(Policy = ...)] or .RequireAuthorization(...)), not in Application"],
+    ]);
+
+    const findings = scanOnFacts("MER-BE-068", {
+        "Stubs/Auth.cs":
+            "namespace App.Stubs;\n" +
+            "public enum UserRole { Viewer, Editor, Admin, Owner }\n" +
+            "public interface IUserContext { UserRole Role { get; } }\n" +
+            "public interface IPermissionChecker { Task<bool> CanEditAsync(UserRole role, CancellationToken ct); }\n" +
+            "public sealed record Member(Guid Id, UserRole Role);\n" +
+            "public interface IMemberRepository { Task<Member> LoadAsync(Guid id, CancellationToken ct); }\n",
+        "Modules/Areas/Application/EdgeCasesUseCase.cs":
+            "using App.Stubs;\n" +
+            "namespace App.Modules.Areas.Application;\n" +
+            "public abstract record EdgeOutcome { public sealed record Ok : EdgeOutcome; public sealed record Forbidden : EdgeOutcome; }\n" +
+            "public sealed class EdgeCasesUseCase\n" +
+            "{\n" +
+            "    private readonly IUserContext _userContext;\n" +
+            "    private readonly IPermissionChecker _permissions;\n" +
+            "    private readonly IMemberRepository _members;\n" +
+            "    public EdgeCasesUseCase(IUserContext userContext, IPermissionChecker permissions, IMemberRepository members)\n" +
+            "    {\n" +
+            "        _userContext = userContext;\n" +
+            "        _permissions = permissions;\n" +
+            "        _members = members;\n" +
+            "    }\n" +
+            "    public async Task<EdgeOutcome> AsyncPermissionCheckAsync(CancellationToken ct)\n" +
+            "    {\n" +
+            "        if (!await _permissions.CanEditAsync(_userContext.Role, ct)) return new EdgeOutcome.Forbidden();\n" +
+            "        return new EdgeOutcome.Ok();\n" +
+            "    }\n" +
+            "    public async Task<EdgeOutcome> LoadedEntityRoleCheckAsync(Guid memberId, CancellationToken ct)\n" +
+            "    {\n" +
+            "        var member = await _members.LoadAsync(memberId, ct);\n" +
+            "        if (member.Role == UserRole.Owner) return new EdgeOutcome.Forbidden();\n" +
+            "        return new EdgeOutcome.Ok();\n" +
+            "    }\n" +
+            "    public EdgeOutcome LocalPropagation()\n" +
+            "    {\n" +
+            "        var role = _userContext.Role;\n" +
+            "        if (role < UserRole.Admin) return new EdgeOutcome.Forbidden();\n" +
+            "        return new EdgeOutcome.Ok();\n" +
+            "    }\n" +
+            "}\n",
+    });
+    assert.deepEqual(findings, [
+        "Modules/Areas/Application/EdgeCasesUseCase.cs:29\tStatic caller-role refusal guard (IUserContext.Role) belongs in an endpoint authorization policy ([Authorize(Policy = ...)] or .RequireAuthorization(...)), not in Application",
+    ]);
+});
+
+test("MER-BE-069 flags conditional RequireAuthorization and inline transport role guards while allowing unconditional policies and bare Authorize", () => {
+    assert.equal(run("MER-BE-069", "good"), "");
+    assertFindings("MER-BE-069", "bad", [
+        ["Host/Routes.cs:15", "Conditional .RequireAuthorization(...) must be applied unconditionally at the endpoint"],
+        ["Host/Routes.cs:20", "Inline caller-role refusal check (AreaAccess.Allows(IUserContext.Role)) in an endpoint handler belongs in a named authorization policy on the endpoint ([Authorize(Policy = ...)] or .RequireAuthorization(...))"],
+        ["Modules/Areas/AreasController.cs:9", "Inline caller-role refusal check (ClaimsPrincipal.IsInRole) in App.Modules.Areas.AreasController belongs in a named authorization policy on the endpoint ([Authorize(Policy = ...)] or .RequireAuthorization(...))"],
+    ]);
+
+    const findings = scanOnFacts("MER-BE-069", {
+        "Stubs/AspNetCore.cs":
+            "namespace Microsoft.AspNetCore.Authorization { [AttributeUsage(AttributeTargets.Class | AttributeTargets.Method)] public sealed class AuthorizeAttribute : Attribute { public string? Policy { get; set; } } }\n" +
+            "namespace Microsoft.AspNetCore.Mvc { public abstract class ControllerBase { } }\n" +
+            "namespace Microsoft.AspNetCore.Routing { public interface IEndpointRouteBuilder { } }\n" +
+            "namespace Microsoft.AspNetCore.Builder {\n" +
+            "    public interface IEndpointConventionBuilder { }\n" +
+            "    public sealed class RouteGroupBuilder : Microsoft.AspNetCore.Routing.IEndpointRouteBuilder, IEndpointConventionBuilder { }\n" +
+            "    public static class EndpointExtensions {\n" +
+            "        public static RouteGroupBuilder MapGroup(this Microsoft.AspNetCore.Routing.IEndpointRouteBuilder app, string prefix) => new();\n" +
+            "        public static TBuilder RequireAuthorization<TBuilder>(this TBuilder builder, params string[] policies) where TBuilder : IEndpointConventionBuilder => builder;\n" +
+            "    }\n" +
+            "}\n",
+        "Host/Routes.cs":
+            "using Microsoft.AspNetCore.Builder;\n" +
+            "using Microsoft.AspNetCore.Routing;\n" +
+            "namespace App.Host;\n" +
+            "public static class Routes\n" +
+            "{\n" +
+            "    public static void Map(IEndpointRouteBuilder app, bool enabled)\n" +
+            "    {\n" +
+            "        var uncond = app.MapGroup(\"/ok\").RequireAuthorization(\"Editors\");\n" +
+            "        if (enabled) app.MapGroup(\"/if\").RequireAuthorization(\"Editors\");\n" +
+            "        _ = enabled ? app.MapGroup(\"/ternary\").RequireAuthorization(\"Editors\") : uncond;\n" +
+            "    }\n" +
+            "}\n",
+        "Modules/Areas/AreasController.cs":
+            "using Microsoft.AspNetCore.Authorization;\n" +
+            "using Microsoft.AspNetCore.Mvc;\n" +
+            "namespace App.Modules.Areas;\n" +
+            "[Authorize]\n" +
+            "public sealed class AreasController : ControllerBase { }\n",
+    });
+    assert.deepEqual(findings, [
+        "Host/Routes.cs:10\tConditional .RequireAuthorization(...) must be applied unconditionally at the endpoint",
+        "Host/Routes.cs:9\tConditional .RequireAuthorization(...) must be applied unconditionally at the endpoint",
+    ]);
 });

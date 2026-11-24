@@ -28,6 +28,9 @@ internal sealed class BuildLog
             )
             {
                 var source = new BinaryLogReplayEventSource { AllowForwardCompatibility = true };
+                // MSBuild's BuildEventArgsReader requires a RecoverableReadError subscriber when
+                // AllowForwardCompatibility reads a binlog written by a newer MSBuild version.
+                source.RecoverableReadError += _ => { };
                 source.WarningRaised += (_, warning) =>
                     log._warnings.Add(Text(warning.ProjectFile, warning.Message));
                 source.ErrorRaised += (_, error) =>

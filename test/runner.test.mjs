@@ -1861,12 +1861,17 @@ test("MER-CP-002 validates strict invariants.yaml schema, cross-module related I
   ]);
 });
 
-test("MER-CP-002 judges a cited name against the whole repository, so excluding the code it names changes nothing", () => {
+test("MER-CP-002 judges cited names and rule IDs against the whole repository, so excluding code or another module adds no findings", () => {
   const run = (twin, ...excludes) => JSON.parse(plumb(path.join(FIX, "MER-CP-002", twin), "--rule", "MER-CP-002", "--json", "--no-baseline",
     ...excludes.flatMap((pattern) => ["--exclude", pattern])).stdout);
   const narrowed = ["ui/", "api.tests/", "api/Migrations/", "api/Modules/Billing/*.cs"];
   assert.deepEqual(run("bad", ...narrowed), run("bad"));
   assert.deepEqual(run("good", ...narrowed), []);
+  assert.deepEqual(run("good", "api/Modules/Payments/"), []);
+  assert.deepEqual(
+    run("bad", "api/Modules/Payments/"),
+    run("bad").filter((finding) => !finding.location.startsWith("api/Modules/Payments/")),
+  );
 });
 
 test("MER-CP-002 rejects invalid root shapes, non-mapping entries, missing ids, and invalid field values", () => {

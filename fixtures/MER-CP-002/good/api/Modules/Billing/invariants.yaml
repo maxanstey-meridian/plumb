@@ -15,6 +15,7 @@ invariants:
       - invoices_immutable
       - refuse_paid_change
       - Migrations/
+      - bin/release.sh
       - BannedSymbols.txt
       - app.bicep
       - System.Net.Http

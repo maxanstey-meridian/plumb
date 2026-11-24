@@ -1872,6 +1872,10 @@ test("MER-CP-002 judges cited names and rule IDs against the whole repository, s
     run("bad", "api/Modules/Payments/"),
     run("bad").filter((finding) => !finding.location.startsWith("api/Modules/Payments/")),
   );
+  assert.deepEqual(
+    run("bad", "api/Modules/Billing/"),
+    run("bad").filter((finding) => !finding.location.startsWith("api/Modules/Billing/")),
+  );
 });
 
 test("MER-CP-002 rejects invalid root shapes, non-mapping entries, missing ids, and invalid field values", () => {
